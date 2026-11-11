@@ -1,0 +1,25 @@
+.DS_Store
+
+# Build output
+build/
+cmake-build-*/
+compile_commands.json
+.cache/
+
+# Editors
+.vscode/
+.idea/
+
+# Atomic-rewrite leftovers (<table>.csv.temp after a crash)
+*.temp
+
+# Engine data files
+*.dat
+.flatfiledb.lock
+
+# CSV data, kept local only
+/data/
+
+# Local tooling and process notes
+/mydb/
+
