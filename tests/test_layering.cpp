@@ -16,6 +16,7 @@ enum class Layer {
   kDomain,
   kApplication,
   kInfrastructure,
+  kPaged,
   kParser,
   kBootstrap,
   kCli,
@@ -54,6 +55,9 @@ Layer LayerOf(const std::filesystem::path& relative) {
   }
   if (path == "flatfiledb/application.h" || path == "application.cpp") {
     return Layer::kApplication;
+  }
+  if (StartsWith(path, "flatfiledb/paged/") || StartsWith(path, "paged/")) {
+    return Layer::kPaged;
   }
   const std::set<std::string> infrastructure_files = {
       "flatfiledb/infrastructure.h",
@@ -110,6 +114,9 @@ bool IsAllowed(Layer layer, const std::string& header) {
     case Layer::kInfrastructure:
       return StartsWith(header, "flatfiledb/domain/") ||
              IsInfrastructureHeader(header);
+    case Layer::kPaged:
+      return StartsWith(header, "flatfiledb/domain/") ||
+             StartsWith(header, "flatfiledb/paged/");
     case Layer::kParser:
       return StartsWith(header, "flatfiledb/domain/") ||
              header == "flatfiledb/sql_parser.h";
@@ -176,4 +183,93 @@ TEST(test_layering_includes_follow_dependency_direction) {
   const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
   CheckDirectory(source_dir / "include");
   CheckDirectory(source_dir / "src");
+}
+
+namespace {
+
+// The byte layer of the paged engine: pure functions on bytes. It may include
+// the domain, the shared types and each other, but nothing that does I/O,
+// locks or pins (docs/PagedEngineDesignDocument.md 2.1).
+bool IsPagedByteLayerFile(const std::string& path) {
+  const char* const names[] = {"tuple_codec", "slotted_page", "crc32c"};
+  for (const char* name : names) {
+    if (path == std::string("flatfiledb/paged/") + name + ".h" ||
+        path == std::string("paged/") + name + ".cpp") {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsPagedByteLayerHeader(const std::string& header) {
+  const char* const allowed[] = {
+      "flatfiledb/paged/paged_types.h", "flatfiledb/paged/byte_codec.h",
+      "flatfiledb/paged/crc32c.h", "flatfiledb/paged/slotted_page.h",
+      "flatfiledb/paged/tuple_codec.h"};
+  for (const char* candidate : allowed) {
+    if (header == candidate) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns how many paged/ files were checked.
+int CheckPagedRules(const std::filesystem::path& root) {
+  int paged_files = 0;
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(root)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    std::string extension = entry.path().extension().string();
+    if (extension != ".h" && extension != ".cpp") {
+      continue;
+    }
+    std::filesystem::path relative =
+        std::filesystem::relative(entry.path(), root);
+    const std::string path = relative.generic_string();
+    const bool is_paged = LayerOf(relative) == Layer::kPaged;
+    if (is_paged) {
+      ++paged_files;
+    }
+    std::ifstream file(entry.path());
+    std::string line;
+    while (std::getline(file, line)) {
+      std::string header = ProjectHeaderOf(line);
+      if (header.empty()) {
+        continue;
+      }
+      if (!is_paged) {
+        if (StartsWith(header, "flatfiledb/paged/")) {
+          ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
+                                               path + " includes " + header);
+        }
+        continue;
+      }
+      if (!StartsWith(header, "flatfiledb/domain/") &&
+          !StartsWith(header, "flatfiledb/paged/")) {
+        ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
+                                             path + " includes " + header);
+      }
+      if (IsPagedByteLayerFile(path) &&
+          StartsWith(header, "flatfiledb/paged/") &&
+          !IsPagedByteLayerHeader(header)) {
+        ::flatfiledb::testing::ReportFailure(
+            __FILE__, __LINE__,
+            path + " is in the byte layer but includes " + header);
+      }
+    }
+  }
+  return paged_files;
+}
+
+}  // namespace
+
+TEST(test_layering_paged_depends_only_on_domain_and_itself) {
+  const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
+  const int paged_files = CheckPagedRules(source_dir / "include") +
+                          CheckPagedRules(source_dir / "src");
+  // The scan must have found the layer; an empty scan would pass vacuously.
+  CHECK(paged_files >= 20);
 }

@@ -28,6 +28,15 @@ add_library(flatfiledb_core STATIC
         src/flat_file_executor.cpp
         src/import_inference.cpp
         src/infrastructure.cpp
+        src/paged/buffer_manager.cpp
+        src/paged/catalog.cpp
+        src/paged/crc32c.cpp
+        src/paged/database.cpp
+        src/paged/page_store.cpp
+        src/paged/replacement_policy.cpp
+        src/paged/slotted_page.cpp
+        src/paged/table_heap.cpp
+        src/paged/tuple_codec.cpp
         src/repl.cpp
         src/scalar_functions.cpp
         src/sql_parser.cpp
@@ -55,6 +64,14 @@ add_executable(flatfiledb_tests
         tests/test_flat_file_engine.cpp
         tests/test_import.cpp
         tests/test_layering.cpp
+        tests/test_paged_buffer.cpp
+        tests/test_paged_catalog.cpp
+        tests/test_paged_database.cpp
+        tests/test_paged_environment.cpp
+        tests/test_paged_bytes.cpp
+        tests/test_paged_policy.cpp
+        tests/test_paged_slotted_page.cpp
+        tests/test_paged_table_heap.cpp
         tests/test_query_service.cpp
         tests/test_repl.cpp
         tests/test_sql_parser.cpp
