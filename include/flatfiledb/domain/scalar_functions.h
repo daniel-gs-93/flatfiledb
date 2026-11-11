@@ -1,6 +1,7 @@
 #ifndef FLATFILEDB_DOMAIN_SCALAR_FUNCTIONS_H_
 #define FLATFILEDB_DOMAIN_SCALAR_FUNCTIONS_H_
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,6 +20,14 @@ namespace flatfiledb::domain {
 // byte matches itself with ASCII letters compared case-insensitively. Runs in
 // O(text.size() * pattern.size()) time and constant space.
 bool LikeMatches(const std::string& text, const std::string& pattern);
+
+// The integer in text ([+-]?[0-9]+ within int64_t) or std::nullopt; the same
+// rule as CAST(text AS INT).
+std::optional<int64_t> ParseIntegerText(const std::string& text);
+
+// The finite decimal in text ([+-]?[0-9]+(\.[0-9]+)?) or std::nullopt; the same
+// rule as CAST(text AS DOUBLE).
+std::optional<double> ParseDecimalText(const std::string& text);
 
 // Applies a scalar function to arguments that the Binder has already checked
 // for count and type. result_type is the type of the call, which for kCast is

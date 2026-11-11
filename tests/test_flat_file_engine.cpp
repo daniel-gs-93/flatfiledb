@@ -1,4 +1,6 @@
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -2139,6 +2141,119 @@ TEST(test_engine_multi_row_insert_applies_defaults_and_quotes_text) {
   CHECK_EQ(ReadFile(dir.path() / "d.csv"),
            std::string("id,body,owner\n1,\"a, b\",none\n2,\"say \"\"hi\"\"\","
                        "none\n"));
+}
+
+TEST(test_engine_write_refuses_when_a_file_changed_on_disk) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  const std::string tables_before = SnapshotTables(*service);
+  const std::filesystem::path users_path = dir.path() / "users.csv";
+  const std::string edited = ReadFile(users_path) + "9,external,Nowhere\n";
+  WriteFile(users_path, edited);
+  std::filesystem::last_write_time(
+      users_path,
+      std::filesystem::last_write_time(users_path) + std::chrono::seconds(2));
+  const std::string changed_message =
+      "users.csv changed on disk since it was loaded; run .open again";
+
+  // Act
+  ExecutionResult update =
+      ExecuteSql(*service, "UPDATE users SET location = 'X' WHERE id = 1");
+  ExecutionResult insert = ExecuteSql(
+      *service,
+      "INSERT INTO users (id, username, location) VALUES (50, 'zed', 'Rome')");
+  ExecutionResult unrelated =
+      ExecuteSql(*service, "CREATE TABLE extra (id INT PRIMARY KEY)");
+  ExecutionResult read = ExecuteSql(*service, "SELECT COUNT(*) FROM users");
+
+  // Assert: the writes that touch users.csv are refused, nothing is written
+  ExpectErrorMessage(update, ErrorKind::kIo, changed_message);
+  ExpectErrorMessage(insert, ErrorKind::kIo, changed_message);
+  CHECK_EQ(ReadFile(users_path), edited);
+  CHECK_EQ(SnapshotTables(*service), tables_before);
+  CHECK(AsResultSet(read) != nullptr);
+  // A statement that writes only other files is not affected.
+  ExpectComplete(unrelated, "CREATE TABLE extra");
+
+  // Opening again picks up the external edit and writes work again.
+  auto reloaded = MakeLoadedService(dir.path());
+  if (!reloaded) {
+    return;
+  }
+  CHECK_EQ(CountRows(*reloaded, "users"), std::string("5"));
+  ExpectAffected(
+      ExecuteSql(*reloaded, "UPDATE users SET location = 'X' WHERE id = 1"), 1);
+}
+
+TEST(test_engine_write_refuses_when_only_size_or_only_mtime_changed) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  const std::filesystem::path users_path = dir.path() / "users.csv";
+  const std::string loaded_text = ReadFile(users_path);
+  const auto loaded_time = std::filesystem::last_write_time(users_path);
+  const std::string changed_message =
+      "users.csv changed on disk since it was loaded; run .open again";
+  const char* const update = "UPDATE users SET location = 'X' WHERE id = 1";
+
+  // Act: the same bytes with a later modification time
+  std::filesystem::last_write_time(users_path,
+                                   loaded_time + std::chrono::seconds(2));
+  ExecutionResult only_time = ExecuteSql(*service, update);
+  // Act: other bytes of another size with the recorded modification time
+  const std::string longer_text = loaded_text + "\n";
+  WriteFile(users_path, longer_text);
+  std::filesystem::last_write_time(users_path, loaded_time);
+  ExecutionResult only_size = ExecuteSql(*service, update);
+
+  // Assert
+  ExpectErrorMessage(only_time, ErrorKind::kIo, changed_message);
+  ExpectErrorMessage(only_size, ErrorKind::kIo, changed_message);
+  CHECK_EQ(ReadFile(users_path), longer_text);
+}
+
+TEST(test_engine_consecutive_writes_do_not_trip_the_change_check) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act and Assert: every kind of write, one after the other
+  ExpectAffected(
+      ExecuteSql(*service,
+                 "INSERT INTO users (id, username, location) VALUES (5, 'eve', "
+                 "'X')"),
+      1);
+  ExpectAffected(
+      ExecuteSql(*service, "UPDATE users SET location = 'Y' WHERE id = 5"), 1);
+  ExpectAffected(ExecuteSql(*service, "DELETE FROM users WHERE id = 5"), 1);
+  ExpectComplete(
+      ExecuteSql(*service, "ALTER TABLE users ADD COLUMN age INT DEFAULT 0"),
+      "ALTER TABLE users");
+  ExpectAffected(
+      ExecuteSql(*service,
+                 "INSERT INTO users (id, username, location) VALUES (6, "
+                 "'frank', 'Z')"),
+      1);
+  ExpectComplete(ExecuteSql(*service, "DROP TABLE engagements"),
+                 "DROP TABLE engagements");
+  ExpectAffected(
+      ExecuteSql(*service,
+                 "INSERT INTO users (id, username, location) VALUES (7, "
+                 "'gina', 'W')"),
+      1);
 }
 
 }  // namespace flatfiledb::testing

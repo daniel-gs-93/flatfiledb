@@ -30,6 +30,7 @@ class FlatFileCatalog : public domain::ICatalog {
 struct TableCount {
   std::string name;
   std::size_t row_count;
+  std::vector<std::size_t> rejected_lines = {};  // see LoadedTable
 };
 
 // The outcome of FlatFileEngine::Load. error is empty on success; tables lists

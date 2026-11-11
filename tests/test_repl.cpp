@@ -81,6 +81,15 @@ std::string RunText(const Lines& input_lines, bool is_interactive = false) {
 
 Lines Run(const Lines& input_lines) { return SplitLines(RunText(input_lines)); }
 
+// Runs the REPL with a database to open first.
+Lines RunWithInitialOpen(const cli::InitialOpen& initial,
+                         const Lines& input_lines) {
+  std::istringstream input(Joined(input_lines));
+  std::ostringstream output;
+  cli::RunRepl(input, output, false, initial);
+  return SplitLines(output.str());
+}
+
 std::string OpenLine(const std::filesystem::path& directory) {
   return ".open " + directory.string();
 }
@@ -295,9 +304,18 @@ TEST(test_repl_help_lists_commands_and_quit_stops_reading) {
   Lines exit_first = Run({".exit", ".help"});
 
   CHECK(!quit_first.empty());
-  for (const char* marker : {".open", ".tables", ".schema", ".help", ".quit"}) {
+  for (const char* marker : {".open", ".import", ".tables", ".schema", ".clear",
+                             ".cancel", ".help", ".quit"}) {
     CHECK_EQ(CountLinesStartingWith(quit_first, marker), 1);
   }
+  bool has_not_null_line = false;
+  for (const std::string& line : quit_first) {
+    if (line.find("NOT NULL is accepted but has no effect") !=
+        std::string::npos) {
+      has_not_null_line = true;
+    }
+  }
+  CHECK(has_not_null_line);
   Lines once = Run({".help"});
   CHECK_EQ(quit_first, once);
   CHECK_EQ(exit_first, Lines());
@@ -334,4 +352,215 @@ TEST(test_repl_commands_without_open_still_parse_sql_first) {
   }
   CHECK(StartsWith(output[0], "syntax error at column 1: "));
   CHECK_EQ(output[1], std::string(kNoDatabaseLine));
+}
+
+// ---- Stage 1e
+// ----------------------------------------------------------------
+
+const char* const kClearCodes = "\033[H\033[2J";
+const char* const kFullWidthError =
+    "error: full-width ';' (U+FF1B) found; use ASCII ';'";
+
+TEST(test_repl_clear_prints_control_codes_only_when_interactive) {
+  std::string interactive = RunText({".clear"}, true);
+  std::string piped = RunText({".clear"}, false);
+  Lines with_argument = Run({".clear x"});
+
+  CHECK(interactive.find(kClearCodes) != std::string::npos);
+  CHECK(interactive.find("\033[3J") == std::string::npos);
+  CHECK(piped.find('\033') == std::string::npos);
+  CHECK_EQ(piped, std::string());
+  CHECK_EQ(with_argument, Lines({"syntax error at column 1: usage: .clear"}));
+}
+
+TEST(test_repl_cancel_discards_pending_statement_but_not_string_content) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+
+  Lines pending = Run({OpenLine(dir.path()), "SELECT username", ".cancel",
+                       "SELECT username FROM users WHERE id = 1;"});
+  Lines in_string = Run({OpenLine(dir.path()), "SELECT 'a", ".cancel", "';"});
+  Lines idle = Run({OpenLine(dir.path()), ".cancel", ".cancel x"});
+
+  CHECK_EQ(pending, Lines({kFixtureALoaded, "username", "alice"}));
+  CHECK_EQ(in_string.size(), std::size_t{2});
+  if (in_string.size() == 2) {
+    CHECK(StartsWith(in_string[1], "syntax error at line 3"));
+  }
+  CHECK_EQ(idle, Lines({kFixtureALoaded,
+                        "syntax error at column 1: usage: .cancel"}));
+}
+
+TEST(test_repl_missing_dot_command_names_print_hint_and_are_not_executed) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+
+  Lines output = Run({OpenLine(dir.path()), "open shop", "TABLES",
+                      "import a.csv", "quit", "help me", "SELECT 1;"});
+  Lines inside_statement =
+      Run({OpenLine(dir.path()), "SELECT 1", "open x", ";"});
+
+  CHECK_EQ(output.size(), std::size_t{7});
+  if (output.size() == 7) {
+    CHECK_EQ(output[1],
+             std::string("error: commands start with '.'; did you mean .open"));
+    CHECK_EQ(output[2], std::string("error: commands start with '.'; did you "
+                                    "mean .tables"));
+    CHECK_EQ(output[3], std::string("error: commands start with '.'; did you "
+                                    "mean .import"));
+    CHECK_EQ(output[4],
+             std::string("error: commands start with '.'; did you mean .quit"));
+    CHECK_EQ(output[5],
+             std::string("error: commands start with '.'; did you mean .help"));
+    CHECK(StartsWith(output[6], "syntax error at column"));
+  }
+  CHECK_EQ(inside_statement.size(), std::size_t{2});
+  if (inside_statement.size() == 2) {
+    CHECK(StartsWith(inside_statement[1], "syntax error"));
+  }
+}
+
+TEST(test_repl_string_continuation_prompt_is_distinct) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+  const std::string idle = "flatfiledb> ";
+  const std::string in_string = "         '> ";
+  const std::string pending = "       ...> ";
+
+  const std::string prompted = RunText(
+      {OpenLine(dir.path()), "SELECT username FROM users WHERE username = 'a",
+       "b';", "SELECT 1"},
+      true);
+
+  CHECK_EQ(idle.size(), std::size_t{12});
+  CHECK_EQ(in_string.size(), idle.size());
+  CHECK_EQ(pending.size(), idle.size());
+  CHECK_EQ(prompted, idle + kFixtureALoaded + "\n" + idle + in_string +
+                         "username\n" + idle + pending +
+                         "error: incomplete statement at end of input\n");
+}
+
+TEST(test_repl_full_width_semicolon_prints_hint_and_drops_the_line) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+  const std::string full_width = "\xEF\xBC\x9B";
+
+  Lines output =
+      Run({OpenLine(dir.path()), "SELECT 1" + full_width, "SELECT username",
+           "FROM users" + full_width, "FROM users WHERE id = 1;"});
+  Lines literal = Run(
+      {OpenLine(dir.path()),
+       "SELECT username FROM users WHERE username = 'x" + full_width + "';"});
+
+  CHECK_EQ(output, Lines({kFixtureALoaded, kFullWidthError, kFullWidthError,
+                          "username", "alice"}));
+  CHECK_EQ(literal, Lines({kFixtureALoaded, "username"}));
+}
+
+TEST(test_repl_comment_lines_and_trailing_comments_are_ignored) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+  const std::string ideographic_space = "\xE3\x80\x80";
+
+  Lines output =
+      Run({OpenLine(dir.path()), "-- a comment",
+           "SELECT username FROM users WHERE id = 1; -- trailing",
+           "SELECT username -- c", "FROM users WHERE id = 2;",
+           "  " + ideographic_space, "SELECT 1 FROM users LIMIT 0;"});
+
+  CHECK_EQ(output, Lines({kFixtureALoaded, "username", "alice", "username",
+                          "carol", "1"}));
+}
+
+TEST(test_repl_open_reports_created_database_and_rejected_rows) {
+  testing::TempDir work;
+  testing::TempDir rejects;
+  testing::WriteFixtureB(rejects.path());
+  testing::TempDir clean;
+  testing::WriteFixtureA(clean.path());
+  const std::string fresh = (work.path() / "fresh").string();
+
+  Lines created = Run({".open " + fresh});
+  Lines with_rejects = Run({OpenLine(rejects.path())});
+  Lines without = Run({OpenLine(clean.path())});
+
+  CHECK_EQ(created, Lines({"created new database " + fresh}));
+  CHECK(std::filesystem::is_directory(fresh));
+  CHECK_EQ(
+      with_rejects,
+      Lines({"loaded users=2 (rejected 2) posts=1 (rejected 1) "
+             "engagements=4",
+             "users.csv: rejected lines 3, 4", "posts.csv: rejected lines 3"}));
+  CHECK_EQ(without, Lines({kFixtureALoaded}));
+
+  // Twelve rejected lines (2 to 13): ten are listed, then an ellipsis.
+  testing::TempDir many;
+  testing::WriteFixtureA(many.path());
+  std::string users = "id,username,location\n";
+  for (int line = 2; line <= 13; ++line) {
+    users += "bad\n";
+  }
+  testing::WriteFile(many.path() / "users.csv", users);
+
+  Lines truncated = Run({OpenLine(many.path())});
+
+  CHECK_EQ(truncated,
+           Lines({"loaded users=0 (rejected 12) posts=3 engagements=5",
+                  "users.csv: rejected lines 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "
+                  "..."}));
+}
+
+TEST(test_repl_import_command_runs_import_and_prints_notes) {
+  testing::TempDir dir;
+  testing::TempDir sources;
+  const std::string good = (sources.path() / "notes.csv").string();
+  const std::string dirty = (sources.path() / "dirty.csv").string();
+  testing::WriteFile(sources.path() / "notes.csv", "id,body\n1,a\n2,b\n");
+  testing::WriteFile(sources.path() / "dirty.csv", "id,body\n1,a\n2\n");
+  const std::string usage =
+      "syntax error at column 1: usage: .import <file.csv> [<table>] [--pk "
+      "<column>] [--type <column>=<type>]... [--skip-bad-rows]";
+
+  Lines output =
+      Run({".import " + good, OpenLine(dir.path()),
+           ".import " + good + " --pk id", ".tables", ".schema notes",
+           ".import " + good, ".import", ".import a b c",
+           ".import " + good + " --pk", ".import " + good + " --type id",
+           ".import " + dirty + " dirty --skip-bad-rows"});
+
+  const Lines expected = {"error: no database open; run .open first",
+                          "loaded no tables",
+                          "OK IMPORT notes (imported 2 rows)",
+                          "notes",
+                          "CREATE TABLE notes (",
+                          "  id INT PRIMARY KEY,",
+                          "  body TEXT",
+                          ");",
+                          "error: bind: table notes already exists",
+                          usage,
+                          usage,
+                          usage,
+                          usage,
+                          "OK IMPORT dirty (imported 1 rows, skipped 1)",
+                          "skipped line 3: expected 2 fields, found 1"};
+  CHECK_EQ(output, expected);
+}
+
+TEST(test_repl_initial_open_acts_like_dot_open) {
+  testing::TempDir fixture;
+  testing::WriteFixtureA(fixture.path());
+  testing::TempDir work;
+  const std::string missing_parent = (work.path() / "nosuch" / "db").string();
+  const std::string fresh = (work.path() / "fresh").string();
+
+  Lines existing =
+      RunWithInitialOpen({fixture.path().string(), false}, {".tables"});
+  Lines failed = RunWithInitialOpen({missing_parent, false}, {".tables"});
+  Lines created = RunWithInitialOpen({fresh, true}, {".tables"});
+
+  CHECK_EQ(existing, Lines({kFixtureALoaded, "users", "posts", "engagements"}));
+  CHECK_EQ(failed, Lines({"error: could not open " + missing_parent +
+                              ": no such directory",
+                          kNoDatabaseLine}));
+  CHECK_EQ(created, Lines({"created new database " + fresh}));
 }

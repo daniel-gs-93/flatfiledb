@@ -1,6 +1,8 @@
 // Integration tests of OpenFlatFileDatabase against real database directories
 // (docs/TestDocument.md section 3.2).
 
+#include <unistd.h>
+
 #include <cstddef>
 #include <filesystem>
 #include <memory>
@@ -119,12 +121,76 @@ TEST(test_bootstrap_missing_directory_returns_description) {
   testing::TempDir dir;
   testing::WriteFile(dir.path() / "regular.txt", "x");
 
-  const std::string missing = OpenFailure((dir.path() / "nosuch").string());
+  const std::string missing_parent =
+      OpenFailure((dir.path() / "nosuch" / "db").string());
   const std::string regular_file =
       OpenFailure((dir.path() / "regular.txt").string());
 
-  CHECK_EQ(missing, std::string("no such directory"));
-  CHECK_EQ(regular_file, std::string("no such directory"));
+  CHECK_EQ(missing_parent, std::string("no such directory"));
+  CHECK_EQ(regular_file, std::string("not a directory"));
+  CHECK(!std::filesystem::exists(dir.path() / "nosuch"));
+  CHECK_EQ(testing::ReadFile(dir.path() / "regular.txt"), std::string("x"));
+}
+
+TEST(test_bootstrap_open_creates_missing_directory) {
+  testing::TempDir dir;
+
+  OpenOutcome created = bootstrap::OpenFlatFileDatabase(
+      (dir.path() / "fresh").string(), false, nullptr);
+  OpenOutcome trailing = bootstrap::OpenFlatFileDatabase(
+      (dir.path() / "fresh2").string() + "/", false, nullptr);
+  OpenOutcome existing =
+      bootstrap::OpenFlatFileDatabase(dir.path().string(), false, nullptr);
+
+  auto* first = std::get_if<bootstrap::OpenedDatabase>(&created);
+  auto* second = std::get_if<bootstrap::OpenedDatabase>(&trailing);
+  auto* third = std::get_if<bootstrap::OpenedDatabase>(&existing);
+  CHECK(first != nullptr && second != nullptr && third != nullptr);
+  if (first == nullptr || second == nullptr || third == nullptr) {
+    return;
+  }
+  CHECK(first->is_created);
+  CHECK(second->is_created);
+  CHECK(!third->is_created);
+  CHECK(first->tables.empty());
+  CHECK(std::filesystem::is_directory(dir.path() / "fresh"));
+  CHECK(std::filesystem::is_directory(dir.path() / "fresh2"));
+  CHECK(std::filesystem::exists(dir.path() / "fresh" / ".flatfiledb.lock"));
+}
+
+TEST(test_bootstrap_create_failure_returns_description) {
+  if (::geteuid() == 0) {
+    SKIP("running as root: directory permissions do not apply");
+  }
+  testing::TempDir dir;
+  std::filesystem::permissions(
+      dir.path(),
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
+      std::filesystem::perm_options::replace);
+
+  const std::string reason = OpenFailure((dir.path() / "fresh").string());
+
+  CHECK_EQ(reason, std::string("cannot create directory"));
+  CHECK(!std::filesystem::exists(dir.path() / "fresh"));
+}
+
+TEST(test_bootstrap_open_reports_rejected_lines) {
+  testing::TempDir dir;
+  testing::WriteFixtureB(dir.path());
+
+  OpenOutcome outcome =
+      bootstrap::OpenFlatFileDatabase(dir.path().string(), false, nullptr);
+
+  auto* opened = std::get_if<bootstrap::OpenedDatabase>(&outcome);
+  CHECK(opened != nullptr);
+  if (opened == nullptr || opened->tables.size() != 3) {
+    return;
+  }
+  CHECK_EQ(opened->tables[0].name, std::string("users"));
+  CHECK_EQ(opened->tables[0].row_count, std::size_t{2});
+  CHECK_EQ(opened->tables[0].rejected_lines, std::vector<std::size_t>({3, 4}));
+  CHECK_EQ(opened->tables[1].rejected_lines, std::vector<std::size_t>({3}));
+  CHECK(opened->tables[2].rejected_lines.empty());
 }
 
 TEST(test_bootstrap_locked_directory_returns_description) {

@@ -204,7 +204,7 @@ std::string CastFailure(const std::string& text, const char* type_name) {
 }
 
 // [+-]?[0-9]+ within the int64_t range.
-std::optional<int64_t> ParseInteger(const std::string& text) {
+std::optional<int64_t> ParseIntegerImpl(const std::string& text) {
   std::size_t position = 0;
   bool is_negative = false;
   if (position < text.size() &&
@@ -239,7 +239,7 @@ std::optional<int64_t> ParseInteger(const std::string& text) {
 }
 
 // [+-]?[0-9]+(\.[0-9]+)? with a finite result.
-std::optional<double> ParseDecimal(const std::string& text) {
+std::optional<double> ParseDecimalImpl(const std::string& text) {
   std::size_t position = 0;
   if (position < text.size() &&
       (text[position] == '+' || text[position] == '-')) {
@@ -292,7 +292,7 @@ std::optional<Value> CastToInt(const Value& argument, std::string* failure) {
     return Value(static_cast<int64_t>(*number));
   }
   const std::string& text = std::get<std::string>(argument);
-  std::optional<int64_t> parsed = ParseInteger(text);
+  std::optional<int64_t> parsed = ParseIntegerImpl(text);
   if (!parsed) {
     return Fail(failure, CastFailure(text, "INT"));
   }
@@ -301,7 +301,7 @@ std::optional<Value> CastToInt(const Value& argument, std::string* failure) {
 
 std::optional<Value> CastToDouble(const Value& argument, std::string* failure) {
   if (const auto* text = std::get_if<std::string>(&argument)) {
-    std::optional<double> parsed = ParseDecimal(*text);
+    std::optional<double> parsed = ParseDecimalImpl(*text);
     if (!parsed) {
       return Fail(failure, CastFailure(*text, "DOUBLE"));
     }
@@ -327,6 +327,14 @@ std::optional<Value> Cast(const Value& argument, ExprType result_type,
 }
 
 }  // namespace
+
+std::optional<int64_t> ParseIntegerText(const std::string& text) {
+  return ParseIntegerImpl(text);
+}
+
+std::optional<double> ParseDecimalText(const std::string& text) {
+  return ParseDecimalImpl(text);
+}
 
 bool LikeMatches(const std::string& text, const std::string& pattern) {
   constexpr std::size_t kNoStar = std::numeric_limits<std::size_t>::max();

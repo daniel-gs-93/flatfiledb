@@ -432,6 +432,57 @@ const ColumnDef& ColumnAt(const Scope& scope, std::size_t index) {
   return table.schema.columns[index - table.offset];
 }
 
+// The edit distance between two names, ignoring case: the fewest insertions,
+// deletions and substitutions that turn one into the other.
+std::size_t EditDistance(const std::string& first, const std::string& second) {
+  const std::string lower_first = ToLower(first);
+  const std::string lower_second = ToLower(second);
+  std::vector<std::size_t> previous(lower_second.size() + 1);
+  std::vector<std::size_t> current(lower_second.size() + 1);
+  for (std::size_t j = 0; j <= lower_second.size(); ++j) {
+    previous[j] = j;
+  }
+  for (std::size_t i = 1; i <= lower_first.size(); ++i) {
+    current[0] = i;
+    for (std::size_t j = 1; j <= lower_second.size(); ++j) {
+      const std::size_t substitution =
+          previous[j - 1] + (lower_first[i - 1] == lower_second[j - 1] ? 0 : 1);
+      current[j] =
+          std::min({previous[j] + 1, current[j - 1] + 1, substitution});
+    }
+    std::swap(previous, current);
+  }
+  return previous[lower_second.size()];
+}
+
+constexpr std::size_t kMaxSuggestionDistance = 2;
+
+// "; did you mean <candidate>?" for the candidate closest to name within
+// kMaxSuggestionDistance (the first of equally close ones), or "" when there is
+// none. An exact match, ignoring case, is not a suggestion.
+std::string Suggestion(const std::string& name,
+                       const std::vector<std::string>& candidates) {
+  const std::string* best = nullptr;
+  std::size_t best_distance = kMaxSuggestionDistance + 1;
+  for (const std::string& candidate : candidates) {
+    const std::size_t distance = EditDistance(name, candidate);
+    if (distance == 0 || distance >= best_distance) {
+      continue;
+    }
+    best = &candidate;
+    best_distance = distance;
+  }
+  return best == nullptr ? std::string() : "; did you mean " + *best + "?";
+}
+
+std::vector<std::string> ColumnNames(const TableSchema& schema) {
+  std::vector<std::string> names;
+  for (const ColumnDef& column : schema.columns) {
+    names.push_back(column.name);
+  }
+  return names;
+}
+
 Result<ResolvedColumn> ResolveQualified(const Scope& scope,
                                         const ColumnRef& ref) {
   std::string qualifier = ToLower(ref.qualifier);
@@ -442,7 +493,8 @@ Result<ResolvedColumn> ResolveQualified(const Scope& scope,
     std::optional<std::size_t> column =
         FindColumnIndex(table.schema, ToLower(ref.name));
     if (!column) {
-      return BindError("unknown column '" + RefText(ref) + "'");
+      return BindError("unknown column '" + RefText(ref) + "'" +
+                       Suggestion(ref.name, ColumnNames(table.schema)));
     }
     return ResolvedColumn{table.offset + *column,
                           table.schema.columns[*column]};
@@ -474,7 +526,14 @@ Result<ResolvedColumn> ResolveUnqualified(const Scope& scope,
         ResolvedColumn{table.offset + *column, table.schema.columns[*column]};
   }
   if (!found) {
-    return BindError("unknown column '" + ref.name + "'");
+    std::vector<std::string> names;
+    for (const ScopeTable& table : scope) {
+      for (const std::string& column_name : ColumnNames(table.schema)) {
+        names.push_back(column_name);
+      }
+    }
+    return BindError("unknown column '" + ref.name + "'" +
+                     Suggestion(ref.name, names));
   }
   return *found;
 }
@@ -845,7 +904,8 @@ Result<Scope> BuildScope(const SelectStatement& select,
   for (const TableRef* ref : refs) {
     std::optional<TableSchema> schema = catalog.FindTable(ref->table);
     if (!schema) {
-      return BindError("unknown table '" + ref->table + "'");
+      return BindError("unknown table '" + ref->table + "'" +
+                       Suggestion(ref->table, catalog.TableNames()));
     }
     std::string qualifier =
         ToLower(ref->alias.empty() ? schema->name : ref->alias);
@@ -1297,8 +1357,9 @@ Result<PlanPtr> BindSelect(const SelectStatement& select,
   return BuildSelectPlan(binding, std::move(sort_keys.Value()), select);
 }
 
-ExecutionError UnknownTable(const std::string& name) {
-  return BindError("unknown table '" + name + "'");
+ExecutionError UnknownTable(const std::string& name, const ICatalog& catalog) {
+  return BindError("unknown table '" + name + "'" +
+                   Suggestion(name, catalog.TableNames()));
 }
 
 // Returns a null predicate when where is absent.
@@ -1321,7 +1382,7 @@ Result<PlanPtr> BindDelete(const DeleteStatement& statement,
                            const ICatalog& catalog) {
   std::optional<TableSchema> schema = catalog.FindTable(statement.table);
   if (!schema) {
-    return UnknownTable(statement.table);
+    return UnknownTable(statement.table, catalog);
   }
   Scope scope = SingleTableScope(*schema);
   if (statement.where) {
@@ -1357,7 +1418,8 @@ Result<std::vector<std::size_t>> ResolveAssignmentTargets(
     std::optional<std::size_t> column =
         FindColumnIndex(schema, ToLower(assignment.column));
     if (!column) {
-      return BindError("unknown column '" + assignment.column + "'");
+      return BindError("unknown column '" + assignment.column + "'" +
+                       Suggestion(assignment.column, ColumnNames(schema)));
     }
     targets.push_back(*column);
   }
@@ -1422,7 +1484,7 @@ Result<PlanPtr> BindUpdate(const UpdateStatement& statement,
                            const ICatalog& catalog) {
   std::optional<TableSchema> schema = catalog.FindTable(statement.table);
   if (!schema) {
-    return UnknownTable(statement.table);
+    return UnknownTable(statement.table, catalog);
   }
   Scope scope = SingleTableScope(*schema);
   if (Status status = CheckUpdateNames(statement, scope)) {
@@ -1477,7 +1539,8 @@ Result<std::vector<std::size_t>> ResolveInsertColumns(
   for (const std::string& name : statement.columns) {
     std::optional<std::size_t> column = FindColumnIndex(schema, ToLower(name));
     if (!column) {
-      return BindError("unknown column '" + name + "'");
+      return BindError("unknown column '" + name + "'" +
+                       Suggestion(name, ColumnNames(schema)));
     }
     targets.push_back(*column);
   }
@@ -1597,7 +1660,7 @@ Result<PlanPtr> BindInsert(const InsertStatement& statement,
                            const ICatalog& catalog) {
   std::optional<TableSchema> schema = catalog.FindTable(statement.table);
   if (!schema) {
-    return UnknownTable(statement.table);
+    return UnknownTable(statement.table, catalog);
   }
   Result<std::vector<std::size_t>> targets =
       ResolveInsertColumns(statement, *schema);
@@ -1703,7 +1766,7 @@ Result<ForeignKey> BindReference(const ColumnDefinition& column,
                                  const ICatalog& catalog) {
   std::optional<TableSchema> target = catalog.FindTable(column.ref_table);
   if (!target) {
-    return UnknownTable(column.ref_table);
+    return UnknownTable(column.ref_table, catalog);
   }
   std::optional<std::size_t> target_index =
       FindColumnIndex(*target, ToLower(column.ref_column));
@@ -1784,7 +1847,7 @@ Result<PlanPtr> BindAddColumn(const AddColumnStatement& statement,
                               const ICatalog& catalog) {
   std::optional<TableSchema> schema = catalog.FindTable(statement.table);
   if (!schema) {
-    return UnknownTable(statement.table);
+    return UnknownTable(statement.table, catalog);
   }
   const ColumnDefinition& definition = statement.column;
   if (FindColumnIndex(*schema, ToLower(definition.name))) {
@@ -1814,7 +1877,7 @@ Result<PlanPtr> BindDropTable(const DropTableStatement& statement,
                               const ICatalog& catalog) {
   std::optional<TableSchema> schema = catalog.FindTable(statement.table);
   if (!schema) {
-    return UnknownTable(statement.table);
+    return UnknownTable(statement.table, catalog);
   }
   for (const std::string& name : catalog.TableNames()) {
     std::optional<TableSchema> child = catalog.FindTable(name);

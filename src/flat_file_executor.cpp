@@ -1320,6 +1320,35 @@ SchemaChangeOutcome PlanCreate(
       TableData{schema, std::move(rows)}, existing_rows.has_value()};
 }
 
+// A new table that arrives with its rows (`.import`). The Domain has checked
+// the table name against the catalog and the key for duplicates; both are
+// checked again, because the plan is not trusted to have been built by it.
+SchemaChangeOutcome PlanImport(const domain::ImportTableNode& import,
+                               const TableStore& store) {
+  const TableSchema& schema = import.schema;
+  if (store.Find(schema.name) != nullptr) {
+    return TableExistsError(schema.name);
+  }
+  std::unordered_set<std::string> keys;
+  for (const Row& row : import.rows) {
+    assert(row.size() == schema.columns.size());
+    for (std::size_t i = 0; i < row.size(); ++i) {
+      if (auto error = CheckTextStorable(schema, i, row[i])) {
+        return std::move(*error);
+      }
+    }
+    const std::size_t key_index = schema.primary_key_index;
+    if (!keys.insert(ExactKey(row[key_index])).second) {
+      return DuplicateKeyError(schema, key_index, row[key_index]);
+    }
+  }
+  std::string tag = "IMPORT " + schema.name + " (imported " +
+                    std::to_string(import.rows.size()) + " rows)";
+  return SchemaChange{SchemaChangeKind::kCreate, std::move(tag),
+                      domain::ToLower(schema.name),
+                      TableData{schema, import.rows}, false};
+}
+
 SchemaChangeOutcome PlanAddColumn(const domain::AddColumnNode& add_column,
                                   const TableStore& store) {
   const TableData* target = store.Find(add_column.table);
@@ -1402,6 +1431,9 @@ SchemaChangeOutcome PlanSchemaChange(
   }
   if (const auto* drop = std::get_if<domain::DropTableNode>(&plan.node)) {
     return PlanDrop(*drop, store);
+  }
+  if (const auto* import = std::get_if<domain::ImportTableNode>(&plan.node)) {
+    return PlanImport(*import, store);
   }
   return MakeError(ErrorKind::kUnsupported, "not a schema change node");
 }

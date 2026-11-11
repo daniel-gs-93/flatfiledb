@@ -1150,4 +1150,41 @@ TEST(test_binder_predicate_pushdown_handles_function_arguments) {
   CHECK(cross_predicate != nullptr);
 }
 
+TEST(test_binder_suggests_close_names_for_unknown_tables_and_columns) {
+  EXPECT_BIND_FAILURE("SELECT id FROM user", domain::ErrorKind::kBind,
+                      "unknown table 'user'; did you mean users?");
+  EXPECT_BIND_FAILURE("SELECT usrname FROM users", domain::ErrorKind::kBind,
+                      "; did you mean username?");
+  EXPECT_BIND_FAILURE("INSERT INTO users (usernam) VALUES ('a')",
+                      domain::ErrorKind::kBind, "; did you mean username?");
+  EXPECT_BIND_FAILURE("UPDATE users SET locaton = 'x'",
+                      domain::ErrorKind::kBind, "; did you mean location?");
+  EXPECT_BIND_FAILURE("SELECT u.usrname FROM users u", domain::ErrorKind::kBind,
+                      "unknown column 'u.usrname'; did you mean username?");
+  // The comparison ignores case.
+  EXPECT_BIND_FAILURE("SELECT USRNAME FROM users", domain::ErrorKind::kBind,
+                      "; did you mean username?");
+  // Edit distance 2 still suggests; edit distance 3 does not.
+  EXPECT_BIND_FAILURE("SELECT usrnme FROM users", domain::ErrorKind::kBind,
+                      "; did you mean username?");
+
+  // Too far from every name, or an exact match of another table's column.
+  FakeCatalog catalog;
+  domain::BindResult far =
+      domain::Bind(MustParse("SELECT id FROM zzzzzz"), catalog);
+  const auto* error = std::get_if<domain::ExecutionError>(&far);
+  CHECK(error != nullptr);
+  if (error != nullptr) {
+    CHECK(error->message.find("did you mean") == std::string::npos);
+  }
+  domain::BindResult three_edits =
+      domain::Bind(MustParse("SELECT usrnm FROM users"), catalog);
+  const auto* three_edits_error =
+      std::get_if<domain::ExecutionError>(&three_edits);
+  CHECK(three_edits_error != nullptr);
+  if (three_edits_error != nullptr) {
+    CHECK(three_edits_error->message.find("did you mean") == std::string::npos);
+  }
+}
+
 }  // namespace flatfiledb::testing

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
 #include <locale>
 #include <memory>
@@ -248,13 +249,56 @@ Token LexString(const std::string& input, std::size_t start) {
                    "unterminated string literal");
 }
 
-std::string DescribeUnexpectedCharacter(char letter) {
-  const unsigned char code = static_cast<unsigned char>(letter);
-  if (code >= 0x20 && code <= 0x7e) {
-    return std::string("unexpected character '") + letter + "'";
+// The description of the unexpected character at input[start] and the number
+// of bytes it spans: a visible ASCII character in quotes, a valid UTF-8
+// character by its code point, anything else by its byte value.
+struct UnexpectedCharacter {
+  std::string description;
+  std::size_t length;
+};
+
+UnexpectedCharacter DescribeUnexpectedCharacter(const std::string& input,
+                                                std::size_t start) {
+  const unsigned char lead = static_cast<unsigned char>(input[start]);
+  if (lead >= 0x20 && lead <= 0x7e) {
+    return {std::string("unexpected character '") + input[start] + "'", 1};
   }
-  return "unexpected character with byte value " +
-         std::to_string(static_cast<unsigned>(code));
+  std::size_t length = 1;
+  if (lead >= 0xC2 && lead <= 0xDF) {
+    length = 2;
+  } else if (lead >= 0xE0 && lead <= 0xEF) {
+    length = 3;
+  } else if (lead >= 0xF0 && lead <= 0xF4) {
+    length = 4;
+  }
+  bool is_valid = length > 1 && start + length <= input.size();
+  uint32_t code_point = lead;
+  if (length == 2) {
+    code_point = lead & 0x1F;
+  }
+  if (length == 3) {
+    code_point = lead & 0x0F;
+  }
+  if (length == 4) {
+    code_point = lead & 0x07;
+  }
+  for (std::size_t i = 1; is_valid && i < length; ++i) {
+    const unsigned char follower = static_cast<unsigned char>(input[start + i]);
+    if (follower < 0x80 || follower > 0xBF) {
+      is_valid = false;
+    } else {
+      code_point = (code_point << 6) | (follower & 0x3F);
+    }
+  }
+  if (is_valid) {
+    std::ostringstream text;
+    text << "unexpected character U+" << std::uppercase << std::hex
+         << std::setfill('0') << std::setw(4) << code_point;
+    return {text.str(), length};
+  }
+  return {"unexpected character with byte value " +
+              std::to_string(static_cast<unsigned>(lead)),
+          1};
 }
 
 Token LexSymbol(const std::string& input, std::size_t start) {
@@ -307,8 +351,9 @@ Token LexSymbol(const std::string& input, std::size_t start) {
     default:
       break;
   }
-  return MakeToken(TokenKind::kInvalid, start, 1,
-                   DescribeUnexpectedCharacter(current));
+  UnexpectedCharacter unexpected = DescribeUnexpectedCharacter(input, start);
+  return MakeToken(TokenKind::kInvalid, start, unexpected.length,
+                   std::move(unexpected.description));
 }
 
 Token LexToken(const std::string& input, std::size_t start) {
@@ -325,15 +370,35 @@ Token LexToken(const std::string& input, std::size_t start) {
   return LexSymbol(input, start);
 }
 
+// The position of the first character at or after `position` that is neither
+// white space nor part of a `--` comment (which runs to the end of its line).
+std::size_t SkipBlanksAndComments(const std::string& input,
+                                  std::size_t position) {
+  while (position < input.size()) {
+    const std::size_t blank = WhitespaceLengthAt(input, position);
+    if (blank > 0) {
+      position += blank;
+      continue;
+    }
+    if (input[position] == '-' && position + 1 < input.size() &&
+        input[position + 1] == '-') {
+      while (position < input.size() && input[position] != '\n') {
+        ++position;
+      }
+      continue;
+    }
+    break;
+  }
+  return position;
+}
+
 // Always ends with a kEnd token. A lexical error becomes a kInvalid token that
 // stops the scan, so a syntax error located before it is still reported first.
 std::vector<Token> Tokenize(const std::string& input) {
   std::vector<Token> tokens;
   std::size_t position = 0;
   while (true) {
-    while (position < input.size() && IsSpace(input[position])) {
-      ++position;
-    }
+    position = SkipBlanksAndComments(input, position);
     if (position >= input.size()) {
       break;
     }
@@ -1495,6 +1560,41 @@ class Parser {
 };
 
 }  // namespace
+
+namespace {
+
+unsigned char ByteAt(const std::string& text, std::size_t position,
+                     std::size_t offset) {
+  return static_cast<unsigned char>(text[position + offset]);
+}
+
+}  // namespace
+
+std::size_t WhitespaceLengthAt(const std::string& text, std::size_t position) {
+  if (position >= text.size()) {
+    return 0;
+  }
+  if (IsSpace(text[position])) {
+    return 1;
+  }
+  const std::size_t remaining = text.size() - position;
+  // U+00A0 is C2 A0, U+3000 is E3 80 80, U+2000 to U+200A are E2 80 80 to
+  // E2 80 8A.
+  if (remaining >= 2 && ByteAt(text, position, 0) == 0xC2 &&
+      ByteAt(text, position, 1) == 0xA0) {
+    return 2;
+  }
+  if (remaining >= 3 && ByteAt(text, position, 0) == 0xE3 &&
+      ByteAt(text, position, 1) == 0x80 && ByteAt(text, position, 2) == 0x80) {
+    return 3;
+  }
+  if (remaining >= 3 && ByteAt(text, position, 0) == 0xE2 &&
+      ByteAt(text, position, 1) == 0x80 && ByteAt(text, position, 2) >= 0x80 &&
+      ByteAt(text, position, 2) <= 0x8A) {
+    return 3;
+  }
+  return 0;
+}
 
 ParseResult ParseStatement(const std::string& text) {
   Parser parser(text, Tokenize(text));

@@ -1,3 +1,4 @@
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -26,11 +27,19 @@ namespace testing = flatfiledb::testing;
 
 const char* const kDataFiles[] = {"users.csv", "posts.csv", "engagements.csv"};
 const char* const kOpenLine = ".open data";
+// data/users.csv has three rows the schema rejects (lines 12, 17 and 18), which
+// `.open` reports.
 const char* const kLoadedLine =
-    "loaded users=10000 posts=10000 engagements=10000";
+    "loaded users=10000 (rejected 3) posts=10000 engagements=10000";
+const char* const kRejectedLine = "users.csv: rejected lines 12, 17, 18";
 
 std::filesystem::path SourceData() {
   return std::filesystem::path(FLATFILEDB_SOURCE_DIR) / "data";
+}
+
+// The sample database that ships with the repository (README, Quick Start).
+std::filesystem::path SampleDatabase() {
+  return std::filesystem::path(FLATFILEDB_SOURCE_DIR) / "sample_my_db";
 }
 
 bool HasSourceData() {
@@ -111,6 +120,34 @@ std::vector<std::string> RunCli(const std::filesystem::path& work_dir,
   return SplitLines(testing::ReadFile(work_dir / "output.txt"));
 }
 
+// What one run of the CLI with command-line arguments printed and returned.
+struct CliRun {
+  std::vector<std::string> output;
+  std::string error_text;
+  int status;
+};
+
+// Runs the CLI with `arguments` (already shell-quoted), stdin from input_lines
+// and work_dir as the current directory.
+CliRun RunCliWithArguments(const std::filesystem::path& work_dir,
+                           const std::string& arguments,
+                           const std::vector<std::string>& input_lines) {
+  std::string input;
+  for (const auto& line : input_lines) {
+    input += line + "\n";
+  }
+  testing::WriteFile(work_dir / "input.txt", input);
+  std::string command = "cd '" + work_dir.string() + "' && '" +
+                        FLATFILEDB_CLI_PATH + "' " + arguments +
+                        " < input.txt > output.txt 2> error.txt";
+  int raw_status = std::system(command.c_str());
+  CliRun run;
+  run.status = WIFEXITED(raw_status) ? WEXITSTATUS(raw_status) : -1;
+  run.output = SplitLines(testing::ReadFile(work_dir / "output.txt"));
+  run.error_text = testing::ReadFile(work_dir / "error.txt");
+  return run;
+}
+
 // Output lines after the `loaded ...` line of the leading .open.
 std::vector<std::string> RunAfterOpen(const std::filesystem::path& work_dir,
                                       std::vector<std::string> statements) {
@@ -119,10 +156,9 @@ std::vector<std::string> RunAfterOpen(const std::filesystem::path& work_dir,
     input.push_back(std::move(statement));
   }
   std::vector<std::string> output = RunCli(work_dir, input);
-  if (output.empty()) {
-    return output;
-  }
-  output.erase(output.begin());
+  // The `loaded ...` line and the line that lists the rejected rows.
+  const std::size_t opening_lines = std::min<std::size_t>(2, output.size());
+  output.erase(output.begin(), output.begin() + opening_lines);
   return output;
 }
 
@@ -156,7 +192,7 @@ TEST(test_cli_open_prints_loaded_counts) {
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
       RunCli(work.path(), {std::string(kOpenLine) + " --parallel"});
-  CHECK_EQ(output, std::vector<std::string>({kLoadedLine}));
+  CHECK_EQ(output, std::vector<std::string>({kLoadedLine, kRejectedLine}));
 }
 
 TEST(test_cli_select_prints_header_and_rows) {
@@ -290,13 +326,13 @@ TEST(test_cli_failed_open_keeps_previous_connection) {
   }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output = RunCli(
-      work.path(),
-      {kOpenLine, ".open nosuch", "SELECT username FROM users WHERE id = 1;"});
-  CHECK_EQ(output,
-           std::vector<std::string>(
-               {kLoadedLine, "error: could not open nosuch: no such directory",
-                "username", "knorman"}));
+  std::vector<std::string> output =
+      RunCli(work.path(), {kOpenLine, ".open nosuch/db",
+                           "SELECT username FROM users WHERE id = 1;"});
+  CHECK_EQ(output, std::vector<std::string>(
+                       {kLoadedLine, kRejectedLine,
+                        "error: could not open nosuch/db: no such directory",
+                        "username", "knorman"}));
 }
 
 TEST(test_cli_formats_double_empty_result_and_blank_line) {
@@ -403,7 +439,8 @@ TEST(test_cli_create_tables_adopts_data_csvs) {
                        "OK CREATE TABLE posts (adopted 10000 rows)",
                        "OK CREATE TABLE engagements (adopted 10000 rows)",
                        "username\tlocation", "knorman\tGrahamside"}));
-  CHECK_EQ(second, std::vector<std::string>({kLoadedLine, "username\tlocation",
+  CHECK_EQ(second, std::vector<std::string>({kLoadedLine, kRejectedLine,
+                                             "username\tlocation",
                                              "knorman\tGrahamside"}));
   CHECK(DataFilesUnchanged(work.path()));
 }
@@ -474,7 +511,8 @@ TEST(test_cli_open_locked_directory_prints_error) {
            std::vector<std::string>(
                {"error: could not open data: database is locked by another "
                 "process"}));
-  CHECK_EQ(after_release, std::vector<std::string>({kLoadedLine}));
+  CHECK_EQ(after_release,
+           std::vector<std::string>({kLoadedLine, kRejectedLine}));
 }
 
 TEST(test_cli_open_same_directory_twice_succeeds) {
@@ -488,8 +526,9 @@ TEST(test_cli_open_same_directory_twice_succeeds) {
       work.path(),
       {kOpenLine, kOpenLine, "SELECT username FROM users WHERE id = 1;"});
 
-  CHECK_EQ(output, std::vector<std::string>(
-                       {kLoadedLine, kLoadedLine, "username", "knorman"}));
+  CHECK_EQ(output,
+           std::vector<std::string>({kLoadedLine, kRejectedLine, kLoadedLine,
+                                     kRejectedLine, "username", "knorman"}));
 }
 
 TEST(test_cli_text_with_comma_and_quote_round_trips) {
@@ -579,7 +618,8 @@ TEST(test_cli_piped_input_prints_no_prompt) {
   std::string raw = testing::ReadFile(work.path() / "output.txt");
 
   CHECK_EQ(output, std::vector<std::string>({"username", "knorman"}));
-  CHECK_EQ(raw, std::string(kLoadedLine) + "\nusername\nknorman\n");
+  CHECK_EQ(raw, std::string(kLoadedLine) + "\n" + kRejectedLine +
+                    "\nusername\nknorman\n");
   CHECK(raw.find("flatfiledb>") == std::string::npos);
 }
 
@@ -595,7 +635,7 @@ TEST(test_cli_quit_stops_reading_with_status_zero) {
       RunCli(work.path(),
              {kOpenLine, ".quit", "SELECT username FROM users WHERE id = 1;"});
 
-  CHECK_EQ(output, std::vector<std::string>({kLoadedLine}));
+  CHECK_EQ(output, std::vector<std::string>({kLoadedLine, kRejectedLine}));
 }
 
 TEST(test_cli_limit_offset_prints_window) {
@@ -692,4 +732,187 @@ TEST(test_cli_multi_row_insert_persists_and_fails_as_a_whole) {
                 "notes.id=10"}));
   CHECK_EQ(second, std::vector<std::string>(
                        {"loaded notes=3", "id\tbody", "1\ta", "2\tb", "3\tc"}));
+}
+
+TEST(test_cli_sample_database_answers_readme_queries) {
+  testing::TempDir work;
+  std::error_code copy_error;
+  std::filesystem::copy(SampleDatabase(), work.path() / "sample_my_db",
+                        std::filesystem::copy_options::recursive, copy_error);
+  CHECK(!copy_error);
+
+  std::vector<std::string> output = RunCli(
+      work.path(),
+      {".open sample_my_db", ".tables", ".schema courses",
+       "SELECT code, title, credits, capacity FROM courses ORDER BY code LIMIT "
+       "4;",
+       "SELECT code, COUNT(*) FROM courses JOIN enrollments ON course_id = "
+       "courses.id WHERE semester = '2026-Spring' AND status = 'enrolled' "
+       "GROUP BY code ORDER BY 2 DESC, 1 LIMIT 3;",
+       "SELECT name, code, score FROM students JOIN enrollments ON student_id "
+       "= students.id JOIN courses ON course_id = courses.id WHERE semester = "
+       "'2025-Fall' AND status = 'completed' ORDER BY 3 DESC, 1 LIMIT 3;",
+       "SELECT id, name, LENGTH(name), UPPER(major) FROM students WHERE name "
+       "LIKE 'K%';"});
+
+  CHECK_EQ(output,
+           std::vector<std::string>(
+               {"loaded instructors=6 students=30 courses=12 enrollments=144",
+                "instructors",
+                "students",
+                "courses",
+                "enrollments",
+                "CREATE TABLE courses (",
+                "  id INT PRIMARY KEY AUTOINCREMENT,",
+                "  code TEXT UNIQUE,",
+                "  title TEXT,",
+                "  credits INT,",
+                "  dept TEXT,",
+                "  capacity INT,",
+                "  instructor_id INT REFERENCES instructors(id)",
+                ");",
+                "code\ttitle\tcredits\tcapacity",
+                "ART101\tArt Appreciation\t2\t10",
+                "CS101\tIntro to Programming\t3\t6",
+                "CS201\tData Structures\t3\t5",
+                "CS301\tDatabase Systems\t3\t5",
+                "code\tCOUNT(*)",
+                "HIST101\t8",
+                "STAT101\t8",
+                "ECON101\t7",
+                "name\tcode\tscore",
+                "Ivy Chen\tCS301\t97",
+                "Wendy Morgan\tHIST101\t97",
+                "Frank Miller\tCS301\t95",
+                "id\tname\tLENGTH(name)\tUPPER(major)",
+                "1011\tKevin Anderson\t14\tCS"}));
+}
+
+TEST(test_cli_sample_database_constraints_and_update_work_on_a_copy) {
+  testing::TempDir work;
+  const std::string source_enrollments =
+      testing::ReadFile(SampleDatabase() / "enrollments.csv");
+  std::error_code copy_error;
+  std::filesystem::copy(SampleDatabase(), work.path() / "sample_my_db",
+                        std::filesystem::copy_options::recursive, copy_error);
+  CHECK(!copy_error);
+
+  std::vector<std::string> output = RunCli(
+      work.path(),
+      {".open sample_my_db",
+       "SELECT id, student_id, course_id, status, score FROM enrollments "
+       "WHERE id = 100;",
+       "INSERT INTO enrollments (student_id, course_id, semester) VALUES "
+       "(9999, 1, '2026-Spring');",
+       "DELETE FROM students WHERE id = 1001;",
+       "UPDATE enrollments SET status = 'completed', score = 90 WHERE id = "
+       "100;",
+       "SELECT id, student_id, course_id, status, score FROM enrollments "
+       "WHERE id = 100;"});
+
+  CHECK_EQ(output,
+           std::vector<std::string>(
+               {"loaded instructors=6 students=30 courses=12 enrollments=144",
+                "id\tstudent_id\tcourse_id\tstatus\tscore",
+                "100\t1008\t3\tenrolled\t0",
+                "error: constraint violation: no matching row: "
+                "enrollments.student_id=9999 not found in students.id",
+                "error: constraint violation: students.id=1001 is referenced "
+                "by enrollments.student_id",
+                "OK affected=1", "id\tstudent_id\tcourse_id\tstatus\tscore",
+                "100\t1008\t3\tcompleted\t90"}));
+  CHECK(testing::ReadFile(work.path() / "sample_my_db" / "enrollments.csv") !=
+        source_enrollments);
+  CHECK(testing::ReadFile(SampleDatabase() / "enrollments.csv") ==
+        source_enrollments);
+}
+
+TEST(test_cli_database_path_argument_opens_the_database) {
+  testing::TempDir work;
+  std::error_code copy_error;
+  std::filesystem::copy(SampleDatabase(), work.path() / "sample_my_db",
+                        std::filesystem::copy_options::recursive, copy_error);
+  CHECK(!copy_error);
+
+  CliRun existing =
+      RunCliWithArguments(work.path(), "sample_my_db", {".tables"});
+  CliRun created =
+      RunCliWithArguments(work.path(), "fresh_db --parallel", {".tables"});
+
+  CHECK_EQ(existing.status, 0);
+  CHECK_EQ(existing.output,
+           std::vector<std::string>(
+               {"loaded instructors=6 students=30 courses=12 enrollments=144",
+                "instructors", "students", "courses", "enrollments"}));
+  CHECK_EQ(created.status, 0);
+  CHECK_EQ(created.output,
+           std::vector<std::string>({"created new database fresh_db"}));
+  CHECK(std::filesystem::is_directory(work.path() / "fresh_db"));
+}
+
+TEST(test_cli_bad_arguments_print_usage_and_exit_with_status_two) {
+  testing::TempDir work;
+
+  CliRun too_many = RunCliWithArguments(work.path(), "a b c", {".tables"});
+  CliRun bad_option =
+      RunCliWithArguments(work.path(), "a --bogus", {".tables"});
+  CliRun option_first =
+      RunCliWithArguments(work.path(), "--parallel", {".tables"});
+
+  for (const CliRun* run : {&too_many, &bad_option, &option_first}) {
+    CHECK_EQ(run->status, 2);
+    CHECK_EQ(run->error_text,
+             std::string("usage: flatfiledb_cli [<directory> [--parallel]]\n"));
+    CHECK(run->output.empty());
+  }
+  CHECK(!std::filesystem::exists(work.path() / "a"));
+}
+
+TEST(test_cli_import_loads_posts_and_engagements) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path(), false));
+
+  std::vector<std::string> output =
+      RunCli(work.path(),
+             {".open fresh", ".import data/posts.csv",
+              ".import data/engagements.csv", "SELECT COUNT(*) FROM posts;",
+              "SELECT COUNT(*) FROM engagements;", ".schema posts"});
+
+  CHECK_EQ(
+      output,
+      std::vector<std::string>(
+          {"created new database fresh",
+           "OK IMPORT posts (imported 10000 rows)",
+           "OK IMPORT engagements (imported 10000 rows)", "COUNT(*)", "10000",
+           "COUNT(*)", "10000", "CREATE TABLE posts (", "  id INT PRIMARY KEY,",
+           "  content TEXT,", "  username TEXT,", "  views INT", ");"}));
+  CHECK(DataFilesUnchanged(work.path()));
+}
+
+TEST(test_cli_import_users_needs_type_and_skip_options) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path(), false));
+
+  std::vector<std::string> output = RunCli(
+      work.path(),
+      {".open fresh", ".import data/users.csv",
+       ".import data/users.csv users --pk id --type id=INT --skip-bad-rows",
+       "SELECT COUNT(*) FROM users;",
+       "SELECT username FROM users WHERE id = 1;"});
+
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"created new database fresh",
+                        "error: bind: line 17: expected 3 fields, found 2",
+                        "OK IMPORT users (imported 10000 rows, skipped 3)",
+                        "skipped line 12: id '1s0' is not INT",
+                        "skipped line 17: expected 3 fields, found 2",
+                        "skipped line 18: expected 3 fields, found 4",
+                        "COUNT(*)", "10000", "username", "knorman"}));
+  CHECK(DataFilesUnchanged(work.path()));
 }

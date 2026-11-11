@@ -72,11 +72,11 @@ domain::ExecutionResult RunQuery(const domain::PlanNode& plan,
 MutationOutcome PlanMutation(const domain::PlanNode& plan,
                              const TableStore& store);
 
-// Handles CreateTableNode, AddColumnNode and DropTableNode. existing_rows is,
-// for a CreateTableNode, the rows of the table's CSV when that file exists
-// (parsed but not de-duplicated); they must satisfy the declared primary key,
-// UNIQUE columns and foreign keys, or the result is a kConstraintViolation
-// (docs/DesignDocument.md section 2.5).
+// Handles CreateTableNode, AddColumnNode, DropTableNode and ImportTableNode.
+// existing_rows is, for a CreateTableNode, the rows of the table's CSV when
+// that file exists (parsed but not de-duplicated); they must satisfy the
+// declared primary key, UNIQUE columns and foreign keys, or the result is a
+// kConstraintViolation (docs/DesignDocument.md section 2.5).
 SchemaChangeOutcome PlanSchemaChange(
     const domain::PlanNode& plan, const TableStore& store,
     const std::optional<std::vector<domain::Row>>& existing_rows);

@@ -1,6 +1,10 @@
 #ifndef FLATFILEDB_INFRASTRUCTURE_H_
 #define FLATFILEDB_INFRASTRUCTURE_H_
 
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -14,6 +18,9 @@ namespace flatfiledb::infrastructure {
 struct LoadedTable {
   domain::TableSchema schema;
   std::vector<domain::Row> rows;
+  // Line numbers (from 1, counting the header and empty lines) of the rows the
+  // schema rejected; they are not loaded and a later rewrite drops them.
+  std::vector<std::size_t> rejected_lines = {};
 };
 
 // The tables of a database directory in catalog order, or the reason the
@@ -88,7 +95,25 @@ class CsvRepository : public IFlatFileRepository {
       const std::vector<domain::Row>& rows) override;
 
  private:
+  // What a file looked like when it was loaded or last written by this
+  // repository (docs/DesignDocument.md section 2.6, external modification).
+  struct FileStamp {
+    bool is_present = false;
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type modified = {};
+
+    bool operator==(const FileStamp&) const = default;
+  };
+
+  FileStamp StampOf(const std::string& file_name) const;
+  // The failure description for the first of file_names whose current stamp
+  // differs from the recorded one; files without a record are not checked.
+  std::optional<std::string> FindChangedFile(
+      const std::vector<std::string>& file_names) const;
+  void RecordStamps(const std::vector<std::string>& file_names);
+
   std::string directory_;
+  std::map<std::string, FileStamp> stamps_;  // by file name
 };
 
 }  // namespace flatfiledb::infrastructure

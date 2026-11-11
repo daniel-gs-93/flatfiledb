@@ -166,11 +166,18 @@ struct DropTableNode {
   std::string table;
 };
 
+// Creates a table with its rows in one step and writes both files (`.import`).
+// schema is complete; every row has one value per column of the schema type.
+struct ImportTableNode {
+  TableSchema schema;
+  std::vector<Row> rows;
+};
+
 // A struct, not a variant alias: the alternatives refer back to PlanNode.
 struct PlanNode {
   std::variant<ScanNode, FilterNode, JoinNode, AggregateNode, ProjectNode,
                SortNode, LimitNode, InsertNode, UpdateNode, DeleteNode,
-               CreateTableNode, AddColumnNode, DropTableNode>
+               CreateTableNode, AddColumnNode, DropTableNode, ImportTableNode>
       node;
 };
 

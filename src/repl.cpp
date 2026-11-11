@@ -13,6 +13,7 @@
 
 #include "flatfiledb/application.h"
 #include "flatfiledb/bootstrap.h"
+#include "flatfiledb/domain/import.h"
 #include "flatfiledb/domain/value.h"
 #include "flatfiledb/sql_parser.h"
 #include "flatfiledb/statement_buffer.h"
@@ -23,15 +24,34 @@ namespace {
 
 constexpr const char* kPrompt = "flatfiledb> ";
 constexpr const char* kContinuationPrompt = "       ...> ";
+constexpr const char* kStringPrompt = "         '> ";
+constexpr const char* kClearScreen = "\033[H\033[2J";
+constexpr const char* kFullWidthSemicolonError =
+    "error: full-width ';' (U+FF1B) found; use ASCII ';'\n";
+constexpr const char* kImportUsage =
+    ".import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]... "
+    "[--skip-bad-rows]";
+// The command names that are recognised when typed without the leading '.'.
+constexpr const char* kCommandNames[] = {"open",   "import", "tables",
+                                         "schema", "help",   "quit",
+                                         "exit",   "clear",  "cancel"};
+constexpr std::size_t kMaxListedLines = 10;
 constexpr const char* kNoDatabase =
     "error: no database open; run .open first\n";
 constexpr const char* kHelp =
-    ".open <directory> [--parallel]  open a database directory\n"
+    ".open <directory> [--parallel]  open a database directory (created when "
+    "missing)\n"
+    ".import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]...\n"
+    "        [--skip-bad-rows]       import a CSV file as a new table\n"
     ".tables                         list the tables\n"
     ".schema [<table>]               show the CREATE TABLE statements\n"
+    ".clear                          clear the screen\n"
+    ".cancel                         discard the statement being typed\n"
     ".help                           show this text\n"
     ".quit                           leave (also .exit)\n"
-    "Statements end with ';' and may span several lines.\n";
+    "Statements end with ';' and may span several lines; '--' starts a "
+    "comment.\n"
+    "NOT NULL is accepted but has no effect (there is no NULL).\n";
 
 using Database = std::optional<bootstrap::OpenedDatabase>;
 
@@ -59,10 +79,6 @@ std::string StripTrailingCarriageReturn(std::string line) {
     line.pop_back();
   }
   return line;
-}
-
-bool IsBlank(const std::string& line) {
-  return line.find_first_not_of(" \t") == std::string::npos;
 }
 
 // `.open <directory> [--parallel]`; std::nullopt when the arguments do not
@@ -114,7 +130,11 @@ std::string RenderResult(const domain::ExecutionResult& result) {
     return "OK affected=" + std::to_string(affected->count) + "\n";
   }
   if (const auto* complete = std::get_if<domain::CommandComplete>(&result)) {
-    return "OK " + complete->tag + "\n";
+    std::string text = "OK " + complete->tag + "\n";
+    for (const std::string& note : complete->notes) {
+      text += note + "\n";
+    }
+    return text;
   }
   const auto& error = std::get<domain::ExecutionError>(result);
   return std::string("error: ") + domain::ErrorKindName(error.kind) + ": " +
@@ -132,6 +152,35 @@ std::string DescribeTables(const std::vector<bootstrap::TableCount>& tables) {
       text += ' ';
     }
     text += tables[i].name + "=" + std::to_string(tables[i].row_count);
+    if (!tables[i].rejected_lines.empty()) {
+      text +=
+          " (rejected " + std::to_string(tables[i].rejected_lines.size()) + ")";
+    }
+  }
+  return text;
+}
+
+// One line per table that rejected rows: `users.csv: rejected lines 12, 17`,
+// at most kMaxListedLines numbers each.
+std::string DescribeRejectedLines(
+    const std::vector<bootstrap::TableCount>& tables) {
+  std::string text;
+  for (const bootstrap::TableCount& table : tables) {
+    if (table.rejected_lines.empty()) {
+      continue;
+    }
+    text += domain::ToLower(table.name) + ".csv: rejected lines ";
+    for (std::size_t i = 0; i < table.rejected_lines.size(); ++i) {
+      if (i == kMaxListedLines) {
+        text += ", ...";
+        break;
+      }
+      if (i > 0) {
+        text += ", ";
+      }
+      text += std::to_string(table.rejected_lines[i]);
+    }
+    text += "\n";
   }
   return text;
 }
@@ -147,7 +196,11 @@ std::string OpenDatabase(const OpenArguments& arguments, Database& database) {
            "\n";
   }
   database = std::move(std::get<bootstrap::OpenedDatabase>(opened));
-  return "loaded " + DescribeTables(database->tables) + "\n";
+  if (database->is_created) {
+    return "created new database " + arguments.directory + "\n";
+  }
+  return "loaded " + DescribeTables(database->tables) + "\n" +
+         DescribeRejectedLines(database->tables);
 }
 
 std::string ExecuteSql(const std::string& statement_text, Database& database) {
@@ -203,10 +256,73 @@ CommandOutcome Text(std::string text) {
   return CommandOutcome{true, std::move(text), false};
 }
 
+// The type named in `--type <column>=<type>`, in any case; std::nullopt for an
+// unknown name. The names are those of a column definition.
+std::optional<domain::DataType> ParseTypeName(const std::string& name) {
+  const std::string lowered = domain::ToLower(name);
+  if (lowered == "int" || lowered == "integer" || lowered == "bigint") {
+    return domain::DataType::kInt;
+  }
+  if (lowered == "double" || lowered == "real" || lowered == "float") {
+    return domain::DataType::kDouble;
+  }
+  if (lowered == "text") {
+    return domain::DataType::kText;
+  }
+  return std::nullopt;
+}
+
+// `.import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]...
+// [--skip-bad-rows]`; std::nullopt when the arguments do not match.
+std::optional<domain::ImportRequest> ParseImportArguments(
+    const std::vector<std::string>& tokens) {
+  domain::ImportRequest request;
+  std::vector<std::string> positionals;
+  for (std::size_t i = 1; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == "--skip-bad-rows") {
+      request.should_skip_bad_rows = true;
+    } else if (token == "--pk") {
+      if (i + 1 >= tokens.size()) {
+        return std::nullopt;
+      }
+      request.primary_key = tokens[++i];
+    } else if (token == "--type") {
+      if (i + 1 >= tokens.size()) {
+        return std::nullopt;
+      }
+      const std::string& spec = tokens[++i];
+      const std::size_t equals = spec.find('=');
+      if (equals == std::string::npos || equals == 0) {
+        return std::nullopt;
+      }
+      std::optional<domain::DataType> type =
+          ParseTypeName(spec.substr(equals + 1));
+      if (!type) {
+        return std::nullopt;
+      }
+      request.column_types.emplace_back(spec.substr(0, equals), *type);
+    } else if (token.starts_with("--")) {
+      return std::nullopt;
+    } else {
+      positionals.push_back(token);
+    }
+  }
+  if (positionals.empty() || positionals.size() > 2) {
+    return std::nullopt;
+  }
+  request.file_path = positionals[0];
+  if (positionals.size() == 2) {
+    request.table = positionals[1];
+  }
+  return request;
+}
+
 // Runs the line when its first token is a command; otherwise reports that it is
 // not one, so that the line is read as SQL (an unknown ".foo" is then a syntax
 // error from the parser).
-CommandOutcome HandleCommand(const std::string& line, Database& database) {
+CommandOutcome HandleCommand(const std::string& line, Database& database,
+                             bool is_interactive) {
   std::vector<std::string> tokens = SplitWhitespace(line);
   if (tokens.empty()) {
     return CommandOutcome{false, "", false};
@@ -218,6 +334,29 @@ CommandOutcome HandleCommand(const std::string& line, Database& database) {
       return Text(UsageError(".open <directory> [--parallel]"));
     }
     return Text(OpenDatabase(*arguments, database));
+  }
+  if (name == ".import") {
+    std::optional<domain::ImportRequest> request = ParseImportArguments(tokens);
+    if (!request) {
+      return Text(UsageError(kImportUsage));
+    }
+    if (!database) {
+      return Text(kNoDatabase);
+    }
+    return Text(RenderResult(database->service->ImportCsv(*request)));
+  }
+  if (name == ".clear") {
+    if (tokens.size() != 1) {
+      return Text(UsageError(".clear"));
+    }
+    return Text(is_interactive ? kClearScreen : "");
+  }
+  if (name == ".cancel") {
+    // Nothing is in progress when a line is read as a command.
+    if (tokens.size() != 1) {
+      return Text(UsageError(".cancel"));
+    }
+    return Text("");
   }
   if (name == ".tables") {
     if (tokens.size() != 1) {
@@ -348,24 +487,58 @@ std::string FormatParseError(const std::string& statement,
          std::to_string(offset - line_start) + ": " + error.description;
 }
 
-void RunRepl(std::istream& input, std::ostream& output, bool is_interactive) {
+// The text to print when `line` is a command name typed without its '.'; empty
+// when it is not (ADR-0023).
+std::string MissingDotHint(const std::string& line) {
+  std::vector<std::string> tokens = SplitWhitespace(line);
+  if (tokens.empty()) {
+    return std::string();
+  }
+  const std::string word = domain::ToLower(tokens[0]);
+  for (const char* name : kCommandNames) {
+    if (word == name) {
+      return "error: commands start with '.'; did you mean ." + word + "\n";
+    }
+  }
+  return std::string();
+}
+
+const char* PromptFor(const StatementBuffer& buffer) {
+  if (buffer.IsInString()) {
+    return kStringPrompt;
+  }
+  return buffer.IsEmpty() ? kPrompt : kContinuationPrompt;
+}
+
+void RunRepl(std::istream& input, std::ostream& output, bool is_interactive,
+             const std::optional<InitialOpen>& initial_open) {
   Database database;
   StatementBuffer buffer;
+  if (initial_open) {
+    output << OpenDatabase(
+        OpenArguments{initial_open->directory, initial_open->is_parallel},
+        database);
+  }
   std::string line;
   while (true) {
     if (is_interactive) {
-      output << (buffer.IsEmpty() ? kPrompt : kContinuationPrompt)
-             << std::flush;
+      output << PromptFor(buffer) << std::flush;
     }
     if (!std::getline(input, line)) {
       break;
     }
     line = StripTrailingCarriageReturn(std::move(line));
     if (buffer.IsEmpty()) {
-      if (IsBlank(line)) {
+      const std::string trimmed = TrimSqlWhitespace(line);
+      if (trimmed.empty() || trimmed.starts_with("--")) {
         continue;
       }
-      CommandOutcome command = HandleCommand(line, database);
+      const std::string hint = MissingDotHint(trimmed);
+      if (!hint.empty()) {
+        output << hint;
+        continue;
+      }
+      CommandOutcome command = HandleCommand(line, database, is_interactive);
       if (command.is_command) {
         output << command.text;
         if (command.should_quit) {
@@ -373,6 +546,13 @@ void RunRepl(std::istream& input, std::ostream& output, bool is_interactive) {
         }
         continue;
       }
+    } else if (!buffer.IsInString() && TrimSqlWhitespace(line) == ".cancel") {
+      buffer.Cancel();
+      continue;
+    }
+    if (buffer.HasFullWidthSemicolon(line)) {
+      output << kFullWidthSemicolonError;
+      continue;
     }
     for (const std::string& statement : buffer.AddLine(line)) {
       output << ExecuteSql(statement, database);

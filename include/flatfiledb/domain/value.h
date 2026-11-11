@@ -63,6 +63,8 @@ struct AffectedRows {
 // example "CREATE TABLE users".
 struct CommandComplete {
   std::string tag;
+  // Lines printed after it (for example the rows an import skipped).
+  std::vector<std::string> notes = {};
 };
 
 struct ResultSet {

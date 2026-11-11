@@ -145,7 +145,8 @@ CommitSet BuildCommitSet(const TableStore& store, const SchemaChange& change) {
   switch (change.kind) {
     case SchemaChangeKind::kCreate:
       if (!change.is_adopted) {
-        set.writes.push_back(TableWrite{change.data->schema, {}, true});
+        set.writes.push_back(
+            TableWrite{change.data->schema, change.data->rows, true});
       }
       break;
     case SchemaChangeKind::kAddColumn:
@@ -211,7 +212,8 @@ domain::ExecutionResult ApplySchemaChange(IFlatFileRepository& repository,
 bool IsSchemaChangeNode(const domain::PlanNode& plan) {
   return std::holds_alternative<domain::CreateTableNode>(plan.node) ||
          std::holds_alternative<domain::AddColumnNode>(plan.node) ||
-         std::holds_alternative<domain::DropTableNode>(plan.node);
+         std::holds_alternative<domain::DropTableNode>(plan.node) ||
+         std::holds_alternative<domain::ImportTableNode>(plan.node);
 }
 
 bool IsWriteNode(const domain::PlanNode& plan) {
@@ -248,7 +250,8 @@ LoadResult FlatFileEngine::Load(bool is_parallel) {
       std::get<std::vector<LoadedTable>>(outcome);
   std::vector<TableCount> counts;
   for (const LoadedTable& table : tables) {
-    counts.push_back(TableCount{table.schema.name, table.rows.size()});
+    counts.push_back(
+        TableCount{table.schema.name, table.rows.size(), table.rejected_lines});
   }
 
   // The store is replaced in one step, after it is complete.

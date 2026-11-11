@@ -167,7 +167,11 @@ bool TryOpenRegularFile(const std::string& path, std::ifstream& file) {
 // ----------------------------------------------------------------------------
 
 // The rows of one table file, or why it cannot be loaded.
-using TableRows = std::variant<std::vector<domain::Row>, std::string>;
+struct TableFileRows {
+  std::vector<domain::Row> rows;
+  std::vector<std::size_t> rejected_lines;  // see LoadedTable
+};
+using TableRows = std::variant<TableFileRows, std::string>;
 
 // Reads the header (the first non-empty line, which must name the schema's
 // columns) and then every row that parses under the schema. A row the schema
@@ -183,8 +187,10 @@ TableRows ReadTableFile(const std::string& path, const std::string& file_name,
   }
 
   std::string line;
+  std::size_t line_number = 0;
   bool has_header = false;
   while (std::getline(file, line)) {
+    ++line_number;
     line = StripTrailingCarriageReturn(std::move(line));
     if (!line.empty()) {
       has_header = true;
@@ -192,23 +198,27 @@ TableRows ReadTableFile(const std::string& path, const std::string& file_name,
     }
   }
   std::vector<domain::Row> rows;
+  std::vector<std::size_t> rejected_lines;
   if (has_header) {
     std::optional<std::vector<std::string>> header = ParseCsvRecord(line);
     if (!header || !HeaderMatches(*header, schema)) {
       return "header of " + file_name + " does not match " + mismatch_reason;
     }
     while (std::getline(file, line)) {
+      ++line_number;
       line = StripTrailingCarriageReturn(std::move(line));
       if (line.empty()) {
         continue;
       }
       std::optional<std::vector<std::string>> fields = ParseCsvRecord(line);
-      if (!fields) {
-        continue;
+      std::optional<domain::Row> row;
+      if (fields) {
+        row = ParseRow(*fields, schema);
       }
-      std::optional<domain::Row> row = ParseRow(*fields, schema);
       if (row) {
         rows.push_back(std::move(*row));
+      } else {
+        rejected_lines.push_back(line_number);
       }
     }
   }
@@ -216,9 +226,11 @@ TableRows ReadTableFile(const std::string& path, const std::string& file_name,
     return "cannot read " + file_name;
   }
   if (!is_deduplicated) {
-    return rows;
+    return TableFileRows{std::move(rows), std::move(rejected_lines)};
   }
-  return KeepLastOfDuplicateKeys(std::move(rows), schema.primary_key_index);
+  return TableFileRows{
+      KeepLastOfDuplicateKeys(std::move(rows), schema.primary_key_index),
+      std::move(rejected_lines)};
 }
 
 // The schemas of catalog.csv; none when the file does not exist.
@@ -676,10 +688,15 @@ LoadOutcome CsvRepository::Load(bool is_parallel) {
     if (auto* error = std::get_if<std::string>(&job.result)) {
       return *error;
     }
-    tables.push_back(
-        LoadedTable{*job.schema,
-                    std::move(std::get<std::vector<domain::Row>>(job.result))});
+    TableFileRows& file_rows = std::get<TableFileRows>(job.result);
+    tables.push_back(LoadedTable{*job.schema, std::move(file_rows.rows),
+                                 std::move(file_rows.rejected_lines)});
   }
+  std::vector<std::string> file_names = {kCatalogFileName};
+  for (const TableJob& job : jobs) {
+    file_names.push_back(job.file_name);
+  }
+  RecordStamps(file_names);
   return tables;
 }
 
@@ -706,7 +723,48 @@ InspectOutcome CsvRepository::InspectTable(const domain::TableSchema& schema) {
     return *error;
   }
   return InspectOutcome(std::optional<std::vector<domain::Row>>(
-      std::move(std::get<std::vector<domain::Row>>(rows))));
+      std::move(std::get<TableFileRows>(rows).rows)));
+}
+
+CsvRepository::FileStamp CsvRepository::StampOf(
+    const std::string& file_name) const {
+  const std::string path = directory_ + "/" + file_name;
+  FileStamp stamp;
+  std::error_code error;
+  stamp.is_present = std::filesystem::exists(path, error) && !error;
+  if (!stamp.is_present) {
+    return stamp;
+  }
+  stamp.size = std::filesystem::file_size(path, error);
+  if (error) {
+    stamp.size = 0;
+  }
+  stamp.modified = std::filesystem::last_write_time(path, error);
+  if (error) {
+    stamp.modified = {};
+  }
+  return stamp;
+}
+
+std::optional<std::string> CsvRepository::FindChangedFile(
+    const std::vector<std::string>& file_names) const {
+  for (const std::string& file_name : file_names) {
+    auto recorded = stamps_.find(file_name);
+    if (recorded == stamps_.end()) {
+      continue;
+    }
+    if (StampOf(file_name) != recorded->second) {
+      return file_name +
+             " changed on disk since it was loaded; run .open again";
+    }
+  }
+  return std::nullopt;
+}
+
+void CsvRepository::RecordStamps(const std::vector<std::string>& file_names) {
+  for (const std::string& file_name : file_names) {
+    stamps_[file_name] = StampOf(file_name);
+  }
 }
 
 std::optional<std::string> CsvRepository::Commit(const CommitSet& set) {
@@ -716,6 +774,19 @@ std::optional<std::string> CsvRepository::Commit(const CommitSet& set) {
   }
   std::vector<StagedFile>& staged = std::get<std::vector<StagedFile>>(built);
 
+  std::vector<std::string> file_names;
+  if (set.catalog) {
+    file_names.push_back(kCatalogFileName);
+  }
+  for (const TableWrite& write : set.writes) {
+    file_names.push_back(TableFileName(write.schema.name));
+  }
+  for (const std::string& name : set.drops) {
+    file_names.push_back(TableFileName(name));
+  }
+  if (auto failure = FindChangedFile(file_names)) {
+    return failure;
+  }
   if (auto failure = InspectTargets(staged)) {
     return failure;
   }
@@ -726,6 +797,7 @@ std::optional<std::string> CsvRepository::Commit(const CommitSet& set) {
     return failure;
   }
   RemoveBackups(staged);
+  RecordStamps(file_names);
   return std::nullopt;
 }
 
@@ -740,6 +812,9 @@ std::optional<std::string> CsvRepository::AppendRows(
   const std::string file_name = TableFileName(schema.name);
   const std::string path = directory_ + "/" + file_name;
   const std::string failure = "could not append to " + file_name;
+  if (auto changed = FindChangedFile({file_name})) {
+    return changed;
+  }
 
   PathKind kind = PathKind::kOther;
   if (!TryClassifyPath(path, kind)) {
@@ -758,6 +833,7 @@ std::optional<std::string> CsvRepository::AppendRows(
       WriteText(path, BuildAppendText(state.format, state.is_line_open, rows),
                 std::ios::app);
   if (write_result == WriteResult::kWritten) {
+    RecordStamps({file_name});
     return std::nullopt;
   }
   // An unopened file was not touched, so there is nothing to undo.

@@ -646,7 +646,7 @@ TEST(test_parser_minus_before_blank_lowers_to_subtraction) {
   CheckShape("-(1 + 2)", "SUB(0, ADD(1, 2))");
   CheckShape("a -5", "SUB(a, 5)");
   CheckShape("1 - - 2", "SUB(1, SUB(0, 2))");
-  CheckShape("--5", "SUB(0, -5)");
+  CheckShape("- -5", "SUB(0, -5)");
 }
 
 TEST(test_parser_select_item_text_keeps_written_spelling) {
@@ -1272,4 +1272,66 @@ TEST(test_parser_function_and_concat_depth_limits) {
     CHECK_EQ(ParseFailure(too_deep).description,
              std::string("expression is nested too deeply"));
   }
+}
+
+// ---- Stage 1e: comments, non-ASCII spaces, unexpected characters ------------
+
+TEST(test_parser_comments_run_to_end_of_line) {
+  domain::SelectStatement commented =
+      ParseAs<domain::SelectStatement>("SELECT a -- x\nFROM t");
+  CHECK_EQ(commented.from.table, std::string("t"));
+  CHECK_EQ(commented.items.size(), std::size_t{1});
+
+  domain::ExprPtr literal = ParseExpressionText("'--'");
+  const domain::Value* value = LiteralValue(literal.get());
+  CHECK(value != nullptr && std::holds_alternative<std::string>(*value));
+  if (value != nullptr) {
+    CHECK_EQ(DescribeValue(*value), "'--'");
+  }
+
+  CheckShape("1 - -2", "SUB(1, -2)");
+  // `--2 FROM t` is a comment, so the statement ends after `SELECT 1`.
+  const std::string commented_out = "SELECT 1--2 FROM t";
+  CheckError(commented_out, commented_out.size() + 1,
+             "expected FROM, found end of input");
+  CheckError("-- only", 1, "unrecognized statement");
+}
+
+TEST(test_parser_treats_non_ascii_spaces_as_whitespace) {
+  const std::string ideographic_space = "\xE3\x80\x80";
+  const std::string no_break_space = "\xC2\xA0";
+  const std::string em_space = "\xE2\x80\x83";
+
+  domain::SelectStatement spaced = ParseAs<domain::SelectStatement>(
+      "SELECT" + ideographic_space + "a" + no_break_space + "FROM" + em_space +
+      "t");
+  domain::SelectStatement trailing =
+      ParseAs<domain::SelectStatement>("SELECT a FROM t" + ideographic_space);
+
+  CHECK_EQ(spaced.from.table, std::string("t"));
+  CHECK_EQ(trailing.from.table, std::string("t"));
+
+  // The ends of U+2000 to U+200A are blank; the code points next to them are
+  // not.
+  const std::string en_quad = "\xE2\x80\x80";
+  const std::string hair_space = "\xE2\x80\x8A";
+  domain::SelectStatement range_ends = ParseAs<domain::SelectStatement>(
+      "SELECT" + en_quad + "a FROM" + hair_space + "t");
+  CHECK_EQ(range_ends.from.table, std::string("t"));
+  CheckError("SELECT a FROM t\xE2\x80\x8B", 16, "unexpected character U+200B");
+  CheckError("SELECT a FROM t\xE1\xBF\xBF", 16, "unexpected character U+1FFF");
+  CheckError("SELECT a FROM t\xE3\x80\x81", 16, "unexpected character U+3001");
+  CheckError("SELECT a FROM t\xC2\xA1", 16, "unexpected character U+00A1");
+}
+
+TEST(test_parser_unexpected_character_reports_code_point) {
+  const std::string right_quote = "\xE2\x80\x99";
+  const std::string quoted =
+      "SELECT " + right_quote + "a" + right_quote + " FROM t";
+
+  CheckError(quoted, 8, "unexpected character U+2019");
+  CheckError("SELECT # FROM t", 8, "unexpected character '#'");
+  CheckError("SELECT \xFF FROM t", 8,
+             "unexpected character with byte value 255");
+  CheckError("SELECT \x01 FROM t", 8, "unexpected character with byte value 1");
 }

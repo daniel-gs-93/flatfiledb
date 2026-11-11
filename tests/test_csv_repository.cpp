@@ -1028,4 +1028,26 @@ TEST(test_csv_append_rows_writes_every_row_in_one_call) {
   CHECK(!std::filesystem::exists(none.path() / "users.csv"));
 }
 
+TEST(test_csv_load_reports_rejected_line_numbers) {
+  TempDir rejecting;
+  WriteFixtureB(rejecting.path());
+  TempDir clean;
+  WriteFixtureA(clean.path());
+
+  std::vector<LoadedTable> rejected =
+      MustLoad(*MakeCsvRepository(rejecting.path()));
+  std::vector<LoadedTable> accepted =
+      MustLoad(*MakeCsvRepository(clean.path()));
+
+  CHECK_EQ(rejected.size(), std::size_t{3});
+  if (rejected.size() == 3) {
+    CHECK_EQ(rejected[0].rejected_lines, std::vector<std::size_t>({3, 4}));
+    CHECK_EQ(rejected[1].rejected_lines, std::vector<std::size_t>({3}));
+    CHECK(rejected[2].rejected_lines.empty());
+  }
+  for (const LoadedTable& table : accepted) {
+    CHECK(table.rejected_lines.empty());
+  }
+}
+
 }  // namespace flatfiledb::testing

@@ -24,6 +24,11 @@ using ParseResult = std::variant<domain::Statement, ParseError>;
 // that starts with '.' is not SQL and yields a ParseError. Pure.
 ParseResult ParseStatement(const std::string& text);
 
+// The number of bytes of the SQL white space character at text[position], or 0
+// when there is none: ASCII white space, U+00A0, U+3000 and U+2000 to U+200A
+// in UTF-8 (docs/DesignDocument.md section 2.3). Pure.
+std::size_t WhitespaceLengthAt(const std::string& text, std::size_t position);
+
 }  // namespace flatfiledb::adapter
 
 #endif  // FLATFILEDB_SQL_PARSER_H_

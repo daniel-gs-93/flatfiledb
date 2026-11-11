@@ -23,9 +23,9 @@ enum class Layer {
 };
 
 const char* const kInfrastructureHeaders[] = {
-    "flatfiledb/infrastructure.h", "flatfiledb/flat_file_engine.h",
+    "flatfiledb/infrastructure.h",     "flatfiledb/flat_file_engine.h",
     "flatfiledb/flat_file_executor.h", "flatfiledb/csv_codec.h",
-    "flatfiledb/directory_lock.h"};
+    "flatfiledb/directory_lock.h",     "flatfiledb/csv_file_source.h"};
 
 bool StartsWith(const std::string& text, const std::string& prefix) {
   return text.starts_with(prefix);
@@ -47,7 +47,8 @@ Layer LayerOf(const std::filesystem::path& relative) {
     return Layer::kDomain;
   }
   const std::set<std::string> domain_sources = {
-      "value.cpp", "expression.cpp", "binder.cpp", "scalar_functions.cpp"};
+      "value.cpp", "expression.cpp", "binder.cpp", "scalar_functions.cpp",
+      "import_inference.cpp"};
   if (domain_sources.contains(path)) {
     return Layer::kDomain;
   }
@@ -60,10 +61,12 @@ Layer LayerOf(const std::filesystem::path& relative) {
       "flatfiledb/flat_file_executor.h",
       "flatfiledb/csv_codec.h",
       "flatfiledb/directory_lock.h",
+      "flatfiledb/csv_file_source.h",
       "infrastructure.cpp",
       "flat_file_engine.cpp",
       "flat_file_executor.cpp",
       "csv_codec.cpp",
+      "csv_file_source.cpp",
       "directory_lock.cpp"};
   if (infrastructure_files.contains(path)) {
     return Layer::kInfrastructure;

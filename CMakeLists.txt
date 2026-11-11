@@ -21,10 +21,12 @@ add_library(flatfiledb_core STATIC
         src/binder.cpp
         src/bootstrap.cpp
         src/csv_codec.cpp
+        src/csv_file_source.cpp
         src/directory_lock.cpp
         src/expression.cpp
         src/flat_file_engine.cpp
         src/flat_file_executor.cpp
+        src/import_inference.cpp
         src/infrastructure.cpp
         src/repl.cpp
         src/scalar_functions.cpp
@@ -51,6 +53,7 @@ add_executable(flatfiledb_tests
         tests/test_directory_lock.cpp
         tests/test_expression.cpp
         tests/test_flat_file_engine.cpp
+        tests/test_import.cpp
         tests/test_layering.cpp
         tests/test_query_service.cpp
         tests/test_repl.cpp

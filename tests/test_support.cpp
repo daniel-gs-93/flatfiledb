@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "flatfiledb/csv_codec.h"
+#include "flatfiledb/csv_file_source.h"
 #include "flatfiledb/domain/binder.h"
 #include "flatfiledb/sql_parser.h"
 #include "test_harness.h"
@@ -370,7 +371,8 @@ std::unique_ptr<application::QueryService> MakeLoadedService(
         "engine failed to load " + dir.string() + ": " + loaded.error);
     return nullptr;
   }
-  return std::make_unique<application::QueryService>(std::move(engine));
+  return std::make_unique<application::QueryService>(
+      std::move(engine), std::make_unique<infrastructure::FileCsvSource>());
 }
 
 const domain::ResultSet* AsResultSet(const domain::ExecutionResult& result) {
