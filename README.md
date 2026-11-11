@@ -11,6 +11,8 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 | [`docs/DesignDocument.md`](docs/DesignDocument.md) | Architecture, SQL rules, flows and interfaces |
 | [`docs/DecisionRecord.md`](docs/DecisionRecord.md) | The rationale, cost and rejected alternatives of each design decision, written as Architecture Decision Records (`ADR-NNNN`) |
 | [`docs/TestDocument.md`](docs/TestDocument.md) | Test matrix |
+| [`docs/PagedEngineDesignDocument.md`](docs/PagedEngineDesignDocument.md) | Storage layer design of the paged engine (the second storage engine, organized in pages) |
+| [`docs/PagedEngineTestDocument.md`](docs/PagedEngineTestDocument.md) | Test matrix of the paged engine |
 
 ## Directory Structure
 
@@ -18,6 +20,7 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 flatfiledb/
 ├── include/flatfiledb/
 │   ├── domain/            # values, syntax tree, plan, Binder, expression evaluation, scalar functions, import inference, engine port
+│   ├── paged/             # storage layer of the paged engine: page format, buffer pool, table heap, catalog, Database
 │   ├── application.h      # QueryService: run one statement, import a CSV
 │   ├── bootstrap.h        # acquire the directory lock, assemble the engine and QueryService, shared by every entry point
 │   ├── sql_parser.h       # SQL parser
