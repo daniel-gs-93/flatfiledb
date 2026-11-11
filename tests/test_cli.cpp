@@ -511,3 +511,89 @@ TEST(test_cli_text_with_comma_and_quote_round_trips) {
                       {"OK affected=1", "content", "Hello, \"world\""}));
   CHECK_EQ(second, std::vector<std::string>({"content", "Hello, \"world\""}));
 }
+
+TEST(test_cli_multi_line_statement_prints_result) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT username,", "  location", "FROM users", "WHERE id = 1;"});
+
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"username\tlocation", "knorman\tGrahamside"}));
+}
+
+std::string JoinLines(const std::vector<std::string>& lines) {
+  std::string text;
+  for (const std::string& line : lines) {
+    text += line + "\n";
+  }
+  return text;
+}
+
+TEST(test_cli_schema_output_can_be_replayed) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+  std::filesystem::create_directory(work.path() / "fresh");
+
+  std::vector<std::string> original_schema =
+      RunAfterOpen(work.path(), {".schema"});
+  testing::WriteFile(work.path() / "schema.sql", JoinLines(original_schema));
+  std::vector<std::string> replay_input = {".open fresh"};
+  replay_input.insert(replay_input.end(), original_schema.begin(),
+                      original_schema.end());
+  replay_input.push_back(".schema");
+  std::vector<std::string> replay = RunCli(work.path(), replay_input);
+
+  const std::size_t table_count = 3;
+  CHECK_EQ(replay.size(), 1 + table_count + original_schema.size());
+  if (replay.size() != 1 + table_count + original_schema.size()) {
+    return;
+  }
+  CHECK_EQ(replay[0], std::string("loaded no tables"));
+  CHECK_EQ(replay[1], std::string("OK CREATE TABLE users"));
+  CHECK_EQ(replay[2], std::string("OK CREATE TABLE posts"));
+  CHECK_EQ(replay[3], std::string("OK CREATE TABLE engagements"));
+  CHECK_EQ(
+      std::vector<std::string>(replay.begin() + 1 + table_count, replay.end()),
+      original_schema);
+  CHECK(DataFilesUnchanged(work.path()));
+}
+
+TEST(test_cli_piped_input_prints_no_prompt) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output =
+      RunAfterOpen(work.path(), {"SELECT username FROM users WHERE id = 1;"});
+  std::string raw = testing::ReadFile(work.path() / "output.txt");
+
+  CHECK_EQ(output, std::vector<std::string>({"username", "knorman"}));
+  CHECK_EQ(raw, std::string(kLoadedLine) + "\nusername\nknorman\n");
+  CHECK(raw.find("flatfiledb>") == std::string::npos);
+}
+
+TEST(test_cli_quit_stops_reading_with_status_zero) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  // RunCli reports a failure when the exit status is not 0.
+  std::vector<std::string> output =
+      RunCli(work.path(),
+             {kOpenLine, ".quit", "SELECT username FROM users WHERE id = 1;"});
+
+  CHECK_EQ(output, std::vector<std::string>({kLoadedLine}));
+}

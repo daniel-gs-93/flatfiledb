@@ -2,6 +2,7 @@
 #define FLATFILEDB_APPLICATION_H_
 
 #include <memory>
+#include <vector>
 
 #include "flatfiledb/domain/ast.h"
 #include "flatfiledb/domain/engine.h"
@@ -17,6 +18,10 @@ class QueryService {
 
   // Borrows statement for the duration of the call.
   domain::ExecutionResult Execute(const domain::Statement& statement);
+
+  // The schema of every table of the engine's catalog, in registration order.
+  // The data of the `.tables` and `.schema` commands.
+  std::vector<domain::TableSchema> DescribeCatalog() const;
 
  private:
   std::unique_ptr<domain::IEngine> engine_;

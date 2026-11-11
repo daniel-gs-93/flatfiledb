@@ -133,3 +133,35 @@ TEST(test_query_service_returns_command_complete_from_engine) {
   CHECK_EQ(log->execute_calls, 1);
   CHECK(log->is_create_table);
 }
+
+TEST(test_query_service_describe_catalog_returns_schemas_in_order) {
+  auto log = std::make_shared<FakeEngineLog>();
+  flatfiledb::application::QueryService service(std::make_unique<FakeEngine>(
+      log, domain::ExecutionResult(domain::AffectedRows{0})));
+  testing::FakeCatalog catalog;
+
+  std::vector<domain::TableSchema> schemas = service.DescribeCatalog();
+
+  std::vector<std::string> names;
+  for (const domain::TableSchema& schema : schemas) {
+    names.push_back(schema.name);
+  }
+  CHECK_EQ(names, std::vector<std::string>({"users", "posts", "engagements",
+                                            "measures", "drafts", "jobs"}));
+  CHECK_EQ(schemas.size(), catalog.TableNames().size());
+  for (std::size_t i = 0; i < schemas.size() && i < catalog.TableNames().size();
+       ++i) {
+    std::optional<domain::TableSchema> expected =
+        catalog.FindTable(catalog.TableNames()[i]);
+    CHECK(expected.has_value());
+    if (!expected) {
+      continue;
+    }
+    CHECK_EQ(schemas[i].columns.size(), expected->columns.size());
+    CHECK_EQ(schemas[i].primary_key_index, expected->primary_key_index);
+    CHECK_EQ(schemas[i].foreign_keys.size(), expected->foreign_keys.size());
+    CHECK_EQ(schemas[i].unique_indexes, expected->unique_indexes);
+    CHECK(schemas[i].auto_increment_index == expected->auto_increment_index);
+  }
+  CHECK_EQ(log->execute_calls, 0);
+}

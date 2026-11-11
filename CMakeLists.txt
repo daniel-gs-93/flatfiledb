@@ -26,7 +26,9 @@ add_library(flatfiledb_core STATIC
         src/flat_file_engine.cpp
         src/flat_file_executor.cpp
         src/infrastructure.cpp
+        src/repl.cpp
         src/sql_parser.cpp
+        src/statement_buffer.cpp
         src/value.cpp
         )
 target_include_directories(flatfiledb_core PUBLIC include)
@@ -50,7 +52,9 @@ add_executable(flatfiledb_tests
         tests/test_flat_file_engine.cpp
         tests/test_layering.cpp
         tests/test_query_service.cpp
+        tests/test_repl.cpp
         tests/test_sql_parser.cpp
+        tests/test_statement_buffer.cpp
         )
 target_include_directories(flatfiledb_tests PRIVATE tests)
 target_link_libraries(flatfiledb_tests PRIVATE flatfiledb_core)

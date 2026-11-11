@@ -74,7 +74,10 @@ Layer LayerOf(const std::filesystem::path& relative) {
   if (path == "flatfiledb/bootstrap.h" || path == "bootstrap.cpp") {
     return Layer::kBootstrap;
   }
-  if (path == "cli.cpp") {
+  const std::set<std::string> cli_files = {
+      "cli.cpp", "repl.cpp", "statement_buffer.cpp", "flatfiledb/repl.h",
+      "flatfiledb/statement_buffer.h"};
+  if (cli_files.contains(path)) {
     return Layer::kCli;
   }
   return Layer::kUnknown;
@@ -118,7 +121,9 @@ bool IsAllowed(Layer layer, const std::string& header) {
       return StartsWith(header, "flatfiledb/domain/") ||
              header == "flatfiledb/application.h" ||
              header == "flatfiledb/bootstrap.h" ||
-             header == "flatfiledb/sql_parser.h";
+             header == "flatfiledb/sql_parser.h" ||
+             header == "flatfiledb/repl.h" ||
+             header == "flatfiledb/statement_buffer.h";
     case Layer::kUnknown:
       return false;
   }
