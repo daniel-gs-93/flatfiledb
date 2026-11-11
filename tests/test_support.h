@@ -84,9 +84,9 @@ struct RepositoryLog {
   int write_calls = 0;  // Commit calls
   std::vector<std::vector<std::string>>
       written_table_names;  // the table writes of each Commit call
-  int append_calls = 0;
+  int append_calls = 0;     // AppendRows calls
   std::optional<std::string> write_failure;   // when set, Commit returns it
-  std::optional<std::string> append_failure;  // when set, AppendRow returns it
+  std::optional<std::string> append_failure;  // when set, AppendRows returns it
 };
 
 // Wraps a real repository, records calls in log, and can be told to fail.
@@ -101,8 +101,9 @@ class DecoratorRepository : public infrastructure::IFlatFileRepository {
       const domain::TableSchema& schema) override;
   std::optional<std::string> Commit(
       const infrastructure::CommitSet& set) override;
-  std::optional<std::string> AppendRow(const domain::TableSchema& schema,
-                                       const domain::Row& row) override;
+  std::optional<std::string> AppendRows(
+      const domain::TableSchema& schema,
+      const std::vector<domain::Row>& rows) override;
 
  private:
   std::unique_ptr<infrastructure::IFlatFileRepository> inner_;

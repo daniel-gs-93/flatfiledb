@@ -66,9 +66,11 @@ class IFlatFileRepository {
   // fails, which the description states.
   virtual std::optional<std::string> Commit(const CommitSet& set) = 0;
 
-  // Appends one row to the end of the table's file.
-  virtual std::optional<std::string> AppendRow(
-      const domain::TableSchema& schema, const domain::Row& row) = 0;
+  // Appends the rows to the end of the table's file in one write: all of them
+  // or, on failure, none. An empty vector changes nothing and succeeds.
+  virtual std::optional<std::string> AppendRows(
+      const domain::TableSchema& schema,
+      const std::vector<domain::Row>& rows) = 0;
 };
 
 // Loads and persists a database directory: catalog.csv and one CSV file per
@@ -81,8 +83,9 @@ class CsvRepository : public IFlatFileRepository {
   LoadOutcome Load(bool is_parallel) override;
   InspectOutcome InspectTable(const domain::TableSchema& schema) override;
   std::optional<std::string> Commit(const CommitSet& set) override;
-  std::optional<std::string> AppendRow(const domain::TableSchema& schema,
-                                       const domain::Row& row) override;
+  std::optional<std::string> AppendRows(
+      const domain::TableSchema& schema,
+      const std::vector<domain::Row>& rows) override;
 
  private:
   std::string directory_;

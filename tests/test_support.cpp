@@ -307,13 +307,13 @@ std::optional<std::string> DecoratorRepository::Commit(
   return inner_->Commit(set);
 }
 
-std::optional<std::string> DecoratorRepository::AppendRow(
-    const domain::TableSchema& schema, const domain::Row& row) {
+std::optional<std::string> DecoratorRepository::AppendRows(
+    const domain::TableSchema& schema, const std::vector<domain::Row>& rows) {
   ++log_->append_calls;
   if (log_->append_failure) {
     return log_->append_failure;
   }
-  return inner_->AppendRow(schema, row);
+  return inner_->AppendRows(schema, rows);
 }
 
 domain::Statement MustParse(const std::string& sql) {

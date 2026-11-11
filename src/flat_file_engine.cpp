@@ -35,23 +35,27 @@ TableStore BuildStore(std::vector<LoadedTable> loaded) {
   return store;
 }
 
-// Appends the row on disk, then in memory. Takes ownership of the row.
+// Appends the rows on disk in one call, then in memory. Takes ownership of the
+// rows.
 domain::ExecutionResult ApplyInsert(IFlatFileRepository& repository,
                                     TableStore& store,
                                     const std::string& table_name,
-                                    domain::Row row) {
+                                    std::vector<domain::Row> rows) {
   auto entry = store.tables.find(domain::ToLower(table_name));
   if (entry == store.tables.end()) {
     return domain::ExecutionError{domain::ErrorKind::kBind,
                                   "unknown table: " + table_name};
   }
   TableData& table = entry->second;
-  std::optional<std::string> failure = repository.AppendRow(table.schema, row);
+  std::optional<std::string> failure =
+      repository.AppendRows(table.schema, rows);
   if (failure) {
     return domain::ExecutionError{domain::ErrorKind::kIo, std::move(*failure)};
   }
-  table.rows.push_back(std::move(row));
-  return domain::AffectedRows{1};
+  const std::size_t appended_count = rows.size();
+  table.rows.insert(table.rows.end(), std::make_move_iterator(rows.begin()),
+                    std::make_move_iterator(rows.end()));
+  return domain::AffectedRows{appended_count};
 }
 
 // One table of an UPDATE or DELETE that is about to be committed: the in-memory

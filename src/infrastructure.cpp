@@ -72,7 +72,7 @@ std::string BuildTableText(const FileFormat& format,
 // is_line_open: the file is non-empty and its last byte is not '\n', so the
 // new row would be glued to the previous line without a break.
 std::string BuildAppendText(const FileFormat& format, bool is_line_open,
-                            const domain::Row& row) {
+                            const std::vector<domain::Row>& rows) {
   std::string text;
   if (is_line_open) {
     text += format.line_ending;
@@ -81,8 +81,10 @@ std::string BuildAppendText(const FileFormat& format, bool is_line_open,
     text += format.header;
     text += format.line_ending;
   }
-  text += SerializeRow(row);
-  text += format.line_ending;
+  for (const domain::Row& row : rows) {
+    text += SerializeRow(row);
+    text += format.line_ending;
+  }
   return text;
 }
 
@@ -727,8 +729,11 @@ std::optional<std::string> CsvRepository::Commit(const CommitSet& set) {
   return std::nullopt;
 }
 
-std::optional<std::string> CsvRepository::AppendRow(
-    const domain::TableSchema& schema, const domain::Row& row) {
+std::optional<std::string> CsvRepository::AppendRows(
+    const domain::TableSchema& schema, const std::vector<domain::Row>& rows) {
+  if (rows.empty()) {
+    return std::nullopt;
+  }
   if (IsReservedTableName(schema.name)) {
     return ReservedTableNameMessage();
   }
@@ -750,7 +755,7 @@ std::optional<std::string> CsvRepository::AppendRow(
   }
 
   WriteResult write_result =
-      WriteText(path, BuildAppendText(state.format, state.is_line_open, row),
+      WriteText(path, BuildAppendText(state.format, state.is_line_open, rows),
                 std::ios::app);
   if (write_result == WriteResult::kWritten) {
     return std::nullopt;

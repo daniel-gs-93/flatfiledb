@@ -46,8 +46,8 @@ Layer LayerOf(const std::filesystem::path& relative) {
   if (StartsWith(path, "flatfiledb/domain/")) {
     return Layer::kDomain;
   }
-  const std::set<std::string> domain_sources = {"value.cpp", "expression.cpp",
-                                                "binder.cpp"};
+  const std::set<std::string> domain_sources = {
+      "value.cpp", "expression.cpp", "binder.cpp", "scalar_functions.cpp"};
   if (domain_sources.contains(path)) {
     return Layer::kDomain;
   }

@@ -49,6 +49,13 @@ struct BoundBinary {
   BoundExprPtr rhs;
 };
 
+// A scalar function call. The result type is BoundExpr::type, which for kCast
+// is the target type. The Binder has checked the argument count and types.
+struct BoundFunction {
+  ScalarFn fn;
+  std::vector<BoundExprPtr> args;
+};
+
 // Only the Binder produces this form, while it rewrites select-list items
 // over an AggregateNode. It never appears in a plan returned by Bind().
 struct BoundAggregate {
@@ -58,7 +65,9 @@ struct BoundAggregate {
 
 struct BoundExpr {
   ExprType type;
-  std::variant<BoundLiteral, BoundColumn, BoundBinary, BoundAggregate> node;
+  std::variant<BoundLiteral, BoundColumn, BoundBinary, BoundFunction,
+               BoundAggregate>
+      node;
 };
 
 struct PlanNode;
@@ -107,13 +116,21 @@ struct SortNode {
   std::vector<SortKey> keys;
 };
 
-// The row holds one value per schema column, in schema order, already
-// converted to the column type.
-// When generated_index is set, row[*generated_index] is a placeholder: the
-// engine replaces it with the next value of the auto-increment column.
+// Skips the first offset rows of the child, then keeps at most limit rows.
+struct LimitNode {
+  PlanPtr child;
+  std::optional<int64_t> limit;  // absent: no upper bound
+  int64_t offset;
+};
+
+// Each row holds one value per schema column, in schema order, already
+// converted to the column type. There is at least one row.
+// When generated_index is set, row[*generated_index] is a placeholder in every
+// row: the engine replaces it with the next value of the auto-increment column,
+// in row order.
 struct InsertNode {
   std::string table;
-  Row row;
+  std::vector<Row> rows;
   std::optional<std::size_t> generated_index = std::nullopt;
 };
 
@@ -152,8 +169,8 @@ struct DropTableNode {
 // A struct, not a variant alias: the alternatives refer back to PlanNode.
 struct PlanNode {
   std::variant<ScanNode, FilterNode, JoinNode, AggregateNode, ProjectNode,
-               SortNode, InsertNode, UpdateNode, DeleteNode, CreateTableNode,
-               AddColumnNode, DropTableNode>
+               SortNode, LimitNode, InsertNode, UpdateNode, DeleteNode,
+               CreateTableNode, AddColumnNode, DropTableNode>
       node;
 };
 

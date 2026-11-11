@@ -172,7 +172,7 @@ void ExpectForeignKey(const domain::ForeignKey& foreign_key,
 
 domain::PlanNode InsertPlan(const std::string& table, domain::Row row) {
   domain::PlanNode plan;
-  plan.node = domain::InsertNode{table, std::move(row)};
+  plan.node = domain::InsertNode{table, {std::move(row)}};
   return plan;
 }
 
@@ -315,7 +315,7 @@ TEST(test_engine_group_by_count_over_join) {
   CHECK_EQ(Join(RowsAsText(*result_set)), std::string("comment\t1\nlike\t2\n"));
 }
 
-TEST(test_engine_three_table_join_returns_unsupported) {
+TEST(test_engine_three_table_join_returns_joined_rows) {
   // Arrange
   TempDir dir;
   WriteFixtureA(dir.path());
@@ -325,14 +325,16 @@ TEST(test_engine_three_table_join_returns_unsupported) {
   }
 
   // Act
-  ExecutionResult result = ExecuteSql(
+  std::vector<std::string> rows = QueryLines(
       *service,
-      "SELECT u.username FROM users u JOIN posts p ON p.username = u.username "
-      "JOIN engagements e ON e.postId = p.id");
+      "SELECT u.username, p.id, e.type FROM users u JOIN posts p ON "
+      "p.username = u.username JOIN engagements e ON e.postId = p.id WHERE "
+      "u.id = 1 ORDER BY p.id, e.type DESC");
 
   // Assert
-  ExpectErrorMessage(result, ErrorKind::kUnsupported,
-                     "flatfile engine joins at most 2 tables");
+  CHECK_EQ(
+      Join(rows),
+      std::string("alice\t10\tlike\nalice\t10\tcomment\nalice\t11\tcomment\n"));
 }
 
 TEST(test_engine_join_condition_kinds_return_correct_rows) {
@@ -1669,6 +1671,474 @@ TEST(test_engine_insert_text_with_comma_and_quote_is_persisted) {
   CHECK(ReadFile(dir.path() / "posts.csv")
             .find("13,\"Hello, \"\"world\"\"\",alice,1\n") !=
         std::string::npos);
+}
+
+// ---- Stage 1d: LIMIT, aggregates, LIKE, functions, joins, multi-row INSERT
+// ---
+
+TEST(test_engine_limit_and_offset_select_ordered_window) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  const std::string base = "SELECT id FROM users ORDER BY id";
+
+  // Act and Assert
+  CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 2")),
+           std::string("1\n2\n"));
+  CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 2 OFFSET 1")),
+           std::string("2\n3\n"));
+  CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 0")), std::string());
+  CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 5 OFFSET 10")),
+           std::string());
+  CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 100")),
+           std::string("1\n2\n3\n4\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT id FROM users ORDER BY id DESC LIMIT 1")),
+           std::string("4\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username, COUNT(*) FROM posts GROUP BY "
+                           "username ORDER BY username LIMIT 1")),
+           std::string("alice\t2\n"));
+  ExecutionResult empty = ExecuteSql(*service, base + " LIMIT 0");
+  const domain::ResultSet* empty_set = AsResultSet(empty);
+  CHECK(empty_set != nullptr);
+  if (empty_set != nullptr) {
+    CHECK_EQ(empty_set->columns.size(), std::size_t{1});
+    CHECK_EQ(empty_set->rows.size(), std::size_t{0});
+  }
+}
+
+TEST(test_engine_avg_min_max_over_rows_and_groups) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act and Assert
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT AVG(views), MIN(views), MAX(views) FROM posts")),
+      std::string("4.0\t0\t7\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT MIN(username), MAX(username) FROM users")),
+           std::string("alice\tdave\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username, AVG(views), MIN(views), "
+                           "MAX(views) FROM posts GROUP BY username ORDER BY "
+                           "username")),
+           std::string("alice\t2.5\t0\t5\nbob\t7.0\t7\t7\n"));
+}
+
+TEST(test_engine_avg_min_max_on_empty_input_report_runtime_error) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act
+  ExecutionResult average =
+      ExecuteSql(*service, "SELECT AVG(views) FROM posts WHERE id = 999");
+  ExecutionResult minimum =
+      ExecuteSql(*service, "SELECT MIN(views) FROM posts WHERE id = 999");
+  ExecutionResult maximum =
+      ExecuteSql(*service, "SELECT MAX(username) FROM users WHERE id = 999");
+
+  // Assert
+  ExpectErrorMessage(average, ErrorKind::kRuntime, "AVG over no rows");
+  ExpectErrorMessage(minimum, ErrorKind::kRuntime, "MIN over no rows");
+  ExpectErrorMessage(maximum, ErrorKind::kRuntime, "MAX over no rows");
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT COUNT(*), SUM(views) FROM posts WHERE id = "
+                           "999")),
+           std::string("0\t0\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username, AVG(views) FROM posts WHERE id = "
+                           "999 GROUP BY username")),
+           std::string());
+}
+
+TEST(test_engine_like_filters_rows) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act and Assert
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT username FROM users WHERE username LIKE 'a%'")),
+      std::string("alice\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username FROM users WHERE username LIKE "
+                           "'%o%' ORDER BY username")),
+           std::string("bob\ncarol\n"));
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT username FROM users WHERE username LIKE '_ob'")),
+      std::string("bob\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username FROM users WHERE username LIKE "
+                           "'ALICE'")),
+           std::string("alice\n"));
+  CHECK_EQ(Join(QueryLines(
+               *service, "SELECT COUNT(*) FROM users WHERE username LIKE '%'")),
+           std::string("4\n"));
+  CHECK_EQ(Join(QueryLines(
+               *service, "SELECT username FROM users WHERE username LIKE ''")),
+           std::string());
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT p.id FROM posts p JOIN users u ON "
+                           "p.username = u.username WHERE u.username LIKE "
+                           "'%ice' AND p.content LIKE '%post%'")),
+           std::string("11\n"));
+}
+
+TEST(test_engine_functions_apply_in_every_clause) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act and Assert
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT UPPER(username), LENGTH(location) FROM "
+                           "users WHERE id = 1")),
+           std::string("ALICE\t5\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT id FROM users WHERE LENGTH(username) = 3")),
+           std::string("3\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT id, LOWER(username) FROM users ORDER BY "
+                           "LOWER(username) DESC LIMIT 1")),
+           std::string("4\tdave\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT UPPER(location), COUNT(*) FROM users GROUP "
+                           "BY UPPER(location) ORDER BY 1")),
+           std::string("OSLO\t1\nPARIS\t2\nROME\t1\n"));
+  CHECK_EQ(Join(QueryLines(*service,
+                           "SELECT username || '@' || location FROM users "
+                           "WHERE id = 3")),
+           std::string("bob@Rome\n"));
+
+  ExecutionResult update = ExecuteSql(
+      *service, "UPDATE users SET location = UPPER(location) WHERE id = 1");
+  auto reloaded = MakeLoadedService(dir.path());
+  if (!reloaded) {
+    return;
+  }
+  ExpectAffected(update, 1);
+  CHECK_EQ(
+      Join(QueryLines(*reloaded, "SELECT location FROM users WHERE id = 1")),
+      std::string("PARIS\n"));
+  CHECK(ReadFile(dir.path() / "users.csv").find("\n1,alice,PARIS\n") !=
+        std::string::npos);
+}
+
+TEST(test_engine_arithmetic_and_cast_in_queries) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act
+  std::vector<std::string> rows = QueryLines(
+      *service,
+      "SELECT views * 2, views / 2, views / 2.0, -views * 3, CAST(views AS "
+      "TEXT) || '!', CAST('12' AS INT) + 1, ROUND(views / 3.0, 2) FROM posts "
+      "WHERE id = 10");
+
+  // Assert
+  CHECK_EQ(Join(rows), std::string("10\t2\t2.5\t-15\t5!\t13\t1.67\n"));
+}
+
+TEST(test_engine_runtime_errors_surface_as_kruntime) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  const std::string tables_before = SnapshotTables(*service);
+  const std::string files_before = ReadAllCsv(dir.path());
+
+  // Act and Assert: queries
+  ExpectErrorMessage(
+      ExecuteSql(*service, "SELECT 1 / (views - views) FROM posts"),
+      ErrorKind::kRuntime, "division by zero");
+  ExpectErrorMessage(
+      ExecuteSql(*service, "SELECT CAST(username AS INT) FROM users"),
+      ErrorKind::kRuntime, "cannot cast 'alice' to INT");
+  ExpectErrorMessage(
+      ExecuteSql(*service, "SELECT SUBSTR(username, 1, -1) FROM users"),
+      ErrorKind::kRuntime, "negative substring length");
+  ExpectErrorMessage(ExecuteSql(*service, "SELECT ROUND(views, 16) FROM posts"),
+                     ErrorKind::kRuntime, "ROUND digits out of range");
+  ExpectErrorMessage(
+      ExecuteSql(*service,
+                 "SELECT views * 9223372036854775807 FROM posts WHERE id = 10"),
+      ErrorKind::kRuntime, "numeric overflow");
+
+  // Act and Assert: writes leave memory and files unchanged
+  ExpectErrorMessage(ExecuteSql(*service, "UPDATE posts SET views = views / 0"),
+                     ErrorKind::kRuntime, "division by zero");
+  ExpectErrorMessage(ExecuteSql(*service, "DELETE FROM users WHERE 1 / 0 = 1"),
+                     ErrorKind::kRuntime, "division by zero");
+  ExpectErrorMessage(
+      ExecuteSql(*service,
+                 "INSERT INTO posts (id, content, username, views) VALUES (13, "
+                 "'x', 'alice', 1 / 0)"),
+      ErrorKind::kRuntime, "division by zero");
+  CHECK_EQ(SnapshotTables(*service), tables_before);
+  CHECK_EQ(ReadAllCsv(dir.path()), files_before);
+}
+
+TEST(test_engine_three_table_join_aggregates_over_chain) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act
+  std::vector<std::string> rows = QueryLines(
+      *service,
+      "SELECT u.username, COUNT(*) FROM users u JOIN posts p ON p.username = "
+      "u.username JOIN engagements e ON e.postId = p.id GROUP BY u.username "
+      "ORDER BY u.username");
+
+  // Assert
+  CHECK_EQ(Join(rows), std::string("alice\t3\nbob\t2\n"));
+}
+
+TEST(test_engine_four_table_join_and_non_equi_steps_return_rows) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act
+  std::vector<std::string> four_tables = QueryLines(
+      *service,
+      "SELECT u1.id, u2.id, e.id FROM users u1 JOIN posts p ON p.username = "
+      "u1.username JOIN engagements e ON e.postId = p.id JOIN users u2 ON "
+      "e.username = u2.username ORDER BY u1.id, u2.id, e.id");
+  std::vector<std::string> non_equi = QueryLines(
+      *service,
+      "SELECT a.id, b.id, c.id FROM users a JOIN users b ON b.id > a.id JOIN "
+      "users c ON c.id > b.id WHERE a.id = 1 ORDER BY b.id, c.id");
+
+  // Assert
+  CHECK_EQ(
+      Join(four_tables),
+      std::string("1\t2\t101\n1\t3\t100\n1\t3\t102\n3\t1\t103\n3\t2\t104\n"));
+  CHECK_EQ(Join(non_equi), std::string("1\t2\t3\n1\t2\t4\n1\t3\t4\n"));
+}
+
+TEST(test_engine_join_key_may_come_from_any_left_table) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+
+  // Act
+  std::vector<std::string> rows = QueryLines(
+      *service,
+      "SELECT p.id, e.id FROM users u JOIN posts p ON p.username = u.username "
+      "JOIN engagements e ON e.username = u.username ORDER BY p.id, e.id");
+
+  // Assert
+  CHECK_EQ(Join(rows), std::string("10\t103\n11\t103\n12\t100\n12\t102\n"));
+}
+
+TEST(test_engine_multi_row_insert_appends_all_rows_once) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto log = std::make_shared<RepositoryLog>();
+  auto service = MakeLoadedService(dir.path(), log);
+  if (!service) {
+    return;
+  }
+
+  // Act
+  ExecutionResult result = ExecuteSql(
+      *service,
+      "INSERT INTO users (id, username, location) VALUES (5, 'eve', 'X'), (6, "
+      "'frank', 'Y, Z'), (7, 'gina', 'say \"hi\"')");
+  auto reloaded = MakeLoadedService(dir.path());
+  if (!reloaded) {
+    return;
+  }
+
+  // Assert
+  ExpectAffected(result, 3);
+  CHECK_EQ(log->append_calls, 1);
+  CHECK_EQ(log->write_calls, 0);
+  CHECK_EQ(CountRows(*reloaded, "users"), std::string("7"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username, location FROM users WHERE id "
+                           ">= 5 ORDER BY id")),
+           std::string("5\teve\tX\n6\tfrank\tY, Z\n7\tgina\tsay \"hi\"\n"));
+  const std::string file = ReadFile(dir.path() / "users.csv");
+  CHECK(file.size() >= 1 &&
+        file.find("5,eve,X\n6,frank,\"Y, Z\"\n7,gina,\"say \"\"hi\"\"\"\n") !=
+            std::string::npos);
+}
+
+TEST(test_engine_multi_row_insert_fails_as_a_whole) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto log = std::make_shared<RepositoryLog>();
+  auto service = MakeLoadedService(dir.path(), log);
+  if (!service) {
+    return;
+  }
+  const std::string tables_before = SnapshotTables(*service);
+  const std::string files_before = ReadAllCsv(dir.path());
+  const std::string users =
+      "INSERT INTO users (id, username, location) VALUES ";
+
+  // Act and Assert
+  ExpectErrorMessage(
+      ExecuteSql(*service, users + "(5, 'eve', 'X'), (1, 'dup', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: users.id=1");
+  ExpectErrorMessage(
+      ExecuteSql(*service, users + "(5, 'eve', 'X'), (5, 'frank', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: users.id=5");
+  ExpectErrorMessage(
+      ExecuteSql(*service, users + "(5, 'eve', 'X'), (6, 'eve', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: users.username=eve");
+  ExpectErrorMessage(
+      ExecuteSql(*service,
+                 "INSERT INTO posts (id, content, username, views) VALUES (20, "
+                 "'a', 'alice', 1), (21, 'b', 'bob', 1), (22, 'c', 'nobody', "
+                 "1)"),
+      ErrorKind::kConstraintViolation,
+      "no matching row: posts.username=nobody not found in users.username");
+  ExpectErrorMessage(
+      ExecuteSql(*service, users + "(5, 'eve', 'X'), (6, 'a\nb', 'Y')"),
+      ErrorKind::kUnsupported,
+      "flatfile engine cannot store a line break in users.username");
+
+  CHECK_EQ(SnapshotTables(*service), tables_before);
+  CHECK_EQ(ReadAllCsv(dir.path()), files_before);
+  CHECK_EQ(log->append_calls, 0);
+}
+
+TEST(test_engine_multi_row_insert_assigns_increasing_autoincrement) {
+  // Arrange
+  TempDir dir;
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  ExecuteSql(*service, kCreateJobs);
+
+  // Act
+  ExecutionResult first = ExecuteSql(
+      *service, "INSERT INTO jobs (body) VALUES ('a'), ('b'), ('c')");
+  ExecuteSql(*service, "DELETE FROM jobs WHERE id = 3");
+  ExecutionResult second =
+      ExecuteSql(*service, "INSERT INTO jobs (body) VALUES ('d'), ('e')");
+  ExecuteSql(
+      *service,
+      "INSERT INTO jobs (id, body) VALUES (9223372036854775806, 'near')");
+  const std::string file_before = ReadFile(dir.path() / "jobs.csv");
+  ExecutionResult overflow =
+      ExecuteSql(*service, "INSERT INTO jobs (body) VALUES ('x'), ('y')");
+
+  // Assert
+  ExpectAffected(first, 3);
+  ExpectAffected(second, 2);
+  CHECK_EQ(Join(QueryLines(*service, "SELECT id, body FROM jobs ORDER BY id")),
+           std::string("1\ta\n2\tb\n3\td\n4\te\n9223372036854775806\tnear\n"));
+  ExpectErrorMessage(overflow, ErrorKind::kRuntime, "numeric overflow");
+  CHECK_EQ(ReadFile(dir.path() / "jobs.csv"), file_before);
+}
+
+TEST(test_engine_multi_row_insert_write_failure_keeps_memory) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto log = std::make_shared<RepositoryLog>();
+  auto service = MakeLoadedService(dir.path(), log);
+  if (!service) {
+    return;
+  }
+  const std::string files_before = ReadAllCsv(dir.path());
+  log->append_failure = "could not append to users.csv (injected)";
+
+  // Act
+  ExecutionResult result = ExecuteSql(
+      *service,
+      "INSERT INTO users (id, username, location) VALUES (5, 'a', 'x'), (6, "
+      "'b', 'y'), (7, 'c', 'z')");
+
+  // Assert
+  ExpectErrorMessage(result, ErrorKind::kIo,
+                     "could not append to users.csv (injected)");
+  CHECK_EQ(log->append_calls, 1);
+  CHECK_EQ(CountRows(*service, "users"), std::string("4"));
+  CHECK_EQ(ReadAllCsv(dir.path()), files_before);
+}
+
+TEST(test_engine_multi_row_insert_applies_defaults_and_quotes_text) {
+  // Arrange
+  TempDir dir;
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  ExecuteSql(*service,
+             "CREATE TABLE d (id INT PRIMARY KEY, body TEXT, owner TEXT "
+             "DEFAULT 'none')");
+
+  // Act
+  ExecutionResult result = ExecuteSql(
+      *service,
+      "INSERT INTO d (id, body) VALUES (1, 'a, b'), (2, 'say \"hi\"')");
+  auto reloaded = MakeLoadedService(dir.path());
+  if (!reloaded) {
+    return;
+  }
+
+  // Assert
+  ExpectAffected(result, 2);
+  CHECK_EQ(
+      Join(QueryLines(*reloaded, "SELECT id, body, owner FROM d ORDER BY id")),
+      std::string("1\ta, b\tnone\n2\tsay \"hi\"\tnone\n"));
+  CHECK_EQ(ReadFile(dir.path() / "d.csv"),
+           std::string("id,body,owner\n1,\"a, b\",none\n2,\"say \"\"hi\"\"\","
+                       "none\n"));
 }
 
 }  // namespace flatfiledb::testing

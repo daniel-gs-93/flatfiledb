@@ -30,7 +30,8 @@ void ReportError(const std::string& message) {
 }
 
 // Rendering of the AST for shape assertions. A binary node reads OP(lhs, rhs)
-// with OP in EQ NE LT LE GT GE AND OR ADD SUB; an INT literal is printed
+// with OP in EQ NE LT LE GT GE AND OR ADD SUB MUL DIV CONCAT LIKE; a function
+// reads NAME(arg, ...) and CAST(arg AS TYPE); an INT literal is printed
 // plainly, a DOUBLE with a trailing "d", a TEXT literal in single quotes.
 
 const char* OperatorName(domain::BinaryOp op) {
@@ -55,8 +56,66 @@ const char* OperatorName(domain::BinaryOp op) {
       return "ADD";
     case domain::BinaryOp::kSub:
       return "SUB";
+    case domain::BinaryOp::kMul:
+      return "MUL";
+    case domain::BinaryOp::kDiv:
+      return "DIV";
+    case domain::BinaryOp::kConcat:
+      return "CONCAT";
+    case domain::BinaryOp::kLike:
+      return "LIKE";
   }
   return "?";
+}
+
+const char* AggregateName(domain::AggregateFn fn) {
+  switch (fn) {
+    case domain::AggregateFn::kCount:
+      return "COUNT";
+    case domain::AggregateFn::kSum:
+      return "SUM";
+    case domain::AggregateFn::kAvg:
+      return "AVG";
+    case domain::AggregateFn::kMin:
+      return "MIN";
+    case domain::AggregateFn::kMax:
+      break;
+  }
+  return "MAX";
+}
+
+const char* FunctionName(domain::ScalarFn fn) {
+  switch (fn) {
+    case domain::ScalarFn::kLower:
+      return "LOWER";
+    case domain::ScalarFn::kUpper:
+      return "UPPER";
+    case domain::ScalarFn::kLength:
+      return "LENGTH";
+    case domain::ScalarFn::kSubstr:
+      return "SUBSTR";
+    case domain::ScalarFn::kTrim:
+      return "TRIM";
+    case domain::ScalarFn::kAbs:
+      return "ABS";
+    case domain::ScalarFn::kRound:
+      return "ROUND";
+    case domain::ScalarFn::kCast:
+      break;
+  }
+  return "CAST";
+}
+
+const char* TypeKeyword(domain::DataType type) {
+  switch (type) {
+    case domain::DataType::kInt:
+      return "INT";
+    case domain::DataType::kDouble:
+      return "DOUBLE";
+    case domain::DataType::kText:
+      break;
+  }
+  return "TEXT";
 }
 
 std::string DescribeValue(const domain::Value& value) {
@@ -87,12 +146,24 @@ std::string DescribeExpr(const domain::Expr* expr) {
            DescribeExpr(binary->lhs.get()) + ", " +
            DescribeExpr(binary->rhs.get()) + ")";
   }
+  if (const auto* function = std::get_if<domain::FunctionCall>(&expr->node)) {
+    std::string text = FunctionName(function->fn);
+    text += "(";
+    for (std::size_t i = 0; i < function->args.size(); ++i) {
+      if (i > 0) {
+        text += ", ";
+      }
+      text += DescribeExpr(function->args[i].get());
+    }
+    if (function->fn == domain::ScalarFn::kCast) {
+      text += " AS " + std::string(TypeKeyword(function->cast_type));
+    }
+    return text + ")";
+  }
   const auto& aggregate = std::get<domain::AggregateCall>(expr->node);
-  const char* name =
-      aggregate.fn == domain::AggregateFn::kCount ? "COUNT" : "SUM";
   const std::string arg =
       aggregate.arg ? DescribeExpr(aggregate.arg.get()) : "*";
-  return std::string(name) + "(" + arg + ")";
+  return std::string(AggregateName(aggregate.fn)) + "(" + arg + ")";
 }
 
 const domain::Value* LiteralValue(const domain::Expr* expr) {
@@ -375,12 +446,13 @@ TEST(test_parser_insert_with_and_without_columns) {
                                                      "location"};
   CHECK(with_columns.columns == expected_columns);
   CHECK(without_columns.columns.empty());
-  CHECK_EQ(with_columns.values.size(), 3u);
-  CHECK_EQ(without_columns.values.size(), 3u);
-  if (with_columns.values.size() == 3) {
-    CHECK_EQ(DescribeExpr(with_columns.values[0].get()), "9");
-    CHECK_EQ(DescribeExpr(with_columns.values[1].get()), "'zed'");
-    CHECK_EQ(DescribeExpr(with_columns.values[2].get()), "'Oslo'");
+  CHECK_EQ(with_columns.rows.size(), 1u);
+  CHECK_EQ(without_columns.rows.size(), 1u);
+  if (with_columns.rows.size() == 1 && with_columns.rows[0].size() == 3) {
+    CHECK_EQ(without_columns.rows[0].size(), 3u);
+    CHECK_EQ(DescribeExpr(with_columns.rows[0][0].get()), "9");
+    CHECK_EQ(DescribeExpr(with_columns.rows[0][1].get()), "'zed'");
+    CHECK_EQ(DescribeExpr(with_columns.rows[0][2].get()), "'Oslo'");
   }
 }
 
@@ -501,7 +573,7 @@ TEST(test_parser_aggregate_calls_build_ast) {
 TEST(test_parser_unsupported_syntax_returns_parse_error) {
   const char* const statements[] = {
       "SELECT id FROM t WHERE NOT a = 1",
-      "SELECT id FROM t WHERE a LIKE 'x'",
+      "SELECT id FROM t WHERE a NOT LIKE 'x'",
       "SELECT id FROM t WHERE a IN (1, 2)",
       "SELECT id FROM t WHERE a IN (SELECT 1)",
       "CREATE INDEX i ON t (a)",
@@ -655,7 +727,7 @@ TEST(test_parser_malformed_dml_returns_parse_error) {
   CheckErrorAt("INSERT users VALUES (1)", 8);
   CheckErrorAt("INSERT INTO t () VALUES (1)", 16);
   CheckErrorAt("INSERT INTO t VALUES ()", 23);
-  CheckErrorAt("INSERT INTO t VALUES (1), (2)", 25);
+  CheckErrorAt("INSERT INTO t VALUES (1) (2)", 26);
   CheckErrorAt("INSERT INTO t SELECT 1", 15);
   CheckErrorAt("UPDATE t SET", 13);
   CheckErrorAt("UPDATE t u SET a = 1", 10);
@@ -682,8 +754,8 @@ TEST(test_parser_deeply_nested_input_returns_parse_error_without_crashing) {
 TEST(test_parser_not_supported_words_name_the_word) {
   CHECK_EQ(ParseFailure("SELECT id FROM t WHERE NOT a = 1").description,
            "NOT is not supported");
-  CHECK_EQ(ParseFailure("SELECT id FROM t WHERE a LIKE 'x'").description,
-           "LIKE is not supported");
+  CHECK_EQ(ParseFailure("SELECT id FROM t WHERE a NOT LIKE 'x'").description,
+           "NOT is not supported");
   CHECK_EQ(ParseFailure("SELECT id FROM t WHERE a IN (1, 2)").description,
            "IN is not supported");
   CHECK_EQ(ParseFailure("SELECT id FROM t WHERE a IN (SELECT 1)").description,
@@ -894,4 +966,310 @@ TEST(test_parser_default_takes_one_expression) {
   CHECK(text.is_unique);
   CHECK_EQ(reference.ref_table, std::string("u"));
   CHECK_EQ(DescribeExpr(reference.default_value.get()), std::string("0"));
+}
+
+// ---- Stage 1d: operators, functions, LIMIT, multi-row VALUES
+// -------------------
+
+namespace {
+
+// 1-based column of the first occurrence of needle in sql.
+std::size_t ColumnOf(const std::string& sql, const std::string& needle) {
+  const std::size_t offset = sql.find(needle);
+  if (offset == std::string::npos) {
+    ReportError("[" + sql + "] does not contain [" + needle + "]");
+    return 0;
+  }
+  return offset + 1;
+}
+
+// `SELECT LOWER(LOWER(... a ...)) FROM t` with the given number of calls.
+std::string NestedCalls(std::size_t calls) {
+  std::string text = "SELECT ";
+  for (std::size_t i = 0; i < calls; ++i) {
+    text += "LOWER(";
+  }
+  text += "a";
+  text += std::string(calls, ')');
+  return text + " FROM t";
+}
+
+// `SELECT a || a || ... FROM t` with the given number of operators.
+std::string ConcatChain(std::size_t operators) {
+  std::string text = "SELECT a";
+  for (std::size_t i = 0; i < operators; ++i) {
+    text += " || a";
+  }
+  return text + " FROM t";
+}
+
+// The error has exactly the expected column and description.
+void CheckError(const std::string& sql, std::size_t expected_column,
+                const std::string& expected_description) {
+  const adapter::ParseError error = ParseFailure(sql);
+  if (error.column != expected_column ||
+      error.description != expected_description) {
+    ReportError("[" + sql + "] failed at column " +
+                std::to_string(error.column) + " with [" + error.description +
+                "], expected column " + std::to_string(expected_column) +
+                " with [" + expected_description + "]");
+  }
+}
+
+}  // namespace
+
+TEST(test_parser_multiplicative_and_concat_precedence) {
+  const ShapeCase cases[] = {
+      {"1 + 2 * 3", "ADD(1, MUL(2, 3))"},
+      {"a * b + c", "ADD(MUL(a, b), c)"},
+      {"8 / 2 / 2", "DIV(DIV(8, 2), 2)"},
+      {"a * b || c", "MUL(a, CONCAT(b, c))"},
+      {"a || b || c", "CONCAT(CONCAT(a, b), c)"},
+      {"-a * 2", "MUL(SUB(0, a), 2)"},
+      {"2 * -3", "MUL(2, -3)"},
+      {"a - b / c", "SUB(a, DIV(b, c))"},
+  };
+
+  for (const ShapeCase& shape_case : cases) {
+    CheckShape(shape_case.text, shape_case.shape);
+  }
+}
+
+TEST(test_parser_select_star_and_multiplication_are_distinguished) {
+  domain::SelectStatement only_star =
+      ParseAs<domain::SelectStatement>("SELECT * FROM t");
+  domain::SelectStatement product =
+      ParseAs<domain::SelectStatement>("SELECT a * b FROM t");
+  domain::SelectStatement trailing_star =
+      ParseAs<domain::SelectStatement>("SELECT a, * FROM t");
+  domain::SelectStatement leading_star =
+      ParseAs<domain::SelectStatement>("SELECT *, a * 2 FROM t");
+
+  CHECK_EQ(only_star.items.size(), std::size_t{1});
+  CHECK(only_star.items.size() == 1 && only_star.items[0].is_star);
+  CHECK_EQ(product.items.size(), std::size_t{1});
+  CHECK(product.items.size() == 1 && !product.items[0].is_star);
+  if (product.items.size() == 1) {
+    CHECK_EQ(DescribeExpr(product.items[0].expr.get()), "MUL(a, b)");
+  }
+  CHECK_EQ(trailing_star.items.size(), std::size_t{2});
+  CHECK(trailing_star.items.size() == 2 && !trailing_star.items[0].is_star &&
+        trailing_star.items[1].is_star);
+  CHECK_EQ(leading_star.items.size(), std::size_t{2});
+  CHECK(leading_star.items.size() == 2 && leading_star.items[0].is_star &&
+        !leading_star.items[1].is_star);
+  if (leading_star.items.size() == 2) {
+    CHECK_EQ(DescribeExpr(leading_star.items[1].expr.get()), "MUL(a, 2)");
+  }
+  CheckShape("COUNT(*) * 2", "MUL(COUNT(*), 2)");
+}
+
+TEST(test_parser_like_builds_binary_node_and_does_not_chain) {
+  CheckShape("a LIKE 'x%'", "LIKE(a, 'x%')");
+  CheckShape("a LIKE b || 'x'", "LIKE(a, CONCAT(b, 'x'))");
+  CheckShape("a = 1 AND b LIKE 'y'", "AND(EQ(a, 1), LIKE(b, 'y'))");
+
+  const char* const chained[] = {
+      "SELECT id FROM t WHERE a LIKE b LIKE c",
+      "SELECT id FROM t WHERE a LIKE b = c",
+      "SELECT id FROM t WHERE a = b LIKE c",
+  };
+  for (const char* sql : chained) {
+    const adapter::ParseError error = ParseFailure(sql);
+    CHECK(error.description.find("cannot be chained") != std::string::npos);
+  }
+}
+
+TEST(test_parser_function_calls_build_function_nodes) {
+  const ShapeCase cases[] = {
+      {"LOWER(a)", "LOWER(a)"},
+      {"upper(a)", "UPPER(a)"},
+      {"LENGTH(a)", "LENGTH(a)"},
+      {"SUBSTR(a, 1)", "SUBSTR(a, 1)"},
+      {"SUBSTR(a, 1, 2)", "SUBSTR(a, 1, 2)"},
+      {"TRIM(a)", "TRIM(a)"},
+      {"ABS(a)", "ABS(a)"},
+      {"ROUND(a)", "ROUND(a)"},
+      {"ROUND(a, 2)", "ROUND(a, 2)"},
+      {"CAST(a AS INT)", "CAST(a AS INT)"},
+      {"CAST(a AS double)", "CAST(a AS DOUBLE)"},
+      {"CAST(a AS VARCHAR(10))", "CAST(a AS TEXT)"},
+      {"UPPER(TRIM(a))", "UPPER(TRIM(a))"},
+      {"LOWER(a, b)", "LOWER(a, b)"},
+  };
+
+  for (const ShapeCase& shape_case : cases) {
+    CheckShape(shape_case.text, shape_case.shape);
+  }
+  domain::ExprPtr substr = ParseExpressionText("SUBSTR(a, 1, 2)");
+  const auto* call = substr == nullptr
+                         ? nullptr
+                         : std::get_if<domain::FunctionCall>(&substr->node);
+  CHECK(call != nullptr);
+  if (call != nullptr) {
+    CHECK(call->fn == domain::ScalarFn::kSubstr);
+    CHECK_EQ(call->args.size(), std::size_t{3});
+  }
+  domain::ExprPtr cast = ParseExpressionText("CAST(a AS double)");
+  const auto* cast_call = cast == nullptr
+                              ? nullptr
+                              : std::get_if<domain::FunctionCall>(&cast->node);
+  CHECK(cast_call != nullptr);
+  if (cast_call != nullptr) {
+    CHECK(cast_call->fn == domain::ScalarFn::kCast);
+    CHECK(cast_call->cast_type == domain::DataType::kDouble);
+  }
+}
+
+TEST(test_parser_aggregates_avg_min_max_and_plain_columns) {
+  CheckShape("AVG(a)", "AVG(a)");
+  CheckShape("min(a)", "MIN(a)");
+  CheckShape("MAX(a + 1)", "MAX(ADD(a, 1))");
+  CheckShape("COUNT(*)", "COUNT(*)");
+  domain::ExprPtr avg = ParseExpressionText("AVG(a)");
+  CHECK(AsAggregate(avg.get()) != nullptr &&
+        AsAggregate(avg.get())->fn == domain::AggregateFn::kAvg);
+  domain::ExprPtr count_star = ParseExpressionText("COUNT(*)");
+  CHECK(AsAggregate(count_star.get()) != nullptr &&
+        AsAggregate(count_star.get())->arg == nullptr);
+
+  CheckShape("min", "min");
+  domain::SelectStatement columns =
+      ParseAs<domain::SelectStatement>("SELECT t.max, length FROM t");
+  CHECK_EQ(columns.items.size(), std::size_t{2});
+  if (columns.items.size() == 2) {
+    CHECK_EQ(DescribeExpr(columns.items[0].expr.get()), "t.max");
+    CHECK_EQ(DescribeExpr(columns.items[1].expr.get()), "length");
+  }
+  CheckError("SELECT AVG(*) FROM t", ColumnOf("SELECT AVG(*) FROM t", "*"),
+             "expected an expression, found '*'");
+}
+
+TEST(test_parser_function_errors_report_position_and_description) {
+  CheckError("SELECT FOO(1) FROM t", 8, "unknown function FOO");
+  const std::string spaced = "SELECT id FROM t WHERE x = foo (1)";
+  CheckError(spaced, ColumnOf(spaced, "foo"), "unknown function foo");
+  const std::string missing_as = "SELECT CAST(a) FROM t";
+  CheckError(missing_as, ColumnOf(missing_as, ")"), "expected 'AS', found ')'");
+  const std::string bad_type = "SELECT CAST(a AS BOOL) FROM t";
+  CheckError(bad_type, ColumnOf(bad_type, "BOOL"),
+             "expected a column type, found 'BOOL'");
+  const std::string unclosed = "SELECT CAST(a AS INT";
+  CheckError(unclosed, unclosed.size() + 1, "expected ')', found end of input");
+  const std::string no_arguments = "SELECT LOWER() FROM t";
+  CheckError(no_arguments, ColumnOf(no_arguments, ")"),
+             "expected an expression, found ')'");
+  const std::string not_call = "SELECT id FROM t WHERE NOT (a = 1)";
+  CheckError(not_call, ColumnOf(not_call, "NOT"), "NOT is not supported");
+}
+
+TEST(test_parser_limit_and_offset_build_select_fields) {
+  struct LimitCase {
+    const char* sql;
+    bool has_limit;
+    int64_t limit;
+    int64_t offset;
+  };
+  const LimitCase cases[] = {
+      {"SELECT id FROM t LIMIT 5", true, 5, 0},
+      {"SELECT id FROM t LIMIT 5 OFFSET 2", true, 5, 2},
+      {"SELECT id FROM t LIMIT 0", true, 0, 0},
+      {"SELECT id FROM t ORDER BY id LIMIT 3", true, 3, 0},
+      {"SELECT id FROM t LIMIT 9223372036854775807", true, kInt64Max, 0},
+      {"SELECT id FROM t WHERE a = 1 LIMIT 1;", true, 1, 0},
+      {"SELECT id FROM t", false, 0, 0},
+  };
+
+  for (const LimitCase& limit_case : cases) {
+    domain::SelectStatement select =
+        ParseAs<domain::SelectStatement>(limit_case.sql);
+    CHECK_EQ(select.limit.has_value(), limit_case.has_limit);
+    if (select.limit.has_value() && limit_case.has_limit) {
+      CHECK_EQ(*select.limit, limit_case.limit);
+    }
+    CHECK_EQ(select.offset, limit_case.offset);
+  }
+}
+
+TEST(test_parser_limit_and_offset_reject_invalid_forms) {
+  const std::string limit_text =
+      "LIMIT requires a non-negative integer literal";
+  const std::string offset_text =
+      "OFFSET requires a non-negative integer literal";
+  const std::string base = "SELECT id FROM t ";
+
+  CheckError(base + "LIMIT -1", ColumnOf(base + "LIMIT -1", "-"), limit_text);
+  CheckError(base + "LIMIT 1.5", ColumnOf(base + "LIMIT 1.5", "1.5"),
+             limit_text);
+  CheckError(base + "LIMIT x", ColumnOf(base + "LIMIT x", "x"), limit_text);
+  CheckError(base + "LIMIT", (base + "LIMIT").size() + 1, limit_text);
+  CheckError(base + "LIMIT 1 + 1", ColumnOf(base + "LIMIT 1 + 1", "+"),
+             "expected ';' or end of input, found '+'");
+  CheckError(base + "OFFSET 2", ColumnOf(base + "OFFSET 2", "OFFSET"),
+             "OFFSET requires LIMIT");
+  CheckError(base + "LIMIT 5 OFFSET -1",
+             ColumnOf(base + "LIMIT 5 OFFSET -1", "-"), offset_text);
+  CheckError(base + "LIMIT 9223372036854775808",
+             ColumnOf(base + "LIMIT 9223372036854775808", "9223"),
+             "numeric literal out of range");
+  CheckError(base + "LIMIT 5 LIMIT 6",
+             ColumnOf(base + "LIMIT 5 LIMIT 6", "LIMIT 6"),
+             "expected ';' or end of input, found 'LIMIT'");
+}
+
+TEST(test_parser_multi_row_values_build_rows) {
+  domain::InsertStatement plain = ParseAs<domain::InsertStatement>(
+      "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+  domain::InsertStatement listed = ParseAs<domain::InsertStatement>(
+      "INSERT INTO t (a, b) VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+  domain::InsertStatement uneven =
+      ParseAs<domain::InsertStatement>("INSERT INTO t VALUES (1), (2, 3)");
+
+  CHECK_EQ(plain.rows.size(), std::size_t{3});
+  CHECK_EQ(listed.rows.size(), std::size_t{3});
+  CHECK_EQ(listed.columns.size(), std::size_t{2});
+  for (const auto& row : plain.rows) {
+    CHECK_EQ(row.size(), std::size_t{2});
+  }
+  for (const auto& row : listed.rows) {
+    CHECK_EQ(row.size(), std::size_t{2});
+  }
+  CHECK_EQ(uneven.rows.size(), std::size_t{2});
+  if (uneven.rows.size() == 2) {
+    CHECK_EQ(uneven.rows[0].size(), std::size_t{1});
+    CHECK_EQ(uneven.rows[1].size(), std::size_t{2});
+  }
+  CHECK(!Parses("INSERT INTO t VALUES (1),"));
+  CHECK(!Parses("INSERT INTO t VALUES (1) (2)"));
+  CHECK(!Parses("INSERT INTO t VALUES"));
+}
+
+TEST(test_parser_concat_and_division_operators_lex) {
+  CheckShape("a || b", "CONCAT(a, b)");
+  CheckShape("a||b", "CONCAT(a, b)");
+  CheckShape("a / b", "DIV(a, b)");
+  CheckShape("a/b", "DIV(a, b)");
+  const std::string single_bar = "SELECT a | b FROM t";
+  CheckError(single_bar, ColumnOf(single_bar, "|"), "unexpected character '|'");
+  const std::string triple_bar = "SELECT a ||| b FROM t";
+  CheckError(triple_bar, ColumnOf(triple_bar, "|||") + 2,
+             "unexpected character '|'");
+}
+
+TEST(test_parser_function_and_concat_depth_limits) {
+  // A select item is level 1, so 99 nested calls parse and 100 do not.
+  constexpr std::size_t kLastAcceptedCalls = 99;
+
+  CHECK(Parses(NestedCalls(kLastAcceptedCalls)));
+  CheckError(NestedCalls(kLastAcceptedCalls + 1),
+             NestedCalls(kLastAcceptedCalls + 1).find('a') + 1,
+             "expression is nested too deeply");
+  // A chain of n operators has depth n + 1 and the limit is 500.
+  CHECK(Parses(ConcatChain(kParserMaxExpressionDepth - 1)));
+  const std::string too_deep = ConcatChain(kParserMaxExpressionDepth);
+  CHECK(!Parses(too_deep));
+  if (!Parses(too_deep)) {
+    CHECK_EQ(ParseFailure(too_deep).description,
+             std::string("expression is nested too deeply"));
+  }
 }

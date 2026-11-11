@@ -207,7 +207,7 @@ void ExpectAppendOutcome(const std::string& initial_text,
   auto repository = MakeCsvRepository(dir.path());
 
   std::optional<std::string> failure =
-      repository->AppendRow(UsersSchema(), row);
+      repository->AppendRows(UsersSchema(), {row});
 
   CHECK_EQ(DescribeOutcome(failure), kSuccess);
   std::string actual_text = ReadFile(dir.path() / "users.csv");
@@ -297,13 +297,13 @@ void ExpectLoadFailsWithDirectoryAt(const std::string& replaced_file) {
   CHECK_EQ(LoadFailure(*repository, true), "cannot read " + replaced_file);
 }
 
-// AppendRow over a users.csv the caller prepared in dir (empty or absent)
+// AppendRows over a users.csv the caller prepared in dir (empty or absent)
 // writes the schema header before the row.
 void ExpectAppendWritesHeader(const std::filesystem::path& dir) {
   auto repository = MakeCsvRepository(dir);
 
   std::optional<std::string> failure =
-      repository->AppendRow(UsersSchema(), UserRow(5, "eve", "Rome"));
+      repository->AppendRows(UsersSchema(), {UserRow(5, "eve", "Rome")});
 
   CHECK_EQ(DescribeOutcome(failure), kSuccess);
   CHECK_EQ(ReadFile(dir / "users.csv"), "id,username,location\n5,eve,Rome\n");
@@ -422,7 +422,7 @@ TEST(test_csv_commit_preserves_line_endings) {
            "post,alice,0\r\n");
 }
 
-TEST(test_csv_append_row_adds_newline_when_missing) {
+TEST(test_csv_append_rows_adds_newline_when_missing) {
   const domain::Row new_row = UserRow(5, "eve", "Rome");
 
   ExpectAppendOutcome("id,username,location\n1,alice,Paris\n", new_row,
@@ -523,7 +523,7 @@ TEST(test_csv_load_strips_carriage_returns) {
   ExpectCrlfLoadMatchesLf(true);
 }
 
-TEST(test_csv_append_row_on_empty_file_writes_header) {
+TEST(test_csv_append_rows_on_empty_file_writes_header) {
   TempDir empty_file_dir;
   WriteFile(empty_file_dir.path() / "users.csv", "");
   TempDir missing_file_dir;
@@ -570,7 +570,7 @@ TEST(test_csv_commit_duplicate_table_returns_description) {
   CHECK_EQ(ListDirectory(dir.path()), kFixtureAListing);
 }
 
-TEST(test_csv_append_row_reserved_table_name_returns_description) {
+TEST(test_csv_append_rows_reserved_table_name_returns_description) {
   TempDir dir;
   WriteFixtureA(dir.path());
   auto repository = MakeCsvRepository(dir.path());
@@ -578,7 +578,7 @@ TEST(test_csv_append_row_reserved_table_name_returns_description) {
   reserved.name = "catalog";
 
   std::optional<std::string> failure =
-      repository->AppendRow(reserved, {Int(1), Text("x")});
+      repository->AppendRows(reserved, {{Int(1), Text("x")}});
 
   CHECK_EQ(DescribeOutcome(failure), "reserved table name catalog");
   CHECK_EQ(ListDirectory(dir.path()), kFixtureAListing);
@@ -606,7 +606,7 @@ TEST(test_csv_commit_refuses_directory_at_csv_path) {
       {TableWrite{UsersSchema(), {UserRow(1, "zed", "Paris")}},
        TableWrite{PostsSchema(), {PostRow(10, "hello", "alice", 5)}}});
   std::optional<std::string> append_failure =
-      repository->AppendRow(PostsSchema(), PostRow(10, "hello", "alice", 5));
+      repository->AppendRows(PostsSchema(), {PostRow(10, "hello", "alice", 5)});
 
   CHECK_EQ(DescribeOutcome(write_failure), "not a regular file: posts.csv");
   CHECK_EQ(DescribeOutcome(append_failure), "not a regular file: posts.csv");
@@ -633,7 +633,7 @@ TEST(test_csv_commit_refuses_symlink) {
   std::optional<std::string> write_failure = CommitWrites(
       *repository, {TableWrite{UsersSchema(), {UserRow(1, "zed", "Paris")}}});
   std::optional<std::string> append_failure =
-      repository->AppendRow(UsersSchema(), UserRow(5, "eve", "Rome"));
+      repository->AppendRows(UsersSchema(), {UserRow(5, "eve", "Rome")});
 
   CHECK_EQ(DescribeOutcome(write_failure), "not a regular file: users.csv");
   CHECK_EQ(DescribeOutcome(append_failure), "not a regular file: users.csv");
@@ -930,7 +930,7 @@ TEST(test_csv_commit_and_append_quote_fields_that_need_it) {
       *repository,
       {TableWrite{UsersSchema(), {UserRow(1, "a,b", "say \"hi\"")}}});
   std::optional<std::string> appended =
-      repository->AppendRow(UsersSchema(), UserRow(2, "plain", "x,y"));
+      repository->AppendRows(UsersSchema(), {UserRow(2, "plain", "x,y")});
   std::vector<LoadedTable> tables = MustLoad(*repository);
 
   CHECK_EQ(DescribeOutcome(committed), kSuccess);
@@ -983,6 +983,49 @@ TEST(test_csv_inspect_table_reports_absent_present_and_errors) {
              "header of measures.csv does not match the declared columns");
     CHECK_EQ(*directory_text, "not a regular file: measures.csv");
   }
+}
+
+TEST(test_csv_append_rows_writes_every_row_in_one_call) {
+  // Existing file with data: three rows follow the last line.
+  TempDir with_data;
+  WriteFixtureC1(with_data.path());
+  auto repository = MakeCsvRepository(with_data.path());
+  const std::string before = ReadFile(with_data.path() / "users.csv");
+  std::optional<std::string> appended = repository->AppendRows(
+      UsersSchema(), {UserRow(5, "eve", "Rome"), UserRow(6, "frank", "x,y"),
+                      UserRow(7, "gina", "Oslo")});
+  CHECK_EQ(DescribeOutcome(appended), kSuccess);
+  CHECK_EQ(ReadFile(with_data.path() / "users.csv"),
+           before + "5,eve,Rome\n6,frank,\"x,y\"\n7,gina,Oslo\n");
+
+  // Absent file: the header comes first, then both rows.
+  TempDir absent;
+  WriteCatalogFixture(absent.path());
+  auto absent_repository = MakeCsvRepository(absent.path());
+  CHECK_EQ(DescribeOutcome(absent_repository->AppendRows(
+               UsersSchema(), {UserRow(1, "a", "x"), UserRow(2, "b", "y")})),
+           kSuccess);
+  CHECK_EQ(ReadFile(absent.path() / "users.csv"),
+           std::string("id,username,location\n1,a,x\n2,b,y\n"));
+
+  // A file with \r\n line endings keeps them for every new row.
+  TempDir crlf;
+  WriteCatalogFixture(crlf.path());
+  WriteFile(crlf.path() / "users.csv", "id,username,location\r\n1,a,x\r\n");
+  auto crlf_repository = MakeCsvRepository(crlf.path());
+  CHECK_EQ(DescribeOutcome(crlf_repository->AppendRows(
+               UsersSchema(), {UserRow(2, "b", "y"), UserRow(3, "c", "z")})),
+           kSuccess);
+  CHECK_EQ(ReadFile(crlf.path() / "users.csv"),
+           std::string("id,username,location\r\n1,a,x\r\n2,b,y\r\n3,c,z\r\n"));
+
+  // An empty list succeeds and touches nothing, not even to create the file.
+  TempDir none;
+  WriteCatalogFixture(none.path());
+  auto none_repository = MakeCsvRepository(none.path());
+  CHECK_EQ(DescribeOutcome(none_repository->AppendRows(UsersSchema(), {})),
+           kSuccess);
+  CHECK(!std::filesystem::exists(none.path() / "users.csv"));
 }
 
 }  // namespace flatfiledb::testing

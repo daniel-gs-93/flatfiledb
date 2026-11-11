@@ -29,12 +29,18 @@
 //   or_expr    := and_expr { OR and_expr }
 //   and_expr   := comparison { AND comparison }
 //   comparison := additive [ cmp_op additive ]
-//   cmp_op     := "=" | "<>" | "!=" | "<" | "<=" | ">" | ">="
-//   additive   := unary { ("+" | "-") unary }
+//   cmp_op     := "=" | "<>" | "!=" | "<" | "<=" | ">" | ">=" | LIKE
+//   additive   := multiplicative { ("+" | "-") multiplicative }
+//   multiplicative := concat { ("*" | "/") concat }
+//   concat     := unary { "||" unary }
 //   unary      := "-" unary | primary
-//   primary    := number | string | "(" or_expr ")" | aggregate | column
+//   primary    := number | string | "(" or_expr ")" | aggregate | call | column
 //   aggregate  := COUNT "(" ( "*" | or_expr ) ")" | SUM "(" or_expr ")"
+//   call       := name "(" [ or_expr { "," or_expr } ] ")"
+//               | CAST "(" or_expr AS type ")"
 //   column     := identifier [ "." identifier ]
+// A call is an identifier directly followed by "(": name is AVG, MIN, MAX (an
+// aggregate) or one of the scalar functions, and is not a reserved word.
 // clang-format on
 
 namespace flatfiledb::adapter {
@@ -58,6 +64,8 @@ enum class TokenKind {
   kComma,
   kDot,
   kStar,
+  kSlash,
+  kConcat,
   kPlus,
   kMinus,
   kSemicolon,
@@ -86,6 +94,9 @@ enum class TokenKind {
   kDelete,
   kAnd,
   kOr,
+  kLike,
+  kLimit,
+  kOffset,
   kCount,
   kSum,
   kNull,
@@ -116,8 +127,10 @@ constexpr Keyword kKeywords[] = {
     {"into", TokenKind::kInto},     {"values", TokenKind::kValues},
     {"update", TokenKind::kUpdate}, {"set", TokenKind::kSet},
     {"delete", TokenKind::kDelete}, {"and", TokenKind::kAnd},
-    {"or", TokenKind::kOr},         {"count", TokenKind::kCount},
-    {"sum", TokenKind::kSum},       {"null", TokenKind::kNull},
+    {"or", TokenKind::kOr},         {"like", TokenKind::kLike},
+    {"limit", TokenKind::kLimit},   {"offset", TokenKind::kOffset},
+    {"count", TokenKind::kCount},   {"sum", TokenKind::kSum},
+    {"null", TokenKind::kNull},
 };
 
 // Words outside the supported grammar that are not reserved (so they lex as
@@ -125,8 +138,8 @@ constexpr Keyword kKeywords[] = {
 // are refused as a table alias before JOIN, where accepting them would turn
 // `LEFT JOIN` into an inner join.
 constexpr const char* kUnsupportedWords[] = {
-    "not",   "like",  "in",   "is",    "between", "having", "limit", "distinct",
-    "union", "inner", "left", "right", "full",    "outer",  "cross", "natural",
+    "not",   "in",   "is",    "between", "having", "distinct", "union",
+    "inner", "left", "right", "full",    "outer",  "cross",    "natural",
 };
 
 bool IsDigit(char letter) { return letter >= '0' && letter <= '9'; }
@@ -258,6 +271,13 @@ Token LexSymbol(const std::string& input, std::size_t start) {
       return MakeToken(TokenKind::kDot, start, 1);
     case '*':
       return MakeToken(TokenKind::kStar, start, 1);
+    case '/':
+      return MakeToken(TokenKind::kSlash, start, 1);
+    case '|':
+      if (next == '|') {
+        return MakeToken(TokenKind::kConcat, start, 2);
+      }
+      break;
     case '+':
       return MakeToken(TokenKind::kPlus, start, 1);
     case '-':
@@ -400,6 +420,14 @@ domain::ExprPtr MakeAggregate(domain::AggregateFn fn, domain::ExprPtr arg) {
   return expr;
 }
 
+domain::ExprPtr MakeFunction(domain::ScalarFn fn,
+                             std::vector<domain::ExprPtr> args,
+                             domain::DataType cast_type) {
+  auto expr = std::make_unique<domain::Expr>();
+  expr->node = domain::FunctionCall{fn, std::move(args), cast_type};
+  return expr;
+}
+
 // Recursion is bounded because every child was checked against
 // kMaxExpressionDepth when it was built.
 std::size_t ExprDepth(const domain::Expr& expr) {
@@ -408,6 +436,13 @@ std::size_t ExprDepth(const domain::Expr& expr) {
   }
   if (const auto* aggregate = std::get_if<domain::AggregateCall>(&expr.node)) {
     return 1 + (aggregate->arg ? ExprDepth(*aggregate->arg) : 0);
+  }
+  if (const auto* function = std::get_if<domain::FunctionCall>(&expr.node)) {
+    std::size_t deepest_arg = 0;
+    for (const domain::ExprPtr& arg : function->args) {
+      deepest_arg = std::max(deepest_arg, ExprDepth(*arg));
+    }
+    return 1 + deepest_arg;
   }
   return 1;
 }
@@ -426,9 +461,50 @@ std::optional<domain::BinaryOp> ComparisonOperator(TokenKind kind) {
       return domain::BinaryOp::kGt;
     case TokenKind::kGe:
       return domain::BinaryOp::kGe;
+    case TokenKind::kLike:
+      return domain::BinaryOp::kLike;
     default:
       return std::nullopt;
   }
+}
+
+// The scalar function that `word` (upper case) names, or std::nullopt.
+std::optional<domain::ScalarFn> ScalarFunctionNamed(const std::string& word) {
+  struct Entry {
+    const char* name;
+    domain::ScalarFn fn;
+  };
+  constexpr Entry kFunctions[] = {
+      {"LOWER", domain::ScalarFn::kLower},
+      {"UPPER", domain::ScalarFn::kUpper},
+      {"LENGTH", domain::ScalarFn::kLength},
+      {"SUBSTR", domain::ScalarFn::kSubstr},
+      {"TRIM", domain::ScalarFn::kTrim},
+      {"ABS", domain::ScalarFn::kAbs},
+      {"ROUND", domain::ScalarFn::kRound},
+      {"CAST", domain::ScalarFn::kCast},
+  };
+  for (const Entry& entry : kFunctions) {
+    if (word == entry.name) {
+      return entry.fn;
+    }
+  }
+  return std::nullopt;
+}
+
+// The aggregate that `word` (upper case) names among the functions that are
+// not reserved words, or std::nullopt.
+std::optional<domain::AggregateFn> AggregateNamed(const std::string& word) {
+  if (word == "AVG") {
+    return domain::AggregateFn::kAvg;
+  }
+  if (word == "MIN") {
+    return domain::AggregateFn::kMin;
+  }
+  if (word == "MAX") {
+    return domain::AggregateFn::kMax;
+  }
+  return std::nullopt;
 }
 
 bool StartsOperand(TokenKind kind) {
@@ -653,7 +729,51 @@ class Parser {
         return std::nullopt;
       }
     }
+    if (!ParseLimitClause(&select)) {
+      return std::nullopt;
+    }
     return select;
+  }
+
+  // [LIMIT <n> [OFFSET <n>]]; OFFSET alone is an error.
+  bool ParseLimitClause(domain::SelectStatement* select) {
+    if (Current().kind == TokenKind::kOffset) {
+      Fail(Current(), "OFFSET requires LIMIT");
+      return false;
+    }
+    if (!Match(TokenKind::kLimit)) {
+      return true;
+    }
+    int64_t limit = 0;
+    if (!ParseNonNegativeInteger("LIMIT", &limit)) {
+      return false;
+    }
+    select->limit = limit;
+    if (!Match(TokenKind::kOffset)) {
+      return true;
+    }
+    return ParseNonNegativeInteger("OFFSET", &select->offset);
+  }
+
+  // The current token must be an integer literal without sign or fraction.
+  bool ParseNonNegativeInteger(const char* clause, int64_t* value) {
+    const Token& token = Current();
+    const bool is_integer = token.kind == TokenKind::kNumber &&
+                            token.text.find('.') == std::string::npos;
+    if (!is_integer) {
+      Fail(token,
+           std::string(clause) + " requires a non-negative integer literal");
+      return false;
+    }
+    std::optional<domain::Value> converted =
+        ConvertIntLiteral(token.text, /*is_negative=*/false);
+    if (!converted.has_value()) {
+      Fail(token, "numeric literal out of range");
+      return false;
+    }
+    *value = std::get<int64_t>(*converted);
+    Advance();
+    return true;
   }
 
   std::optional<domain::InsertStatement> ParseInsert() {
@@ -680,15 +800,19 @@ class Parser {
     if (!Expect(TokenKind::kValues, "VALUES")) {
       return std::nullopt;
     }
-    if (!Expect(TokenKind::kLParen, "'('")) {
-      return std::nullopt;
-    }
-    if (!ParseExpressionList(&insert.values)) {
-      return std::nullopt;
-    }
-    if (!Expect(TokenKind::kRParen, "',' or ')'")) {
-      return std::nullopt;
-    }
+    do {
+      if (!Expect(TokenKind::kLParen, "'('")) {
+        return std::nullopt;
+      }
+      std::vector<domain::ExprPtr> row;
+      if (!ParseExpressionList(&row)) {
+        return std::nullopt;
+      }
+      if (!Expect(TokenKind::kRParen, "',' or ')'")) {
+        return std::nullopt;
+      }
+      insert.rows.push_back(std::move(row));
+    } while (Match(TokenKind::kComma));
     return insert;
   }
 
@@ -1121,18 +1245,48 @@ class Parser {
   // In operator position '-' is always a subtraction, so `1-2` and `1 - -2`
   // both parse; the negative literal is decided in ParseUnary.
   domain::ExprPtr ParseAdditive() {
-    domain::ExprPtr lhs = ParseUnary();
+    domain::ExprPtr lhs = ParseMultiplicative();
     while (lhs != nullptr && (Current().kind == TokenKind::kPlus ||
                               Current().kind == TokenKind::kMinus)) {
       const domain::BinaryOp op = Current().kind == TokenKind::kPlus
                                       ? domain::BinaryOp::kAdd
                                       : domain::BinaryOp::kSub;
       Advance();
-      domain::ExprPtr rhs = ParseUnary();
+      domain::ExprPtr rhs = ParseMultiplicative();
       if (rhs == nullptr) {
         return nullptr;
       }
       lhs = CheckDepth(MakeBinary(op, std::move(lhs), std::move(rhs)));
+    }
+    return lhs;
+  }
+
+  domain::ExprPtr ParseMultiplicative() {
+    domain::ExprPtr lhs = ParseConcat();
+    while (lhs != nullptr && (Current().kind == TokenKind::kStar ||
+                              Current().kind == TokenKind::kSlash)) {
+      const domain::BinaryOp op = Current().kind == TokenKind::kStar
+                                      ? domain::BinaryOp::kMul
+                                      : domain::BinaryOp::kDiv;
+      Advance();
+      domain::ExprPtr rhs = ParseConcat();
+      if (rhs == nullptr) {
+        return nullptr;
+      }
+      lhs = CheckDepth(MakeBinary(op, std::move(lhs), std::move(rhs)));
+    }
+    return lhs;
+  }
+
+  domain::ExprPtr ParseConcat() {
+    domain::ExprPtr lhs = ParseUnary();
+    while (lhs != nullptr && Match(TokenKind::kConcat)) {
+      domain::ExprPtr rhs = ParseUnary();
+      if (rhs == nullptr) {
+        return nullptr;
+      }
+      lhs = CheckDepth(MakeBinary(domain::BinaryOp::kConcat, std::move(lhs),
+                                  std::move(rhs)));
     }
     return lhs;
   }
@@ -1194,6 +1348,12 @@ class Parser {
       case TokenKind::kSum:
         return ParseAggregate();
       case TokenKind::kIdentifier:
+        // `NOT (` keeps its own message (ParseColumn); any other name directly
+        // before '(' is a call.
+        if (Peek(1).kind == TokenKind::kLParen &&
+            domain::ToLower(token.text) != "not") {
+          return ParseCall();
+        }
         return ParseColumn();
       case TokenKind::kSelect:
         Fail(token, "subqueries are not supported");
@@ -1236,6 +1396,74 @@ class Parser {
     const domain::AggregateFn fn =
         is_count ? domain::AggregateFn::kCount : domain::AggregateFn::kSum;
     return CheckDepth(MakeAggregate(fn, std::move(arg)));
+  }
+
+  // name "(" ... ")": an aggregate (AVG, MIN, MAX) or a scalar function.
+  // Precondition: the current token is an identifier and the next is '('.
+  domain::ExprPtr ParseCall() {
+    const Token name = Current();
+    const std::string upper_name = ToUpperAscii(name.text);
+    if (std::optional<domain::AggregateFn> aggregate =
+            AggregateNamed(upper_name)) {
+      Advance();
+      return ParseAggregateArguments(*aggregate);
+    }
+    std::optional<domain::ScalarFn> function = ScalarFunctionNamed(upper_name);
+    if (!function.has_value()) {
+      Fail(name, "unknown function " + name.text);
+      return nullptr;
+    }
+    Advance();
+    return ParseFunctionArguments(*function);
+  }
+
+  // After the aggregate's name: "(" expression ")".
+  domain::ExprPtr ParseAggregateArguments(domain::AggregateFn fn) {
+    if (!Expect(TokenKind::kLParen, "'('")) {
+      return nullptr;
+    }
+    domain::ExprPtr arg = ParseExpression();
+    if (arg == nullptr) {
+      return nullptr;
+    }
+    if (!Expect(TokenKind::kRParen, "')'")) {
+      return nullptr;
+    }
+    return CheckDepth(MakeAggregate(fn, std::move(arg)));
+  }
+
+  // After the function's name: "(" arguments ")", or for CAST
+  // "(" expression AS type ")". The argument count is the Binder's to check.
+  domain::ExprPtr ParseFunctionArguments(domain::ScalarFn fn) {
+    if (!Expect(TokenKind::kLParen, "'('")) {
+      return nullptr;
+    }
+    std::vector<domain::ExprPtr> args;
+    domain::DataType cast_type = domain::DataType::kText;
+    if (fn == domain::ScalarFn::kCast) {
+      domain::ExprPtr arg = ParseExpression();
+      if (arg == nullptr) {
+        return nullptr;
+      }
+      args.push_back(std::move(arg));
+      if (!Expect(TokenKind::kAs, "'AS'")) {
+        return nullptr;
+      }
+      if (!ParseColumnType(&cast_type)) {
+        return nullptr;
+      }
+      if (!Expect(TokenKind::kRParen, "')'")) {
+        return nullptr;
+      }
+    } else {
+      if (!ParseExpressionList(&args)) {
+        return nullptr;
+      }
+      if (!Expect(TokenKind::kRParen, "',' or ')'")) {
+        return nullptr;
+      }
+    }
+    return CheckDepth(MakeFunction(fn, std::move(args), cast_type));
   }
 
   // `NOT a = 1` would otherwise lex as the column `NOT` followed by a stray

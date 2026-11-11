@@ -27,6 +27,7 @@ add_library(flatfiledb_core STATIC
         src/flat_file_executor.cpp
         src/infrastructure.cpp
         src/repl.cpp
+        src/scalar_functions.cpp
         src/sql_parser.cpp
         src/statement_buffer.cpp
         src/value.cpp

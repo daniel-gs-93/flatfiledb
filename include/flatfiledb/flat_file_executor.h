@@ -33,8 +33,10 @@ struct TableStore {
 // What a successful INSERT, UPDATE or DELETE changes. Computing it does not
 // modify the store: the engine persists it, then applies it.
 struct MutationPlan {
-  std::string table;                    // table named by the statement
-  std::optional<domain::Row> appended;  // set for INSERT, otherwise empty
+  std::string table;  // table named by the statement
+  // INSERT: the rows to append, in statement order (at least one); otherwise
+  // empty.
+  std::optional<std::vector<domain::Row>> appended;
   // UPDATE and DELETE: lower-case table name to the complete new row set of
   // every table whose content changes (the target and any cascaded children).
   std::map<std::string, std::vector<domain::Row>> changed_tables;
@@ -61,10 +63,10 @@ struct SchemaChange {
 using SchemaChangeOutcome = std::variant<SchemaChange, domain::ExecutionError>;
 
 // Pure functions over the store. RunQuery executes a plan made of Scan,
-// Filter, Join, Aggregate, Project and Sort nodes and returns a ResultSet, or
-// ExecutionError{kUnsupported} for a join of more than two tables or
-// {kRuntime} for INT overflow. PlanMutation handles InsertNode, UpdateNode and
-// DeleteNode and applies the checks in docs/DesignDocument.md section 2.5.
+// Filter, Join, Aggregate, Project, Sort and Limit nodes and returns a
+// ResultSet, or ExecutionError{kRuntime} when an expression fails to evaluate
+// (docs/DesignDocument.md section 2.3). PlanMutation handles InsertNode,
+// UpdateNode and DeleteNode and applies the checks in section 2.5.
 domain::ExecutionResult RunQuery(const domain::PlanNode& plan,
                                  const TableStore& store);
 MutationOutcome PlanMutation(const domain::PlanNode& plan,

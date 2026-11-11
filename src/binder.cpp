@@ -104,10 +104,56 @@ const char* OperatorName(BinaryOp op) {
       return "OR";
     case BinaryOp::kAdd:
       return "+";
+    case BinaryOp::kMul:
+      return "*";
+    case BinaryOp::kDiv:
+      return "/";
+    case BinaryOp::kConcat:
+      return "||";
+    case BinaryOp::kLike:
+      return "LIKE";
     case BinaryOp::kSub:
       break;
   }
   return "-";
+}
+
+const char* AggregateName(AggregateFn fn) {
+  switch (fn) {
+    case AggregateFn::kCount:
+      return "COUNT";
+    case AggregateFn::kSum:
+      return "SUM";
+    case AggregateFn::kAvg:
+      return "AVG";
+    case AggregateFn::kMin:
+      return "MIN";
+    case AggregateFn::kMax:
+      break;
+  }
+  return "MAX";
+}
+
+const char* FunctionName(ScalarFn fn) {
+  switch (fn) {
+    case ScalarFn::kLower:
+      return "LOWER";
+    case ScalarFn::kUpper:
+      return "UPPER";
+    case ScalarFn::kLength:
+      return "LENGTH";
+    case ScalarFn::kSubstr:
+      return "SUBSTR";
+    case ScalarFn::kTrim:
+      return "TRIM";
+    case ScalarFn::kAbs:
+      return "ABS";
+    case ScalarFn::kRound:
+      return "ROUND";
+    case ScalarFn::kCast:
+      break;
+  }
+  return "CAST";
 }
 
 // The only implicit conversion is INT into a DOUBLE column.
@@ -121,8 +167,8 @@ bool IsAssignable(ExprType value_type, DataType column_type) {
   return value_type == ExprType::kInt && column_type == DataType::kDouble;
 }
 
-using BoundNode =
-    std::variant<BoundLiteral, BoundColumn, BoundBinary, BoundAggregate>;
+using BoundNode = std::variant<BoundLiteral, BoundColumn, BoundBinary,
+                               BoundFunction, BoundAggregate>;
 
 BoundExprPtr MakeBound(ExprType type, BoundNode node) {
   return std::make_unique<BoundExpr>(BoundExpr{type, std::move(node)});
@@ -146,6 +192,11 @@ BoundExprPtr MakeAggregate(ExprType type, AggregateFn fn, BoundExprPtr arg) {
   return MakeBound(type, BoundAggregate{fn, std::move(arg)});
 }
 
+BoundExprPtr MakeFunction(ExprType type, ScalarFn fn,
+                          std::vector<BoundExprPtr> args) {
+  return MakeBound(type, BoundFunction{fn, std::move(args)});
+}
+
 BoundExprPtr CloneBound(const BoundExpr& expr) {
   if (const auto* literal = std::get_if<BoundLiteral>(&expr.node)) {
     return MakeBound(expr.type, BoundLiteral{literal->value});
@@ -156,6 +207,13 @@ BoundExprPtr CloneBound(const BoundExpr& expr) {
   if (const auto* binary = std::get_if<BoundBinary>(&expr.node)) {
     return MakeBinary(expr.type, binary->op, CloneBound(*binary->lhs),
                       CloneBound(*binary->rhs));
+  }
+  if (const auto* function = std::get_if<BoundFunction>(&expr.node)) {
+    std::vector<BoundExprPtr> args;
+    for (const BoundExprPtr& arg : function->args) {
+      args.push_back(CloneBound(*arg));
+    }
+    return MakeFunction(expr.type, function->fn, std::move(args));
   }
   // BoundAggregate is the only alternative left.
   const auto& aggregate = std::get<BoundAggregate>(expr.node);
@@ -181,6 +239,19 @@ bool BoundEqual(const BoundExpr& lhs, const BoundExpr& rhs) {
     return binary->op == other.op && BoundEqual(*binary->lhs, *other.lhs) &&
            BoundEqual(*binary->rhs, *other.rhs);
   }
+  if (const auto* function = std::get_if<BoundFunction>(&lhs.node)) {
+    const auto& other = std::get<BoundFunction>(rhs.node);
+    if (function->fn != other.fn ||
+        function->args.size() != other.args.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < function->args.size(); ++i) {
+      if (!BoundEqual(*function->args[i], *other.args[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
   const auto& aggregate = std::get<BoundAggregate>(lhs.node);
   const auto& other = std::get<BoundAggregate>(rhs.node);
   if (aggregate.fn != other.fn) {
@@ -203,6 +274,12 @@ void CollectBoundColumns(const BoundExpr& expr,
     CollectBoundColumns(*binary->rhs, indexes);
     return;
   }
+  if (const auto* function = std::get_if<BoundFunction>(&expr.node)) {
+    for (const BoundExprPtr& arg : function->args) {
+      CollectBoundColumns(*arg, indexes);
+    }
+    return;
+  }
   const auto* aggregate = std::get_if<BoundAggregate>(&expr.node);
   if (aggregate != nullptr && aggregate->arg) {
     CollectBoundColumns(*aggregate->arg, indexes);
@@ -219,6 +296,12 @@ void ShiftColumnsDown(BoundExpr& expr, std::size_t offset) {
   if (auto* binary = std::get_if<BoundBinary>(&expr.node)) {
     ShiftColumnsDown(*binary->lhs, offset);
     ShiftColumnsDown(*binary->rhs, offset);
+    return;
+  }
+  if (auto* function = std::get_if<BoundFunction>(&expr.node)) {
+    for (BoundExprPtr& arg : function->args) {
+      ShiftColumnsDown(*arg, offset);
+    }
     return;
   }
   auto* aggregate = std::get_if<BoundAggregate>(&expr.node);
@@ -241,6 +324,14 @@ void CollectColumnRefs(const Expr& expr, std::vector<const ColumnRef*>& refs) {
     }
     return;
   }
+  if (const auto* function = std::get_if<FunctionCall>(&expr.node)) {
+    for (const ExprPtr& arg : function->args) {
+      if (arg) {
+        CollectColumnRefs(*arg, refs);
+      }
+    }
+    return;
+  }
   const auto* call = std::get_if<AggregateCall>(&expr.node);
   if (call != nullptr && call->arg) {
     CollectColumnRefs(*call->arg, refs);
@@ -250,6 +341,14 @@ void CollectColumnRefs(const Expr& expr, std::vector<const ColumnRef*>& refs) {
 bool ContainsAggregateCall(const Expr& expr) {
   if (std::holds_alternative<AggregateCall>(expr.node)) {
     return true;
+  }
+  if (const auto* function = std::get_if<FunctionCall>(&expr.node)) {
+    for (const ExprPtr& arg : function->args) {
+      if (arg && ContainsAggregateCall(*arg)) {
+        return true;
+      }
+    }
+    return false;
   }
   const auto* binary = std::get_if<BinaryExpr>(&expr.node);
   if (binary == nullptr) {
@@ -263,6 +362,14 @@ bool ContainsAggregateCall(const Expr& expr) {
 bool HasNestedAggregateCall(const Expr& expr) {
   if (const auto* call = std::get_if<AggregateCall>(&expr.node)) {
     return call->arg && ContainsAggregateCall(*call->arg);
+  }
+  if (const auto* function = std::get_if<FunctionCall>(&expr.node)) {
+    for (const ExprPtr& arg : function->args) {
+      if (arg && HasNestedAggregateCall(*arg)) {
+        return true;
+      }
+    }
+    return false;
   }
   const auto* binary = std::get_if<BinaryExpr>(&expr.node);
   if (binary == nullptr) {
@@ -425,7 +532,8 @@ Result<ExprType> TypeOfBinary(BinaryOp op, ExprType lhs, ExprType rhs) {
     return ExprType::kBool;
   }
   bool is_numeric_pair = IsNumericType(lhs) && IsNumericType(rhs);
-  if (op == BinaryOp::kAdd || op == BinaryOp::kSub) {
+  if (op == BinaryOp::kAdd || op == BinaryOp::kSub || op == BinaryOp::kMul ||
+      op == BinaryOp::kDiv) {
     if (!is_numeric_pair) {
       return BindError(mismatch);
     }
@@ -433,6 +541,18 @@ Result<ExprType> TypeOfBinary(BinaryOp op, ExprType lhs, ExprType rhs) {
                                                             : ExprType::kDouble;
   }
   bool is_text_pair = lhs == ExprType::kText && rhs == ExprType::kText;
+  if (op == BinaryOp::kConcat) {
+    if (!is_text_pair) {
+      return BindError(mismatch);
+    }
+    return ExprType::kText;
+  }
+  if (op == BinaryOp::kLike) {
+    if (!is_text_pair) {
+      return BindError(mismatch);
+    }
+    return ExprType::kBool;
+  }
   if (!is_numeric_pair && !is_text_pair) {
     return BindError(mismatch);
   }
@@ -464,7 +584,8 @@ Result<BoundExprPtr> BindAggregateCall(const AggregateCall& call,
                                        const Scope& scope) {
   if (!call.arg) {
     if (call.fn != AggregateFn::kCount) {
-      return BindError("SUM requires an argument");
+      return BindError(std::string(AggregateName(call.fn)) +
+                       " requires an argument");
     }
     return MakeAggregate(ExprType::kInt, call.fn, nullptr);
   }
@@ -476,13 +597,137 @@ Result<BoundExprPtr> BindAggregateCall(const AggregateCall& call,
   if (arg_type == ExprType::kBool) {
     return BindError("an aggregate argument cannot be a boolean expression");
   }
-  if (call.fn == AggregateFn::kSum && !IsNumericType(arg_type)) {
-    return BindError(std::string("SUM requires a numeric argument, got ") +
-                     TypeName(arg_type));
+  const bool needs_number =
+      call.fn == AggregateFn::kSum || call.fn == AggregateFn::kAvg;
+  if (needs_number && !IsNumericType(arg_type)) {
+    return BindError(std::string(AggregateName(call.fn)) +
+                     " requires a numeric argument, got " + TypeName(arg_type));
   }
-  ExprType result_type =
-      call.fn == AggregateFn::kCount ? ExprType::kInt : arg_type;
+  ExprType result_type = arg_type;
+  if (call.fn == AggregateFn::kCount) {
+    result_type = ExprType::kInt;
+  }
+  if (call.fn == AggregateFn::kAvg) {
+    result_type = ExprType::kDouble;
+  }
   return MakeAggregate(result_type, call.fn, std::move(arg.Value()));
+}
+
+// What a function argument must be.
+enum class ArgumentKind { kText, kInt, kNumber, kAnyValue };
+
+struct FunctionSignature {
+  std::size_t min_args;
+  std::size_t max_args;
+  std::vector<ArgumentKind> arguments;  // by position
+};
+
+FunctionSignature SignatureOf(ScalarFn fn) {
+  switch (fn) {
+    case ScalarFn::kLower:
+    case ScalarFn::kUpper:
+    case ScalarFn::kLength:
+    case ScalarFn::kTrim:
+      return FunctionSignature{1, 1, {ArgumentKind::kText}};
+    case ScalarFn::kSubstr:
+      return FunctionSignature{
+          2, 3, {ArgumentKind::kText, ArgumentKind::kInt, ArgumentKind::kInt}};
+    case ScalarFn::kAbs:
+      return FunctionSignature{1, 1, {ArgumentKind::kNumber}};
+    case ScalarFn::kRound:
+      return FunctionSignature{
+          1, 2, {ArgumentKind::kNumber, ArgumentKind::kInt}};
+    case ScalarFn::kCast:
+      break;
+  }
+  return FunctionSignature{1, 1, {ArgumentKind::kAnyValue}};
+}
+
+bool IsAcceptable(ArgumentKind kind, ExprType type) {
+  switch (kind) {
+    case ArgumentKind::kText:
+      return type == ExprType::kText;
+    case ArgumentKind::kInt:
+      return type == ExprType::kInt;
+    case ArgumentKind::kNumber:
+      return IsNumericType(type);
+    case ArgumentKind::kAnyValue:
+      break;
+  }
+  return type != ExprType::kBool;
+}
+
+const char* ArgumentKindName(ArgumentKind kind) {
+  switch (kind) {
+    case ArgumentKind::kText:
+      return "TEXT";
+    case ArgumentKind::kInt:
+      return "INT";
+    case ArgumentKind::kNumber:
+      return "INT or DOUBLE";
+    case ArgumentKind::kAnyValue:
+      break;
+  }
+  return "INT, DOUBLE or TEXT";
+}
+
+std::string ArgumentCountText(const FunctionSignature& signature) {
+  if (signature.min_args == signature.max_args) {
+    return std::to_string(signature.min_args) +
+           (signature.min_args == 1 ? " argument" : " arguments");
+  }
+  return std::to_string(signature.min_args) + " or " +
+         std::to_string(signature.max_args) + " arguments";
+}
+
+ExprType ResultTypeOf(const FunctionCall& call,
+                      const std::vector<BoundExprPtr>& args) {
+  switch (call.fn) {
+    case ScalarFn::kLower:
+    case ScalarFn::kUpper:
+    case ScalarFn::kTrim:
+    case ScalarFn::kSubstr:
+      return ExprType::kText;
+    case ScalarFn::kLength:
+      return ExprType::kInt;
+    case ScalarFn::kAbs:
+      return args[0]->type;
+    case ScalarFn::kRound:
+      return ExprType::kDouble;
+    case ScalarFn::kCast:
+      break;
+  }
+  return ExprTypeOf(call.cast_type);
+}
+
+Result<BoundExprPtr> BindFunctionCall(const FunctionCall& call,
+                                      const Scope& scope) {
+  const std::string name = FunctionName(call.fn);
+  const FunctionSignature signature = SignatureOf(call.fn);
+  if (call.args.size() < signature.min_args ||
+      call.args.size() > signature.max_args) {
+    return BindError(name + " requires " + ArgumentCountText(signature) +
+                     ", got " + std::to_string(call.args.size()));
+  }
+  std::vector<BoundExprPtr> args;
+  for (std::size_t i = 0; i < call.args.size(); ++i) {
+    if (!call.args[i]) {
+      return BindError("malformed function call");
+    }
+    Result<BoundExprPtr> bound = BindExpr(*call.args[i], scope);
+    if (!bound.IsOk()) {
+      return bound;
+    }
+    const ArgumentKind kind = signature.arguments[i];
+    if (!IsAcceptable(kind, bound.Value()->type)) {
+      return BindError(name + " argument " + std::to_string(i + 1) +
+                       " must be " + ArgumentKindName(kind) + ", got " +
+                       TypeName(bound.Value()->type));
+    }
+    args.push_back(std::move(bound.Value()));
+  }
+  ExprType type = ResultTypeOf(call, args);
+  return MakeFunction(type, call.fn, std::move(args));
 }
 
 Result<BoundExprPtr> BindExpr(const Expr& expr, const Scope& scope) {
@@ -499,6 +744,9 @@ Result<BoundExprPtr> BindExpr(const Expr& expr, const Scope& scope) {
   }
   if (const auto* binary = std::get_if<BinaryExpr>(&expr.node)) {
     return BindBinary(*binary, scope);
+  }
+  if (const auto* function = std::get_if<FunctionCall>(&expr.node)) {
+    return BindFunctionCall(*function, scope);
   }
   // AggregateCall is the only alternative left.
   return BindAggregateCall(std::get<AggregateCall>(expr.node), scope);
@@ -803,6 +1051,17 @@ Result<BoundExprPtr> RewriteOverAggregate(const BoundExpr& expr,
     return MakeBinary(expr.type, binary->op, std::move(lhs.Value()),
                       std::move(rhs.Value()));
   }
+  if (const auto* function = std::get_if<BoundFunction>(&expr.node)) {
+    std::vector<BoundExprPtr> args;
+    for (const BoundExprPtr& arg : function->args) {
+      Result<BoundExprPtr> rewritten = RewriteOverAggregate(*arg, context);
+      if (!rewritten.IsOk()) {
+        return rewritten;
+      }
+      args.push_back(std::move(rewritten.Value()));
+    }
+    return MakeFunction(expr.type, function->fn, std::move(args));
+  }
   // BoundAggregate is the only alternative left.
   const auto& aggregate = std::get<BoundAggregate>(expr.node);
   BoundExprPtr arg = aggregate.arg ? CloneBound(*aggregate.arg) : nullptr;
@@ -984,8 +1243,8 @@ PlanPtr BuildInputPlan(SelectBinding& binding) {
 
 // Moves the remaining plan inputs out of binding and takes sort_keys.
 // Precondition: every item's output_expr is set and none is boolean.
-PlanPtr BuildSelectPlan(SelectBinding& binding,
-                        std::vector<SortKey> sort_keys) {
+PlanPtr BuildSelectPlan(SelectBinding& binding, std::vector<SortKey> sort_keys,
+                        const SelectStatement& select) {
   PlanPtr plan = BuildInputPlan(binding);
   if (binding.is_aggregate_query) {
     plan =
@@ -1000,10 +1259,13 @@ PlanPtr BuildSelectPlan(SelectBinding& binding,
   }
   project.child = std::move(plan);
   plan = MakePlan(std::move(project));
-  if (sort_keys.empty()) {
+  if (!sort_keys.empty()) {
+    plan = MakePlan(SortNode{std::move(plan), std::move(sort_keys)});
+  }
+  if (!select.limit) {
     return plan;
   }
-  return MakePlan(SortNode{std::move(plan), std::move(sort_keys)});
+  return MakePlan(LimitNode{std::move(plan), select.limit, select.offset});
 }
 
 Result<PlanPtr> BindSelect(const SelectStatement& select,
@@ -1032,7 +1294,7 @@ Result<PlanPtr> BindSelect(const SelectStatement& select,
   if (!sort_keys.IsOk()) {
     return sort_keys.TakeError();
   }
-  return BuildSelectPlan(binding, std::move(sort_keys.Value()));
+  return BuildSelectPlan(binding, std::move(sort_keys.Value()), select);
 }
 
 ExecutionError UnknownTable(const std::string& name) {
@@ -1201,9 +1463,9 @@ bool CanOmit(const TableSchema& schema, std::size_t column_index) {
          schema.auto_increment_index == column_index;
 }
 
-// The column list names each column at most once, covers every column that has
-// neither a default nor auto-increment, and matches the number of values.
-// Returns, for each value, its schema column position.
+// The column list names each column at most once and covers every column that
+// has neither a default nor auto-increment. Returns, for each value of a row,
+// its schema column position.
 Result<std::vector<std::size_t>> ResolveInsertColumns(
     const InsertStatement& statement, const TableSchema& schema) {
   std::vector<std::size_t> targets;
@@ -1233,28 +1495,56 @@ Result<std::vector<std::size_t>> ResolveInsertColumns(
     }
     return BindError("no value for column " + schema.columns[i].name);
   }
-  if (statement.values.size() != targets.size()) {
-    return BindError("INSERT has " + std::to_string(statement.values.size()) +
-                     " values for " + std::to_string(targets.size()) +
-                     " columns");
-  }
   return targets;
 }
 
-// Values must be constant expressions; they are evaluated and converted to the
-// column type here, so the plan holds a finished row.
-Result<PlanPtr> BindInsert(const InsertStatement& statement,
-                           const ICatalog& catalog) {
-  std::optional<TableSchema> schema = catalog.FindTable(statement.table);
-  if (!schema) {
-    return UnknownTable(statement.table);
+// The error of VALUES row row_number (1-based); a statement with several rows
+// names the row in front of the message.
+ExecutionError RowError(ExecutionError error, std::size_t row_number,
+                        bool has_several_rows) {
+  if (has_several_rows) {
+    error.message = "row " + std::to_string(row_number) + ": " + error.message;
   }
-  Result<std::vector<std::size_t>> targets =
-      ResolveInsertColumns(statement, *schema);
-  if (!targets.IsOk()) {
-    return targets.TakeError();
+  return error;
+}
+
+// A row of the target table before the values are known: the DEFAULT of every
+// omitted column, and a placeholder for the omitted auto-increment column,
+// whose position goes to *generated_index.
+Row MakeRowTemplate(const TableSchema& schema,
+                    const std::vector<std::size_t>& targets,
+                    std::optional<std::size_t>* generated_index) {
+  Row row(schema.columns.size());
+  std::vector<bool> is_supplied(schema.columns.size(), false);
+  for (std::size_t target : targets) {
+    is_supplied[target] = true;
   }
-  for (const ExprPtr& value : statement.values) {
+  for (std::size_t i = 0; i < row.size(); ++i) {
+    if (is_supplied[i]) {
+      continue;
+    }
+    if (schema.columns[i].default_value) {
+      row[i] = *schema.columns[i].default_value;
+    } else {
+      *generated_index = i;
+      row[i] = int64_t{0};
+    }
+  }
+  return row;
+}
+
+// The values of one VALUES row must be as many as the targets and constant
+// expressions; they are evaluated and converted to the column types, so the
+// result is a finished row. row_template supplies the omitted columns.
+Result<Row> BindInsertRow(const std::vector<ExprPtr>& values,
+                          const std::vector<std::size_t>& targets,
+                          const TableSchema& schema, const Row& row_template) {
+  if (values.size() != targets.size()) {
+    return BindError("INSERT has " + std::to_string(values.size()) +
+                     " values for " + std::to_string(targets.size()) +
+                     " columns");
+  }
+  for (const ExprPtr& value : values) {
     if (!value) {
       return BindError("malformed INSERT value");
     }
@@ -1269,42 +1559,27 @@ Result<PlanPtr> BindInsert(const InsertStatement& statement,
     }
   }
   Scope no_tables;
-  std::vector<BoundExprPtr> values;
-  for (const ExprPtr& value : statement.values) {
+  std::vector<BoundExprPtr> bound_values;
+  for (const ExprPtr& value : values) {
     Result<BoundExprPtr> bound = BindValue(*value, no_tables, "VALUES");
     if (!bound.IsOk()) {
       return bound.TakeError();
     }
-    values.push_back(std::move(bound.Value()));
+    bound_values.push_back(std::move(bound.Value()));
   }
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    const ColumnDef& column = schema->columns[targets.Value()[i]];
-    if (Status status = CheckAssignable(column, values[i]->type)) {
+  for (std::size_t i = 0; i < bound_values.size(); ++i) {
+    const ColumnDef& column = schema.columns[targets[i]];
+    if (Status status = CheckAssignable(column, bound_values[i]->type)) {
       return *status;
     }
   }
-  Row row(schema->columns.size());
-  std::vector<bool> is_supplied(schema->columns.size(), false);
-  for (std::size_t target : targets.Value()) {
-    is_supplied[target] = true;
-  }
-  std::optional<std::size_t> generated_index;
-  for (std::size_t i = 0; i < row.size(); ++i) {
-    if (is_supplied[i]) {
-      continue;
-    }
-    if (schema->columns[i].default_value) {
-      row[i] = *schema->columns[i].default_value;
-    } else {
-      generated_index = i;
-      row[i] = int64_t{0};
-    }
-  }
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    const ColumnDef& column = schema->columns[targets.Value()[i]];
-    std::optional<Value> constant = Evaluate(*values[i], Row());
+  Row row = row_template;
+  for (std::size_t i = 0; i < bound_values.size(); ++i) {
+    const ColumnDef& column = schema.columns[targets[i]];
+    std::string failure;
+    std::optional<Value> constant = Evaluate(*bound_values[i], Row(), &failure);
     if (!constant) {
-      return ExecutionError{ErrorKind::kRuntime, "numeric overflow"};
+      return ExecutionError{ErrorKind::kRuntime, failure};
     }
     // CheckAssignable above rules out a mismatch, so this guards only against
     // the two checks drifting apart.
@@ -1312,9 +1587,40 @@ Result<PlanPtr> BindInsert(const InsertStatement& statement,
     if (!converted) {
       return BindError("cannot convert value for column '" + column.name + "'");
     }
-    row[targets.Value()[i]] = std::move(*converted);
+    row[targets[i]] = std::move(*converted);
   }
-  return MakePlan(InsertNode{schema->name, std::move(row), generated_index});
+  return row;
+}
+
+// The rows are bound in order and the first error is returned.
+Result<PlanPtr> BindInsert(const InsertStatement& statement,
+                           const ICatalog& catalog) {
+  std::optional<TableSchema> schema = catalog.FindTable(statement.table);
+  if (!schema) {
+    return UnknownTable(statement.table);
+  }
+  Result<std::vector<std::size_t>> targets =
+      ResolveInsertColumns(statement, *schema);
+  if (!targets.IsOk()) {
+    return targets.TakeError();
+  }
+  if (statement.rows.empty()) {
+    return BindError("INSERT has no VALUES rows");
+  }
+  std::optional<std::size_t> generated_index;
+  const Row row_template =
+      MakeRowTemplate(*schema, targets.Value(), &generated_index);
+  const bool has_several_rows = statement.rows.size() > 1;
+  std::vector<Row> rows;
+  for (std::size_t i = 0; i < statement.rows.size(); ++i) {
+    Result<Row> row = BindInsertRow(statement.rows[i], targets.Value(), *schema,
+                                    row_template);
+    if (!row.IsOk()) {
+      return RowError(row.TakeError(), i + 1, has_several_rows);
+    }
+    rows.push_back(std::move(row.Value()));
+  }
+  return MakePlan(InsertNode{schema->name, std::move(rows), generated_index});
 }
 
 // ---- DDL -------------------------------------------------------------------
@@ -1341,9 +1647,10 @@ Result<Value> BindDefault(const Expr& expr, const ColumnDef& column) {
   if (Status status = CheckAssignable(column, bound.Value()->type)) {
     return *status;
   }
-  std::optional<Value> constant = Evaluate(*bound.Value(), Row());
+  std::string failure;
+  std::optional<Value> constant = Evaluate(*bound.Value(), Row(), &failure);
   if (!constant) {
-    return ExecutionError{ErrorKind::kRuntime, "numeric overflow"};
+    return ExecutionError{ErrorKind::kRuntime, failure};
   }
   std::optional<Value> converted = CoerceValue(*constant, column.type);
   if (!converted) {

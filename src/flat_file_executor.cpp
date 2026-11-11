@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -49,14 +50,34 @@ using domain::Row;
 using domain::TableSchema;
 using domain::Value;
 
-constexpr std::size_t kMaxScannedTables = 2;
-
 ExecutionError MakeError(ErrorKind kind, std::string message) {
   return ExecutionError{kind, std::move(message)};
 }
 
 ExecutionError OverflowError() {
   return MakeError(ErrorKind::kRuntime, "numeric overflow");
+}
+
+// The kRuntime error for a failed evaluation; failure is the message that
+// domain::Evaluate or domain::EvaluateCondition wrote.
+ExecutionError EvaluationError(std::string failure) {
+  return MakeError(ErrorKind::kRuntime, std::move(failure));
+}
+
+const char* AggregateFnName(domain::AggregateFn fn) {
+  switch (fn) {
+    case domain::AggregateFn::kCount:
+      return "COUNT";
+    case domain::AggregateFn::kSum:
+      return "SUM";
+    case domain::AggregateFn::kAvg:
+      return "AVG";
+    case domain::AggregateFn::kMin:
+      return "MIN";
+    case domain::AggregateFn::kMax:
+      break;
+  }
+  return "MAX";
 }
 
 ExecutionError UnknownTableError(const std::string& name) {
@@ -133,28 +154,6 @@ using RowSetResult = std::variant<RowSet, ExecutionError>;
 
 RowSetResult ExecuteNode(const PlanNode& plan, const TableStore& store);
 
-std::size_t CountScans(const PlanNode& plan) {
-  if (std::holds_alternative<domain::ScanNode>(plan.node)) {
-    return 1;
-  }
-  if (const auto* filter = std::get_if<domain::FilterNode>(&plan.node)) {
-    return CountScans(*filter->child);
-  }
-  if (const auto* join = std::get_if<domain::JoinNode>(&plan.node)) {
-    return CountScans(*join->left) + CountScans(*join->right);
-  }
-  if (const auto* aggregate = std::get_if<domain::AggregateNode>(&plan.node)) {
-    return CountScans(*aggregate->child);
-  }
-  if (const auto* project = std::get_if<domain::ProjectNode>(&plan.node)) {
-    return CountScans(*project->child);
-  }
-  if (const auto* sort = std::get_if<domain::SortNode>(&plan.node)) {
-    return CountScans(*sort->child);
-  }
-  return 0;
-}
-
 RowSetResult ExecuteScan(const domain::ScanNode& scan,
                          const TableStore& store) {
   const TableData* table = store.Find(scan.table);
@@ -196,10 +195,11 @@ RowSetResult ExecuteFilter(const domain::FilterNode& filter,
 
   RowSet output{std::move(input.columns), {}};
   for (Row& row : input.rows) {
+    std::string failure;
     std::optional<bool> is_match =
-        domain::EvaluateCondition(*filter.predicate, row);
+        domain::EvaluateCondition(*filter.predicate, row, &failure);
     if (!is_match) {
-      return OverflowError();
+      return EvaluationError(std::move(failure));
     }
     if (*is_match) {
       output.rows.push_back(std::move(row));
@@ -310,11 +310,13 @@ JoinBuckets BuildJoinBuckets(const std::vector<Row>& right_rows,
   return buckets;
 }
 
-// nullopt when a predicate overflows; otherwise whether all hold, in order.
+// nullopt when a predicate fails to evaluate (*failure holds the message);
+// otherwise whether all hold, in order.
 std::optional<bool> HoldsAll(const std::vector<const BoundExpr*>& predicates,
-                             const Row& row) {
+                             const Row& row, std::string* failure) {
   for (const BoundExpr* predicate : predicates) {
-    std::optional<bool> holds = domain::EvaluateCondition(*predicate, row);
+    std::optional<bool> holds =
+        domain::EvaluateCondition(*predicate, row, failure);
     if (!holds) {
       return std::nullopt;
     }
@@ -372,9 +374,10 @@ std::optional<ExecutionError> JoinRows(const RowSet& left, const RowSet& right,
       }
       std::ranges::copy(right_row, combined.begin() +
                                        static_cast<std::ptrdiff_t>(left_width));
-      std::optional<bool> holds = HoldsAll(spec.residuals, combined);
+      std::string failure;
+      std::optional<bool> holds = HoldsAll(spec.residuals, combined, &failure);
       if (!holds) {
-        return OverflowError();
+        return EvaluationError(std::move(failure));
       }
       if (*holds) {
         joined->push_back(combined);
@@ -427,17 +430,23 @@ std::vector<domain::AggregateAccumulator> MakeAccumulators(
   return accumulators;
 }
 
-// False when the argument or the running INT sum overflows.
-bool AddToAccumulator(const domain::AggregateSpec& spec, const Row& row,
-                      domain::AggregateAccumulator* accumulator) {
+// Fails when the argument cannot be evaluated or a running sum overflows.
+std::optional<ExecutionError> AddToAccumulator(
+    const domain::AggregateSpec& spec, const Row& row,
+    domain::AggregateAccumulator* accumulator) {
   if (!spec.arg) {
-    return accumulator->Add(Value(int64_t{0}));
+    accumulator->Add(Value(int64_t{0}));  // COUNT(*) cannot fail
+    return std::nullopt;
   }
-  std::optional<Value> argument = domain::Evaluate(*spec.arg, row);
+  std::string failure;
+  std::optional<Value> argument = domain::Evaluate(*spec.arg, row, &failure);
   if (!argument) {
-    return false;
+    return EvaluationError(std::move(failure));
   }
-  return accumulator->Add(*argument);
+  if (!accumulator->Add(*argument)) {
+    return OverflowError();
+  }
+  return std::nullopt;
 }
 
 std::vector<ColumnDef> AggregateColumns(
@@ -452,6 +461,9 @@ std::vector<ColumnDef> AggregateColumns(
     DataType type = spec.arg ? DataTypeOf(spec.arg->type) : DataType::kInt;
     if (spec.fn == domain::AggregateFn::kCount) {
       type = DataType::kInt;
+    }
+    if (spec.fn == domain::AggregateFn::kAvg) {
+      type = DataType::kDouble;
     }
     columns.push_back(ColumnDef{"aggregate_" + std::to_string(i), type});
   }
@@ -483,9 +495,10 @@ RowSetResult ExecuteAggregate(const domain::AggregateNode& aggregate,
       Row keys;
       std::string key_text;
       for (const BoundExprPtr& key_expr : aggregate.group_keys) {
-        std::optional<Value> key = domain::Evaluate(*key_expr, row);
+        std::string failure;
+        std::optional<Value> key = domain::Evaluate(*key_expr, row, &failure);
         if (!key) {
-          return OverflowError();
+          return EvaluationError(std::move(failure));
         }
         AppendExactKey(*key, &key_text);
         keys.push_back(std::move(*key));
@@ -498,9 +511,9 @@ RowSetResult ExecuteAggregate(const domain::AggregateNode& aggregate,
     }
     Group& group = groups[position];
     for (std::size_t i = 0; i < aggregate.aggregates.size(); ++i) {
-      if (!AddToAccumulator(aggregate.aggregates[i], row,
-                            &group.accumulators[i])) {
-        return OverflowError();
+      if (auto error = AddToAccumulator(aggregate.aggregates[i], row,
+                                        &group.accumulators[i])) {
+        return std::move(*error);
       }
     }
   }
@@ -508,6 +521,19 @@ RowSetResult ExecuteAggregate(const domain::AggregateNode& aggregate,
   RowSet output{AggregateColumns(aggregate), {}};
   output.rows.reserve(groups.size());
   for (Group& group : groups) {
+    // A group built from rows is never empty; only the single group of a query
+    // without GROUP BY can have no rows, and AVG, MIN and MAX have no result
+    // for it.
+    for (std::size_t i = 0; i < group.accumulators.size(); ++i) {
+      const domain::AggregateFn fn = aggregate.aggregates[i].fn;
+      const bool has_no_result_when_empty = fn == domain::AggregateFn::kAvg ||
+                                            fn == domain::AggregateFn::kMin ||
+                                            fn == domain::AggregateFn::kMax;
+      if (has_no_result_when_empty && group.accumulators[i].IsEmpty()) {
+        return MakeError(ErrorKind::kRuntime,
+                         std::string(AggregateFnName(fn)) + " over no rows");
+      }
+    }
     Row out_row = std::move(group.keys);
     for (const domain::AggregateAccumulator& accumulator : group.accumulators) {
       out_row.push_back(accumulator.Result());
@@ -530,9 +556,10 @@ RowSetResult ExecuteProject(const domain::ProjectNode& project,
     Row out_row;
     out_row.reserve(project.exprs.size());
     for (const BoundExprPtr& expr : project.exprs) {
-      std::optional<Value> value = domain::Evaluate(*expr, row);
+      std::string failure;
+      std::optional<Value> value = domain::Evaluate(*expr, row, &failure);
       if (!value) {
-        return OverflowError();
+        return EvaluationError(std::move(failure));
       }
       out_row.push_back(std::move(*value));
     }
@@ -577,6 +604,29 @@ RowSetResult ExecuteSort(const domain::SortNode& sort,
   return output;
 }
 
+// Keeps the rows from position offset on, at most limit of them.
+RowSetResult ExecuteLimit(const domain::LimitNode& limit,
+                          const TableStore& store) {
+  RowSet output;
+  if (auto error = ExecuteChild(*limit.child, store, &output)) {
+    return std::move(*error);
+  }
+  const std::size_t total = output.rows.size();
+  // offset and limit are not negative (the parser accepts no sign).
+  const std::size_t begin =
+      std::min(total, static_cast<std::size_t>(limit.offset));
+  std::size_t count = total - begin;
+  if (limit.limit) {
+    count = std::min(count, static_cast<std::size_t>(*limit.limit));
+  }
+  const auto first = output.rows.begin() + static_cast<std::ptrdiff_t>(begin);
+  const auto last = first + static_cast<std::ptrdiff_t>(count);
+  std::vector<Row> window(std::make_move_iterator(first),
+                          std::make_move_iterator(last));
+  output.rows = std::move(window);
+  return output;
+}
+
 RowSetResult ExecuteNode(const PlanNode& plan, const TableStore& store) {
   if (const auto* scan = std::get_if<domain::ScanNode>(&plan.node)) {
     return ExecuteScan(*scan, store);
@@ -595,6 +645,9 @@ RowSetResult ExecuteNode(const PlanNode& plan, const TableStore& store) {
   }
   if (const auto* sort = std::get_if<domain::SortNode>(&plan.node)) {
     return ExecuteSort(*sort, store);
+  }
+  if (const auto* limit = std::get_if<domain::LimitNode>(&plan.node)) {
+    return ExecuteLimit(*limit, store);
   }
   return MakeError(ErrorKind::kUnsupported, "not a query plan node");
 }
@@ -700,10 +753,11 @@ std::optional<ExecutionError> MatchRows(const BoundExpr* predicate,
                                         std::vector<std::size_t>* matched) {
   for (std::size_t i = 0; i < rows.size(); ++i) {
     if (predicate != nullptr) {
+      std::string failure;
       std::optional<bool> is_match =
-          domain::EvaluateCondition(*predicate, rows[i]);
+          domain::EvaluateCondition(*predicate, rows[i], &failure);
       if (!is_match) {
-        return OverflowError();
+        return EvaluationError(std::move(failure));
       }
       if (!*is_match) {
         continue;
@@ -741,7 +795,7 @@ std::optional<ExecutionError> CheckInsertForeignKeys(const TableStore& store,
 // largest value there, or 1 in an empty table (ADR-0016).
 std::optional<ExecutionError> NextAutoIncrementValue(const TableData& table,
                                                      std::size_t column_index,
-                                                     Value* next) {
+                                                     int64_t* next) {
   int64_t largest = 0;
   for (const Row& row : table.rows) {
     largest = std::max(largest, std::get<int64_t>(row[column_index]));
@@ -749,13 +803,53 @@ std::optional<ExecutionError> NextAutoIncrementValue(const TableData& table,
   if (largest == std::numeric_limits<int64_t>::max()) {
     return OverflowError();
   }
-  *next = Value(largest + 1);
+  *next = largest + 1;
   return std::nullopt;
 }
 
-// Precondition: insert.row has one value per column of the table, each of the
-// column type (the InsertNode contract). The checks are those of
-// docs/DesignDocument.md section 2.5, in that order.
+// The values already present in the unique columns (the primary key and every
+// UNIQUE column), grown by each row of the statement that passes its checks,
+// so that a row is also compared with the rows before it in the same batch.
+// Lookup and insertion are O(1); building is O(n) per column.
+class UniqueValues {
+ public:
+  explicit UniqueValues(const TableData& table) {
+    const TableSchema& schema = table.schema;
+    columns_.push_back(schema.primary_key_index);
+    columns_.insert(columns_.end(), schema.unique_indexes.begin(),
+                    schema.unique_indexes.end());
+    for (std::size_t column_index : columns_) {
+      keys_.push_back(ColumnKeys(table.rows, column_index));
+    }
+  }
+
+  // The first unique column (primary key first, then ascending) whose value in
+  // row is already present, or std::nullopt.
+  std::optional<std::size_t> FindDuplicate(const Row& row) const {
+    for (std::size_t i = 0; i < columns_.size(); ++i) {
+      if (keys_[i].contains(ExactKey(row[columns_[i]]))) {
+        return columns_[i];
+      }
+    }
+    return std::nullopt;
+  }
+
+  void Add(const Row& row) {
+    for (std::size_t i = 0; i < columns_.size(); ++i) {
+      keys_[i].insert(ExactKey(row[columns_[i]]));
+    }
+  }
+
+ private:
+  std::vector<std::size_t> columns_;
+  std::vector<std::unordered_set<std::string>>
+      keys_;  // by position in columns_
+};
+
+// Precondition: every row of insert.rows has one value per column of the table,
+// each of the column type (the InsertNode contract). The rows are checked in
+// order, each by the checks of docs/DesignDocument.md section 2.5 in that
+// order, and the first failure is returned.
 MutationOutcome PlanInsert(const domain::InsertNode& insert,
                            const TableStore& store) {
   const TableData* target = store.Find(insert.table);
@@ -763,35 +857,41 @@ MutationOutcome PlanInsert(const domain::InsertNode& insert,
     return UnknownTableError(insert.table);
   }
   const TableSchema& schema = target->schema;
-  Row row = insert.row;
-  assert(row.size() == schema.columns.size());
-  if (insert.generated_index) {
-    if (auto error = NextAutoIncrementValue(*target, *insert.generated_index,
-                                            &row[*insert.generated_index])) {
+  std::vector<Row> rows = insert.rows;
+  UniqueValues unique_values(*target);
+  int64_t next_generated = 0;
+  for (std::size_t row_number = 0; row_number < rows.size(); ++row_number) {
+    Row& row = rows[row_number];
+    assert(row.size() == schema.columns.size());
+    if (insert.generated_index) {
+      if (row_number == 0) {
+        if (auto error = NextAutoIncrementValue(
+                *target, *insert.generated_index, &next_generated)) {
+          return std::move(*error);
+        }
+      } else if (next_generated == std::numeric_limits<int64_t>::max()) {
+        return OverflowError();
+      } else {
+        ++next_generated;
+      }
+      row[*insert.generated_index] = Value(next_generated);
+    }
+    for (std::size_t i = 0; i < row.size(); ++i) {
+      if (auto error = CheckTextStorable(schema, i, row[i])) {
+        return std::move(*error);
+      }
+    }
+    if (std::optional<std::size_t> column_index =
+            unique_values.FindDuplicate(row)) {
+      return DuplicateKeyError(schema, *column_index, row[*column_index]);
+    }
+    if (auto error = CheckInsertForeignKeys(store, schema, row)) {
       return std::move(*error);
     }
+    unique_values.Add(row);
   }
-
-  for (std::size_t i = 0; i < row.size(); ++i) {
-    if (auto error = CheckTextStorable(schema, i, row[i])) {
-      return std::move(*error);
-    }
-  }
-
-  std::size_t key_index = schema.primary_key_index;
-  if (ContainsValue(target->rows, key_index, row[key_index])) {
-    return DuplicateKeyError(schema, key_index, row[key_index]);
-  }
-  for (std::size_t column_index : schema.unique_indexes) {
-    if (ContainsValue(target->rows, column_index, row[column_index])) {
-      return DuplicateKeyError(schema, column_index, row[column_index]);
-    }
-  }
-
-  if (auto error = CheckInsertForeignKeys(store, schema, row)) {
-    return std::move(*error);
-  }
-  return MutationPlan{insert.table, std::move(row), {}, 1};
+  const std::size_t affected = rows.size();
+  return MutationPlan{insert.table, std::move(rows), {}, affected};
 }
 
 // ---- UPDATE ----------------------------------------------------------------
@@ -806,9 +906,11 @@ std::optional<ExecutionError> ComputeNewRows(
   for (std::size_t position : matched) {
     const Row& old_row = old_rows[position];
     for (const domain::BoundAssignment& assignment : update.assignments) {
-      std::optional<Value> value = domain::Evaluate(*assignment.value, old_row);
+      std::string failure;
+      std::optional<Value> value =
+          domain::Evaluate(*assignment.value, old_row, &failure);
       if (!value) {
-        return OverflowError();
+        return EvaluationError(std::move(failure));
       }
       const ColumnDef& column = schema.columns[assignment.column_index];
       std::optional<Value> coerced = domain::CoerceValue(*value, column.type);
@@ -1266,10 +1368,6 @@ SchemaChangeOutcome PlanDrop(const domain::DropTableNode& drop,
 
 domain::ExecutionResult RunQuery(const domain::PlanNode& plan,
                                  const TableStore& store) {
-  if (CountScans(plan) > kMaxScannedTables) {
-    return MakeError(ErrorKind::kUnsupported,
-                     "flatfile engine joins at most 2 tables");
-  }
   RowSetResult result = ExecuteNode(plan, store);
   if (auto* error = std::get_if<ExecutionError>(&result)) {
     return std::move(*error);

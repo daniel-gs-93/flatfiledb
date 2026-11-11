@@ -1,7 +1,9 @@
 #ifndef FLATFILEDB_DOMAIN_AST_H_
 #define FLATFILEDB_DOMAIN_AST_H_
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -10,8 +12,35 @@
 
 namespace flatfiledb::domain {
 
-enum class BinaryOp { kEq, kNe, kLt, kLe, kGt, kGe, kAnd, kOr, kAdd, kSub };
-enum class AggregateFn { kCount, kSum };
+enum class BinaryOp {
+  kEq,
+  kNe,
+  kLt,
+  kLe,
+  kGt,
+  kGe,
+  kAnd,
+  kOr,
+  kAdd,
+  kSub,
+  kMul,
+  kDiv,
+  kConcat,
+  kLike
+};
+enum class AggregateFn { kCount, kSum, kAvg, kMin, kMax };
+// The scalar functions of docs/DesignDocument.md section 2.3. kCast is
+// CAST(x AS type): its target type is FunctionCall::cast_type.
+enum class ScalarFn {
+  kLower,
+  kUpper,
+  kLength,
+  kSubstr,
+  kTrim,
+  kAbs,
+  kRound,
+  kCast
+};
 
 struct Expr;
 using ExprPtr = std::unique_ptr<Expr>;
@@ -36,9 +65,16 @@ struct AggregateCall {
   ExprPtr arg;  // null for COUNT(*)
 };
 
+struct FunctionCall {
+  ScalarFn fn;
+  std::vector<ExprPtr> args;             // the parser does not check the count
+  DataType cast_type = DataType::kText;  // only read when fn is kCast
+};
+
 // A struct, not a variant alias: the alternatives refer back to Expr.
 struct Expr {
-  std::variant<Literal, ColumnRef, BinaryExpr, AggregateCall> node;
+  std::variant<Literal, ColumnRef, BinaryExpr, AggregateCall, FunctionCall>
+      node;
 };
 
 struct SelectItem {
@@ -75,12 +111,14 @@ struct SelectStatement {
   ExprPtr where;  // null when absent
   std::vector<ExprPtr> group_by;
   std::vector<OrderItem> order_by;
+  std::optional<int64_t> limit = std::nullopt;  // absent: all rows
+  int64_t offset = 0;
 };
 
 struct InsertStatement {
   std::string table;
-  std::vector<std::string> columns;  // empty: all columns in schema order
-  std::vector<ExprPtr> values;
+  std::vector<std::string> columns;        // empty: all columns in schema order
+  std::vector<std::vector<ExprPtr>> rows;  // one expression list per VALUES row
 };
 
 struct UpdateStatement {

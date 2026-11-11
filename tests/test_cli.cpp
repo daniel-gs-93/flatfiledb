@@ -245,19 +245,19 @@ TEST(test_cli_delete_referenced_user_prints_constraint_error) {
                 "posts.username"}));
 }
 
-TEST(test_cli_three_table_join_prints_unsupported) {
+TEST(test_cli_three_table_join_prints_rows) {
   if (!HasSourceData()) {
     SKIP("data/ is not present");
   }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"SELECT u.username FROM users u JOIN posts p "
-                                 "ON p.username = u.username JOIN engagements "
-                                 "e ON e.postId = p.id WHERE u.id = 5805;"});
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT u.username, COUNT(*) FROM users u JOIN posts p ON p.username = "
+       "u.username JOIN engagements e ON e.postId = p.id WHERE u.id = 5715 "
+       "GROUP BY u.username;"});
   CHECK_EQ(output,
-           std::vector<std::string>(
-               {"error: unsupported: flatfile engine joins at most 2 tables"}));
+           std::vector<std::string>({"username\tCOUNT(*)", "kbrown\t9"}));
 }
 
 TEST(test_cli_syntax_error_prints_column_and_description) {
@@ -596,4 +596,100 @@ TEST(test_cli_quit_stops_reading_with_status_zero) {
              {kOpenLine, ".quit", "SELECT username FROM users WHERE id = 1;"});
 
   CHECK_EQ(output, std::vector<std::string>({kLoadedLine}));
+}
+
+TEST(test_cli_limit_offset_prints_window) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT id, username FROM users ORDER BY id LIMIT 3 OFFSET 1;"});
+
+  CHECK_EQ(output, std::vector<std::string>({"id\tusername", "2\tthomas90",
+                                             "3\tjblair", "4\tjohn04"}));
+}
+
+TEST(test_cli_aggregates_print_min_max_avg) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT COUNT(*), MIN(timestamp), MAX(timestamp), AVG(timestamp) FROM "
+       "engagements;"});
+
+  CHECK_EQ(output,
+           std::vector<std::string>(
+               {"COUNT(*)\tMIN(timestamp)\tMAX(timestamp)\tAVG(timestamp)",
+                "10000\t1690823929\t1722355167\t1706505303.6826"}));
+}
+
+TEST(test_cli_like_and_functions_print_example_rows) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT id, UPPER(username), LENGTH(username) FROM users WHERE "
+       "username LIKE 'kn%' ORDER BY id LIMIT 2;"});
+
+  CHECK_EQ(output,
+           std::vector<std::string>({"id\tUPPER(username)\tLENGTH(username)",
+                                     "1\tKNORMAN\t7", "66\tKNIGHTLAURA\t11"}));
+}
+
+TEST(test_cli_new_syntax_errors_print_messages) {
+  if (!HasSourceData()) {
+    SKIP("data/ is not present");
+  }
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT 1 / 0 FROM users WHERE id = 1;",
+       "SELECT AVG(id) FROM users WHERE id = 0;",
+       "SELECT CAST(username AS INT) FROM users WHERE id = 1;",
+       "SELECT id FROM users LIMIT -1;", "SELECT FOO(1) FROM users;"});
+
+  CHECK_EQ(output,
+           std::vector<std::string>(
+               {"error: runtime: division by zero",
+                "error: runtime: AVG over no rows",
+                "error: runtime: cannot cast 'knorman' to INT",
+                "syntax error at column 28: LIMIT requires a non-negative "
+                "integer literal",
+                "syntax error at column 8: unknown function FOO"}));
+}
+
+TEST(test_cli_multi_row_insert_persists_and_fails_as_a_whole) {
+  testing::TempDir work;
+  std::filesystem::create_directory(work.path() / "db");
+
+  std::vector<std::string> first = RunCli(
+      work.path(),
+      {".open db",
+       "CREATE TABLE notes (id INT PRIMARY KEY AUTOINCREMENT, body TEXT);",
+       "INSERT INTO notes (body) VALUES ('a'), ('b'), ('c');",
+       "INSERT INTO notes (id, body) VALUES (10, 'x'), (10, 'y');"});
+  std::vector<std::string> second = RunCli(
+      work.path(), {".open db", "SELECT id, body FROM notes ORDER BY id;"});
+
+  CHECK_EQ(first,
+           std::vector<std::string>(
+               {"loaded no tables", "OK CREATE TABLE notes", "OK affected=3",
+                "error: constraint violation: duplicate key: "
+                "notes.id=10"}));
+  CHECK_EQ(second, std::vector<std::string>(
+                       {"loaded notes=3", "id\tbody", "1\ta", "2\tb", "3\tc"}));
 }
