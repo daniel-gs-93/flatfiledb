@@ -13,6 +13,8 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 | [`docs/TestDocument.md`](docs/TestDocument.md) | Test matrix |
 | [`docs/PagedEngineDesignDocument.md`](docs/PagedEngineDesignDocument.md) | Storage layer design of the paged engine (the second storage engine, organized in pages) |
 | [`docs/PagedEngineTestDocument.md`](docs/PagedEngineTestDocument.md) | Test matrix of the paged engine |
+| [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) | Execution layer design of the paged engine: operators, constraint checks, the database-level lock, the `.engine` command, equivalence rules of the two engines |
+| [`docs/PagedExecutionTestDocument.md`](docs/PagedExecutionTestDocument.md) | Test matrix of the paged execution layer |
 
 ## Directory Structure
 
@@ -58,6 +60,7 @@ On a terminal the prompt is `flatfiledb> `, which changes to `       ...> ` insi
 | Command | Effect |
 |---|---|
 | `.open <directory> [--parallel]` | Opens the database directory, creating it if it does not exist |
+| `.engine [flatfile\|paged]` | Shows the engine of the session, or selects it (see Engines) |
 | `.import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]... [--skip-bad-rows]` | Imports a CSV into a new table |
 | `.tables` | Lists one table per line |
 | `.schema [<table>]` | Prints `CREATE TABLE` statements that can be run again |
@@ -417,6 +420,50 @@ error: constraint violation: users.id=5805 is referenced by posts.username
 ```
 
 Design Document 2.3 to 2.6 and 3.6 cover syntax, semantics, referential integrity and the error format.
+
+## Engines
+
+FlatFileDB has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) describes how `paged` runs statements.
+
+`.engine` shows the engine of the session, and `.engine paged` or `.engine flatfile` selects one. The choice lasts for one session and is not saved, so every start begins with `flatfile`. `.open` uses the selected engine. When a database is already open, naming the other engine reopens the same directory with it; if that fails, the database and the engine stay as they were.
+
+The two engines keep separate data in the same directory: `catalog.csv` and one CSV file per table for `flatfile`, and `paged.db` for `paged`. A directory can hold both, and neither engine reads the other's data. When a directory has the other engine's data and none of its own, `.open` adds a `note:` line that says so.
+
+Queries, writes and constraints behave the same on both engines, apart from a few known differences that Section 2.6 of the [paged execution design](docs/PagedExecutionDesignDocument.md) lists. `paged` supports `CREATE TABLE` and `.import`, but not yet `ALTER TABLE ADD COLUMN` or `DROP TABLE`.
+
+A session with `paged`, in a temporary directory:
+
+```bash
+CLI="$PWD/build/flatfiledb_cli"
+cd "$(mktemp -d)"
+printf '%s\n' '.engine paged' '.open demo' \
+  'CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);' \
+  "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');" \
+  'SELECT id, username FROM users ORDER BY id;' | "$CLI"
+```
+
+```text
+engine paged
+created new database demo
+OK CREATE TABLE users
+OK affected=2
+id	username
+1	ann
+2	bob
+```
+
+Each write statement is written to `demo/paged.db` as soon as it succeeds, so the data is there when the database is opened again in the same shell:
+
+```bash
+printf '%s\n' '.engine paged' '.open demo' 'SELECT COUNT(*) FROM users;' | "$CLI"
+```
+
+```text
+engine paged
+loaded users=2
+COUNT(*)
+2
+```
 
 ## Limitations of the flatfile Engine
 
