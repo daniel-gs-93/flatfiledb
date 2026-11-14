@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -14,9 +15,9 @@ namespace {
 // U+FF1B in UTF-8.
 constexpr const char* kFullWidthSemicolon = "\xEF\xBC\x9B";
 
+// `position` must not exceed line.size(); substr throws past it.
 bool IsCommentStart(const std::string& line, std::size_t position) {
-  return line[position] == '-' && position + 1 < line.size() &&
-         line[position + 1] == '-';
+  return std::string_view(line).substr(position).starts_with("--");
 }
 
 }  // namespace

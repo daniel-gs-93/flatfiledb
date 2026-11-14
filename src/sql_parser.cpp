@@ -12,6 +12,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -380,8 +381,7 @@ std::size_t SkipBlanksAndComments(const std::string& input,
       position += blank;
       continue;
     }
-    if (input[position] == '-' && position + 1 < input.size() &&
-        input[position + 1] == '-') {
+    if (std::string_view(input).substr(position).starts_with("--")) {
       while (position < input.size() && input[position] != '\n') {
         ++position;
       }
