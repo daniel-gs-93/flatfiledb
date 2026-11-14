@@ -797,6 +797,32 @@ TEST(test_engine_update_plain_column_is_persisted) {
   CHECK_EQ(Join(log->written_table_names[0]), std::string("posts\n"));
 }
 
+TEST(test_engine_update_equal_value_keeps_stored_cell) {
+  // Arrange: ABS(-0.0) is 0.0, which compares equal to the stored -0.0, while
+  // the other row really changes, so the table is rewritten.
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  ExecuteSql(*service, "CREATE TABLE zeros (id INT PRIMARY KEY, v DOUBLE)");
+  ExecuteSql(*service, "INSERT INTO zeros VALUES (1, -0.0), (2, -1.5)");
+
+  // Act
+  ExecutionResult result = ExecuteSql(*service, "UPDATE zeros SET v = ABS(v)");
+  auto reloaded = MakeLoadedService(dir.path());
+  if (!reloaded) {
+    return;
+  }
+
+  // Assert
+  ExpectAffected(result, 2);
+  CHECK_EQ(Join(QueryLines(
+               *reloaded, "SELECT id, CAST(v AS TEXT) FROM zeros ORDER BY id")),
+           std::string("1\t-0.0\n2\t1.5\n"));
+}
+
 TEST(test_engine_update_referenced_column_cascades) {
   // Arrange
   TempDir dir;

@@ -919,7 +919,12 @@ std::optional<ExecutionError> ComputeNewRows(
                          "type mismatch assigning to " +
                              QualifiedName(schema, assignment.column_index));
       }
-      (*new_rows)[position][assignment.column_index] = std::move(*coerced);
+      // A value equal to the stored one leaves the stored cell alone, so that
+      // -0.0 and 0.0, which compare equal, do not overwrite each other.
+      Value& cell = (*new_rows)[position][assignment.column_index];
+      if (*coerced != cell) {
+        cell = std::move(*coerced);
+      }
     }
   }
   return std::nullopt;
