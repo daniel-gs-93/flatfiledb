@@ -119,10 +119,14 @@ class BufferManager {
   // formats the page. Errors as FetchPage; nothing stays pinned.
   PageResult<PageGuard> NewPage();
 
-  // Writes every dirty frame, then Sync. The caller must not hold a guard
-  // (FlushAll waits for the latches). Stops at the first error; frames
+  // Writes every dirty frame and does not call Sync. The caller must not hold
+  // a guard (it waits for the latches). Stops at the first error; frames
   // written before it stay clean. Not safe to run concurrently with another
-  // FlushAll.
+  // WriteBackAll or FlushAll.
+  Status WriteBackAll();
+
+  // WriteBackAll, then Sync. A failed WriteBackAll skips the Sync. The same
+  // preconditions as WriteBackAll.
   Status FlushAll();
 
   BufferStats Stats() const;

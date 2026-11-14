@@ -336,6 +336,47 @@ TEST(test_paged_buffer_flush_all_writes_each_dirty_page_once) {
   }
 }
 
+TEST(test_paged_buffer_write_back_all_writes_without_sync) {
+  MemoryPageStore store;
+  FormatPages(store, 10);
+  std::unique_ptr<BufferManager> buffer = MakeBuffer(store, 4);
+  if (buffer == nullptr) {
+    return;
+  }
+  for (PageId page = 0; page < 3; ++page) {
+    Modify(*buffer, page, 0x11);
+  }
+  const int syncs_before = store.CallCount(Operation::kSync);
+  CHECK_OK(buffer->WriteBackAll());
+  CHECK_EQ(buffer->Stats().page_writes, static_cast<std::uint64_t>(3));
+  CHECK_EQ(store.CallCount(Operation::kSync), syncs_before);
+  // The pages are clean now: FlushAll writes nothing and only syncs.
+  CHECK_OK(buffer->FlushAll());
+  CHECK_EQ(buffer->Stats().page_writes, static_cast<std::uint64_t>(3));
+  CHECK_EQ(store.CallCount(Operation::kSync), syncs_before + 1);
+  for (PageId page = 0; page < 3; ++page) {
+    CHECK_OK(SlottedPage::VerifyHeader(store.PageBytes(page), page));
+  }
+
+  // A failed write leaves the remaining pages dirty and skips the Sync; the
+  // next WriteBackAll writes them.
+  for (PageId page = 3; page < 6; ++page) {
+    Modify(*buffer, page, 0x22);
+  }
+  const int syncs_mid = store.CallCount(Operation::kSync);
+  store.InjectFailure(Operation::kWrite, 2);
+  CHECK_ERROR(buffer->WriteBackAll(), kIo);
+  CHECK_EQ(store.CallCount(Operation::kSync), syncs_mid);
+  CHECK_EQ(buffer->Stats().page_writes, static_cast<std::uint64_t>(4));
+  CHECK_OK(buffer->WriteBackAll());
+  CHECK_EQ(buffer->Stats().page_writes, static_cast<std::uint64_t>(6));
+  CHECK_EQ(store.CallCount(Operation::kSync), syncs_mid);
+  for (PageId page = 3; page < 6; ++page) {
+    CHECK_OK(SlottedPage::VerifyHeader(store.PageBytes(page), page));
+    CHECK_EQ(static_cast<int>(store.PageBytes(page)[kMarkerOffset]), 0x22);
+  }
+}
+
 TEST(test_paged_buffer_rejects_corrupt_pages_without_leaking_frames) {
   MemoryPageStore store;
   FormatPages(store, 10);

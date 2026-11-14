@@ -288,7 +288,7 @@ PageResult<PageGuard> BufferManager::NewPage() {
   return PageGuard(this, frame, page_id, std::move(latch), FrameData(frame));
 }
 
-Status BufferManager::FlushAll() {
+Status BufferManager::WriteBackAll() {
   std::vector<FrameId> dirty_frames;
   {
     std::lock_guard<std::mutex> pool_lock(pool_mutex_);
@@ -328,6 +328,13 @@ Status BufferManager::FlushAll() {
     if (failure.has_value()) {
       return failure;
     }
+  }
+  return std::nullopt;
+}
+
+Status BufferManager::FlushAll() {
+  if (Status failure = WriteBackAll()) {
+    return failure;
   }
   std::lock_guard<std::mutex> pool_lock(pool_mutex_);
   return store_.Sync();
