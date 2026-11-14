@@ -1,7 +1,9 @@
 #include "flatfiledb/application.h"
 
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <utility>
 #include <variant>
@@ -11,20 +13,38 @@
 
 namespace flatfiledb::application {
 
+namespace {
+
+// Binds statement against the engine's catalog and runs the plan. Takes no
+// lock: the caller holds the database-level lock for the whole call.
+domain::ExecutionResult BindAndExecute(domain::IEngine& engine,
+                                       const domain::Statement& statement) {
+  domain::BindResult bound = domain::Bind(statement, engine.Catalog());
+  if (auto* error = std::get_if<domain::ExecutionError>(&bound)) {
+    return std::move(*error);
+  }
+  return engine.Execute(*std::get<domain::PlanPtr>(bound));
+}
+
+}  // namespace
+
 QueryService::QueryService(std::unique_ptr<domain::IEngine> engine,
                            std::unique_ptr<domain::ICsvSource> csv_source)
     : engine_(std::move(engine)), csv_source_(std::move(csv_source)) {}
 
 domain::ExecutionResult QueryService::Execute(
     const domain::Statement& statement) {
-  domain::BindResult bound = domain::Bind(statement, engine_->Catalog());
-  if (auto* error = std::get_if<domain::ExecutionError>(&bound)) {
-    return std::move(*error);
+  // The statement kind picks the lock mode before the lock is taken.
+  if (std::holds_alternative<domain::SelectStatement>(statement)) {
+    std::shared_lock<std::shared_mutex> read_lock(database_mutex_);
+    return BindAndExecute(*engine_, statement);
   }
-  return engine_->Execute(*std::get<domain::PlanPtr>(bound));
+  std::unique_lock<std::shared_mutex> write_lock(database_mutex_);
+  return BindAndExecute(*engine_, statement);
 }
 
 std::vector<domain::TableSchema> QueryService::DescribeCatalog() const {
+  std::shared_lock<std::shared_mutex> read_lock(database_mutex_);
   const domain::ICatalog& catalog = engine_->Catalog();
   std::vector<domain::TableSchema> schemas;
   for (const std::string& name : catalog.TableNames()) {
@@ -38,6 +58,9 @@ std::vector<domain::TableSchema> QueryService::DescribeCatalog() const {
 
 domain::ExecutionResult QueryService::ImportCsv(
     const domain::ImportRequest& request) {
+  // Exclusive for the whole call: the file read and the inference run under the
+  // lock because the inference reads the catalog that the import changes.
+  std::unique_lock<std::shared_mutex> write_lock(database_mutex_);
   if (!csv_source_) {
     return domain::ExecutionError{domain::ErrorKind::kUnsupported,
                                   "import is not available"};

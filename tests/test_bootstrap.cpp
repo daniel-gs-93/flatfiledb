@@ -1,11 +1,13 @@
 // Integration tests of OpenFlatFileDatabase against real database directories
-// (docs/TestDocument.md section 3.2).
+// (docs/TestDocument.md section 3.2), and of OpenPagedDatabase
+// (docs/PagedExecutionTestDocument.md).
 
 #include <unistd.h>
 
 #include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -13,6 +15,11 @@
 
 #include "flatfiledb/bootstrap.h"
 #include "flatfiledb/directory_lock.h"
+#include "flatfiledb/domain/value.h"
+#include "flatfiledb/paged/database.h"
+#include "flatfiledb/paged/paged_engine.h"
+#include "flatfiledb/paged/paged_types.h"
+#include "test_paged_support.h"
 #include "test_support.h"
 
 namespace {
@@ -267,4 +274,316 @@ TEST(test_bootstrap_empty_directory_has_no_tables) {
   domain::ExecutionResult result = testing::ExecuteSql(
       *opened->service, "CREATE TABLE t (id INT PRIMARY KEY)");
   CHECK(testing::AsCommandComplete(result) != nullptr);
+}
+
+// ---- OpenPagedDatabase -----------------------------------------------------
+
+namespace {
+
+constexpr std::size_t kPageBytes = flatfiledb::paged::kPageSize;
+const char* const kNotWritableReason = "directory is not writable";
+const char* const kLockedReason = "database is locked by another process";
+
+std::unique_ptr<bootstrap::OpenedDatabase> MustOpenPaged(
+    const std::filesystem::path& directory,
+    const bootstrap::OpenedDatabase* current = nullptr) {
+  OpenOutcome outcome =
+      bootstrap::OpenPagedDatabase(directory.string(), current);
+  if (const auto* reason = std::get_if<std::string>(&outcome)) {
+    testing::ReportFailure(__FILE__, __LINE__, "paged open failed: " + *reason);
+    return nullptr;
+  }
+  return std::make_unique<bootstrap::OpenedDatabase>(
+      std::move(std::get<bootstrap::OpenedDatabase>(outcome)));
+}
+
+// The reason the paged open failed, or "<opened>" after reporting that it
+// succeeded.
+std::string PagedOpenFailure(
+    const std::filesystem::path& directory,
+    const bootstrap::OpenedDatabase* current = nullptr) {
+  OpenOutcome outcome =
+      bootstrap::OpenPagedDatabase(directory.string(), current);
+  if (const auto* reason = std::get_if<std::string>(&outcome)) {
+    return *reason;
+  }
+  testing::ReportFailure(__FILE__, __LINE__, "the paged open succeeded");
+  return "<opened>";
+}
+
+// Executes sql and reports a failure when it is an error.
+void MustExecute(flatfiledb::application::QueryService& service,
+                 const std::string& sql) {
+  domain::ExecutionResult result = testing::ExecuteSql(service, sql);
+  if (const domain::ExecutionError* error = testing::AsError(result)) {
+    testing::ReportFailure(__FILE__, __LINE__,
+                           sql + " failed: " + error->message);
+  }
+}
+
+// `users=2 posts=0`: the tables of an opened database as the CLI lists them.
+std::string TablesText(const bootstrap::OpenedDatabase& opened) {
+  std::string text;
+  for (const bootstrap::TableCount& table : opened.tables) {
+    if (!text.empty()) {
+      text += ' ';
+    }
+    text += table.name + "=" + std::to_string(table.row_count);
+  }
+  return text;
+}
+
+// A paged database in `directory` with users (2 rows) and posts (no row),
+// closed again. Returns the first page of users, or 0 after a failure.
+flatfiledb::paged::PageId WritePagedFixture(
+    const std::filesystem::path& directory) {
+  std::unique_ptr<bootstrap::OpenedDatabase> opened = MustOpenPaged(directory);
+  if (opened == nullptr) {
+    return 0;
+  }
+  MustExecute(*opened->service,
+              "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE)");
+  MustExecute(*opened->service,
+              "CREATE TABLE posts (id INT PRIMARY KEY, body TEXT)");
+  MustExecute(*opened->service,
+              "INSERT INTO users VALUES (1, 'ann'), (2, 'bob')");
+  const std::optional<flatfiledb::paged::PageId> first_page =
+      opened->paged_engine->database().catalog().FirstPage("users");
+  CHECK(first_page.has_value());
+  return first_page.value_or(0);
+}
+
+void FlipByte(const std::filesystem::path& file, std::size_t offset) {
+  std::string bytes = testing::ReadFile(file);
+  CHECK(offset < bytes.size());
+  if (offset >= bytes.size()) {
+    return;
+  }
+  bytes[offset] = static_cast<char>(bytes[offset] ^ 0x01);
+  testing::WriteFile(file, bytes);
+}
+
+// A directory that does not exist (its parent does) and an existing empty
+// one: both get a paged.db, a lock and no table.
+void CheckOpenCreatesDirectoryAndFile() {
+  testing::TempDir dir;
+  const std::filesystem::path fresh = dir.path() / "fresh";
+  {
+    std::unique_ptr<bootstrap::OpenedDatabase> created = MustOpenPaged(fresh);
+    CHECK(created != nullptr);
+    if (created == nullptr) {
+      return;
+    }
+    CHECK(created->is_created);
+    CHECK(created->tables.empty());
+    CHECK(created->engine == bootstrap::EngineKind::kPaged);
+    CHECK(created->paged_engine != nullptr);
+    CHECK(created->service != nullptr);
+    CHECK(created->lock != nullptr);
+    // One share in the OpenedDatabase and one in the PagedEngine, which is
+    // declared before the Database so that the lock outlives its write-out.
+    CHECK_EQ(created->lock.use_count(), 2);
+    CHECK_EQ(created->directory, std::filesystem::canonical(fresh).string());
+    CHECK(std::filesystem::is_regular_file(fresh / "paged.db"));
+    CHECK(std::filesystem::exists(fresh / ".flatfiledb.lock"));
+    CHECK(IsLockHeld(fresh));
+  }
+  CHECK(!IsLockHeld(fresh));
+
+  testing::TempDir empty_dir;
+  std::unique_ptr<bootstrap::OpenedDatabase> existing =
+      MustOpenPaged(empty_dir.path());
+  CHECK(existing != nullptr);
+  if (existing == nullptr) {
+    return;
+  }
+  CHECK(!existing->is_created);
+  CHECK(existing->tables.empty());
+  CHECK(existing->notes.empty());
+  CHECK(std::filesystem::is_regular_file(empty_dir.path() / "paged.db"));
+
+  OpenOutcome missing_parent = bootstrap::OpenPagedDatabase(
+      (dir.path() / "nosuch" / "db").string(), nullptr);
+  CHECK(std::holds_alternative<std::string>(missing_parent));
+  if (const auto* reason = std::get_if<std::string>(&missing_parent)) {
+    CHECK_EQ(*reason, std::string("no such directory"));
+  }
+}
+
+// An existing paged.db: the row count of every table, in catalog order, comes
+// from RowCounts, and the data is queryable.
+void CheckOpenLoadsRowCounts() {
+  testing::TempDir dir;
+  WritePagedFixture(dir.path());
+
+  std::unique_ptr<bootstrap::OpenedDatabase> opened = MustOpenPaged(dir.path());
+
+  CHECK(opened != nullptr);
+  if (opened == nullptr) {
+    return;
+  }
+  CHECK(!opened->is_created);
+  CHECK_EQ(TablesText(*opened), std::string("users=2 posts=0"));
+  for (const bootstrap::TableCount& table : opened->tables) {
+    CHECK(table.rejected_lines.empty());
+  }
+  domain::ExecutionResult result = testing::ExecuteSql(
+      *opened->service, "SELECT id, username FROM users ORDER BY id");
+  const domain::ResultSet* result_set = testing::AsResultSet(result);
+  CHECK(result_set != nullptr);
+  if (result_set == nullptr) {
+    return;
+  }
+  CHECK_EQ(testing::RowsAsText(*result_set),
+           std::vector<std::string>({"1\tann", "2\tbob"}));
+}
+
+// `current` on the same directory: the lock is the same object and survives
+// the destruction of either owner, and the dirty pages of `current` are in the
+// file before the new Database reads it.
+void CheckReopenReusesLockAndFlushesCurrent() {
+  testing::TempDir dir;
+  WritePagedFixture(dir.path());
+  std::unique_ptr<bootstrap::OpenedDatabase> first = MustOpenPaged(dir.path());
+  CHECK(first != nullptr);
+  if (first == nullptr) {
+    return;
+  }
+  // CreateTable on the Database changes pages in the pool and writes none of
+  // them, as a statement that failed after its undo would leave them.
+  const domain::TableSchema schema = testing::MakeSchema(
+      "extra", {testing::Column("id", domain::DataType::kInt)});
+  CHECK(first->paged_engine->database().CreateTable(schema).ok());
+
+  std::unique_ptr<bootstrap::OpenedDatabase> second =
+      MustOpenPaged(dir.path(), first.get());
+
+  CHECK(second != nullptr);
+  if (second == nullptr) {
+    return;
+  }
+  CHECK(first->lock != nullptr);
+  CHECK(second->lock == first->lock);
+  CHECK(second->paged_engine != first->paged_engine);
+  CHECK_EQ(TablesText(*second), std::string("users=2 posts=0 extra=0"));
+  first.reset();
+  CHECK(IsLockHeld(dir.path()));
+  second.reset();
+  CHECK(!IsLockHeld(dir.path()));
+}
+
+// A flat-file database on the same directory hands over its lock too, and its
+// result names the flat-file engine.
+void CheckSwitchFromFlatFileReusesLock() {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+  std::unique_ptr<bootstrap::OpenedDatabase> flat_file =
+      MustOpen(dir.path(), false);
+  CHECK(flat_file != nullptr);
+  if (flat_file == nullptr) {
+    return;
+  }
+  CHECK(flat_file->engine == bootstrap::EngineKind::kFlatFile);
+  CHECK(flat_file->paged_engine == nullptr);
+
+  std::unique_ptr<bootstrap::OpenedDatabase> paged_database =
+      MustOpenPaged(dir.path(), flat_file.get());
+
+  CHECK(paged_database != nullptr);
+  if (paged_database == nullptr) {
+    return;
+  }
+  CHECK(paged_database->lock == flat_file->lock);
+  CHECK(paged_database->engine == bootstrap::EngineKind::kPaged);
+  CHECK(paged_database->tables.empty());
+  flat_file.reset();
+  CHECK(IsLockHeld(dir.path()));
+}
+
+// A paged.db with a damaged header, and one with a damaged table page: the
+// whole open fails with a description that says corrupt, and the database the
+// caller already has is untouched.
+void CheckCorruptFileFailsWholeOpen() {
+  testing::TempDir good_dir;
+  WritePagedFixture(good_dir.path());
+  std::unique_ptr<bootstrap::OpenedDatabase> current =
+      MustOpenPaged(good_dir.path());
+  CHECK(current != nullptr);
+  if (current == nullptr) {
+    return;
+  }
+
+  testing::TempDir header_dir;
+  WritePagedFixture(header_dir.path());
+  FlipByte(header_dir.path() / "paged.db", flatfiledb::paged::layout::kMagic);
+  testing::TempDir page_dir;
+  const flatfiledb::paged::PageId table_page =
+      WritePagedFixture(page_dir.path());
+  CHECK(table_page != 0);
+  FlipByte(page_dir.path() / "paged.db", table_page * kPageBytes + 200);
+
+  const std::string header_reason =
+      PagedOpenFailure(header_dir.path(), current.get());
+  const std::string page_reason =
+      PagedOpenFailure(page_dir.path(), current.get());
+
+  CHECK(header_reason.starts_with("corrupt: "));
+  CHECK(page_reason.starts_with("corrupt: "));
+  CHECK(IsLockHeld(good_dir.path()));
+  CHECK(!IsLockHeld(header_dir.path()));
+  CHECK(!IsLockHeld(page_dir.path()));
+  CHECK_EQ(TablesText(*current), std::string("users=2 posts=0"));
+  domain::ExecutionResult result =
+      testing::ExecuteSql(*current->service, "SELECT COUNT(*) FROM users");
+  const domain::ResultSet* result_set = testing::AsResultSet(result);
+  CHECK(result_set != nullptr);
+  if (result_set == nullptr) {
+    return;
+  }
+  CHECK_EQ(testing::RowsAsText(*result_set), std::vector<std::string>({"2"}));
+}
+
+// Another holder of the directory lock refuses the open; so does a directory in
+// which no lock file can be created, where flat-file would read without one.
+void CheckUnavailableDirectoryIsRefused() {
+  testing::TempDir locked_dir;
+  infrastructure::LockOutcome held =
+      infrastructure::DirectoryLock::Acquire(locked_dir.path().string());
+  CHECK(held.lock != nullptr);
+  CHECK_EQ(PagedOpenFailure(locked_dir.path()), std::string(kLockedReason));
+  CHECK(!std::filesystem::exists(locked_dir.path() / "paged.db"));
+
+  // As root a 0555 directory stays writable, so this case does not apply.
+  if (::geteuid() == 0) {
+    return;
+  }
+  testing::TempDir read_only_dir;
+  std::filesystem::permissions(
+      read_only_dir.path(),
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
+      std::filesystem::perm_options::replace);
+  CHECK_EQ(PagedOpenFailure(read_only_dir.path()),
+           std::string(kNotWritableReason));
+  CHECK(!std::filesystem::exists(read_only_dir.path() / "paged.db"));
+  // Flat-file opens the same directory (no lock) and the lock is not held.
+  std::unique_ptr<bootstrap::OpenedDatabase> flat_file =
+      MustOpen(read_only_dir.path(), false);
+  CHECK(flat_file != nullptr);
+  if (flat_file == nullptr) {
+    return;
+  }
+  CHECK(flat_file->lock == nullptr);
+  CHECK_EQ(PagedOpenFailure(read_only_dir.path(), flat_file.get()),
+           std::string(kNotWritableReason));
+}
+
+}  // namespace
+
+TEST(test_bootstrap_paged_open_create_and_reuse_lock) {
+  CheckOpenCreatesDirectoryAndFile();
+  CheckOpenLoadsRowCounts();
+  CheckReopenReusesLockAndFlushesCurrent();
+  CheckSwitchFromFlatFileReusesLock();
+  CheckCorruptFileFailsWholeOpen();
+  CheckUnavailableDirectoryIsRefused();
 }

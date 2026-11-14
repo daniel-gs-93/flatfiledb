@@ -32,8 +32,13 @@ add_library(flatfiledb_core STATIC
         src/paged/catalog.cpp
         src/paged/crc32c.cpp
         src/paged/database.cpp
+        src/paged/heap_access.cpp
+        src/paged/mutation_planner.cpp
+        src/paged/operators.cpp
         src/paged/page_store.cpp
+        src/paged/paged_engine.cpp
         src/paged/replacement_policy.cpp
+        src/paged/row_keys.cpp
         src/paged/slotted_page.cpp
         src/paged/table_heap.cpp
         src/paged/tuple_codec.cpp
@@ -60,6 +65,10 @@ add_executable(flatfiledb_tests
         tests/test_csv_codec.cpp
         tests/test_csv_repository.cpp
         tests/test_directory_lock.cpp
+        tests/test_engine_command.cpp
+        tests/test_equivalence.cpp
+        tests/test_equivalence_generator.cpp
+        tests/test_equivalence_support.cpp
         tests/test_expression.cpp
         tests/test_flat_file_engine.cpp
         tests/test_import.cpp
@@ -67,12 +76,17 @@ add_executable(flatfiledb_tests
         tests/test_paged_buffer.cpp
         tests/test_paged_catalog.cpp
         tests/test_paged_database.cpp
+        tests/test_paged_engine.cpp
         tests/test_paged_environment.cpp
+        tests/test_paged_execution_environment.cpp
         tests/test_paged_bytes.cpp
+        tests/test_paged_operators.cpp
+        tests/test_paged_planner.cpp
         tests/test_paged_policy.cpp
         tests/test_paged_slotted_page.cpp
         tests/test_paged_table_heap.cpp
         tests/test_query_service.cpp
+        tests/test_query_service_lock.cpp
         tests/test_repl.cpp
         tests/test_sql_parser.cpp
         tests/test_statement_buffer.cpp

@@ -2,6 +2,7 @@
 #define FLATFILEDB_APPLICATION_H_
 
 #include <memory>
+#include <shared_mutex>
 #include <vector>
 
 #include "flatfiledb/domain/ast.h"
@@ -13,6 +14,27 @@ namespace flatfiledb::application {
 
 // Executes one statement: binds it against the engine's catalog, then hands
 // the plan to the engine. Owns the engine. Imports only the domain.
+//
+// Concurrency (docs/PagedExecutionDesignDocument.md 2.5). One database-level
+// std::shared_mutex, above the engine, serializes statements and prevents a
+// reader from seeing a half-applied write (data race), two writers from
+// interleaving their read-modify-write steps (lost update), and a DDL
+// statement from changing the schema between bind and execute (stale column
+// positions). Execute of a SelectStatement and DescribeCatalog take it shared;
+// Execute of every other statement and ImportCsv take it exclusive. A call
+// holds the lock for its whole body (bind and execute are one critical section)
+// in a local lock object, so the lock never crosses a call. The member
+// functions are not reentrant: none calls another one that takes the lock.
+// Page I/O of the engine runs under the lock.
+//
+// Lock order: this lock comes before every storage-layer lock (the table heap
+// cache mutex of Database, the Catalog lock, the frame latch, the pool
+// mutex). Code that holds any of them never calls into QueryService, so no
+// thread waits for this lock while holding one of those.
+//
+// All three member functions may be called from several threads at the same
+// time. The object is neither copyable nor movable (the mutex); callers hold it
+// behind a std::unique_ptr.
 class QueryService {
  public:
   // csv_source serves ImportCsv; without it ImportCsv reports kUnsupported.
@@ -37,6 +59,9 @@ class QueryService {
  private:
   std::unique_ptr<domain::IEngine> engine_;
   std::unique_ptr<domain::ICsvSource> csv_source_;
+  // The database-level lock; mutable so that DescribeCatalog() const can take
+  // it shared.
+  mutable std::shared_mutex database_mutex_;
 };
 
 }  // namespace flatfiledb::application

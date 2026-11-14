@@ -22,8 +22,9 @@
 // (the references between the members point at heap objects whose addresses do
 // not change) but not copied.
 //
-// Writes need the caller to ensure a single writer at a time (for example with
-// a database-level reader-writer lock); reads may run from several threads.
+// Writes need the caller to ensure a single writer at a time (QueryService
+// holds a database-level reader-writer lock for this); reads may run from
+// several threads.
 
 namespace flatfiledb::paged {
 

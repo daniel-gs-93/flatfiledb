@@ -304,8 +304,9 @@ TEST(test_repl_help_lists_commands_and_quit_stops_reading) {
   Lines exit_first = Run({".exit", ".help"});
 
   CHECK(!quit_first.empty());
-  for (const char* marker : {".open", ".import", ".tables", ".schema", ".clear",
-                             ".cancel", ".help", ".quit"}) {
+  for (const char* marker :
+       {".open", ".engine", ".import", ".tables", ".schema", ".clear",
+        ".cancel", ".help", ".quit"}) {
     CHECK_EQ(CountLinesStartingWith(quit_first, marker), 1);
   }
   bool has_not_null_line = false;

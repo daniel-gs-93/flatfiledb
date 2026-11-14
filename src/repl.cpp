@@ -32,15 +32,18 @@ constexpr const char* kImportUsage =
     ".import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]... "
     "[--skip-bad-rows]";
 // The command names that are recognised when typed without the leading '.'.
-constexpr const char* kCommandNames[] = {"open",   "import", "tables",
-                                         "schema", "help",   "quit",
-                                         "exit",   "clear",  "cancel"};
+constexpr const char* kCommandNames[] = {"open",   "engine", "import", "tables",
+                                         "schema", "help",   "quit",   "exit",
+                                         "clear",  "cancel"};
 constexpr std::size_t kMaxListedLines = 10;
 constexpr const char* kNoDatabase =
     "error: no database open; run .open first\n";
+constexpr const char* kEngineUsage = ".engine [flatfile|paged]";
 constexpr const char* kHelp =
     ".open <directory> [--parallel]  open a database directory (created when "
     "missing)\n"
+    ".engine [flatfile|paged]        show or set the engine (default "
+    "flatfile)\n"
     ".import <file.csv> [<table>] [--pk <column>] [--type <column>=<type>]...\n"
     "        [--skip-bad-rows]       import a CSV file as a new table\n"
     ".tables                         list the tables\n"
@@ -54,6 +57,7 @@ constexpr const char* kHelp =
     "NOT NULL is accepted but has no effect (there is no NULL).\n";
 
 using Database = std::optional<bootstrap::OpenedDatabase>;
+using bootstrap::EngineKind;
 
 std::string UsageError(const std::string& usage) {
   return "syntax error at column 1: usage: " + usage + "\n";
@@ -185,22 +189,43 @@ std::string DescribeRejectedLines(
   return text;
 }
 
-// Opens the database named by `arguments` and returns the line to print. A
-// successful open replaces `database`; a failed one leaves it untouched.
-std::string OpenDatabase(const OpenArguments& arguments, Database& database) {
-  auto opened = bootstrap::OpenFlatFileDatabase(
-      arguments.directory, arguments.is_parallel,
-      database ? &*database : nullptr);
+// What opening a database printed, and whether it replaced the current one.
+struct OpenReport {
+  bool is_opened;
+  std::string text;  // ends with a newline
+};
+
+// One `note:` line per element of `notes`.
+std::string DescribeNotes(const std::vector<std::string>& notes) {
+  std::string text;
+  for (const std::string& note : notes) {
+    text += note + "\n";
+  }
+  return text;
+}
+
+// Opens the database named by `arguments` with `engine` and reports the lines
+// to print. A successful open replaces `database`; a failed one leaves it
+// untouched. `--parallel` only has an effect on the flat-file engine.
+OpenReport OpenDatabase(const OpenArguments& arguments, EngineKind engine,
+                        Database& database) {
+  const bootstrap::OpenedDatabase* current = database ? &*database : nullptr;
+  auto opened = engine == EngineKind::kPaged
+                    ? bootstrap::OpenPagedDatabase(arguments.directory, current)
+                    : bootstrap::OpenFlatFileDatabase(
+                          arguments.directory, arguments.is_parallel, current);
   if (const auto* reason = std::get_if<std::string>(&opened)) {
-    return "error: could not open " + arguments.directory + ": " + *reason +
-           "\n";
+    return OpenReport{false, "error: could not open " + arguments.directory +
+                                 ": " + *reason + "\n"};
   }
   database = std::move(std::get<bootstrap::OpenedDatabase>(opened));
   if (database->is_created) {
-    return "created new database " + arguments.directory + "\n";
+    return OpenReport{true, "created new database " + arguments.directory +
+                                "\n" + DescribeNotes(database->notes)};
   }
-  return "loaded " + DescribeTables(database->tables) + "\n" +
-         DescribeRejectedLines(database->tables);
+  return OpenReport{true, "loaded " + DescribeTables(database->tables) + "\n" +
+                              DescribeRejectedLines(database->tables) +
+                              DescribeNotes(database->notes)};
 }
 
 std::string ExecuteSql(const std::string& statement_text, Database& database) {
@@ -318,11 +343,63 @@ std::optional<domain::ImportRequest> ParseImportArguments(
   return request;
 }
 
+const char* EngineName(EngineKind engine) {
+  return engine == EngineKind::kPaged ? "paged" : "flatfile";
+}
+
+// The engine named in `.engine <name>`; std::nullopt for any other word.
+std::optional<EngineKind> ParseEngineName(const std::string& name) {
+  if (name == "flatfile") {
+    return EngineKind::kFlatFile;
+  }
+  if (name == "paged") {
+    return EngineKind::kPaged;
+  }
+  return std::nullopt;
+}
+
+// `.engine` shows the engine of the session; `.engine <name>` sets it. Naming
+// the current engine only prints it. With a database open, naming the other
+// engine reopens its directory with that engine and prints what `.open` would;
+// the engine of the session changes only when that open succeeds, so a failed
+// switch prints the error alone and leaves the database and the setting as
+// they were (ADR-0041).
+CommandOutcome HandleEngineCommand(const std::vector<std::string>& tokens,
+                                   Database& database, EngineKind& engine) {
+  if (tokens.size() > 2) {
+    return Text(UsageError(kEngineUsage));
+  }
+  if (tokens.size() == 1) {
+    return Text(std::string("engine ") + EngineName(engine) + "\n");
+  }
+  const std::optional<EngineKind> requested = ParseEngineName(tokens[1]);
+  if (!requested) {
+    return Text(UsageError(kEngineUsage));
+  }
+  const std::string announcement =
+      std::string("engine ") + EngineName(*requested) + "\n";
+  if (*requested == engine) {
+    return Text(announcement);
+  }
+  if (!database) {
+    engine = *requested;
+    return Text(announcement);
+  }
+  // The reopen replaces `database`, so the directory is copied out first.
+  const OpenArguments arguments{database->directory, false};
+  const OpenReport report = OpenDatabase(arguments, *requested, database);
+  if (!report.is_opened) {
+    return Text(report.text);
+  }
+  engine = *requested;
+  return Text(announcement + report.text);
+}
+
 // Runs the line when its first token is a command; otherwise reports that it is
 // not one, so that the line is read as SQL (an unknown ".foo" is then a syntax
 // error from the parser).
 CommandOutcome HandleCommand(const std::string& line, Database& database,
-                             bool is_interactive) {
+                             EngineKind& engine, bool is_interactive) {
   std::vector<std::string> tokens = SplitWhitespace(line);
   if (tokens.empty()) {
     return CommandOutcome{false, "", false};
@@ -333,7 +410,10 @@ CommandOutcome HandleCommand(const std::string& line, Database& database,
     if (!arguments) {
       return Text(UsageError(".open <directory> [--parallel]"));
     }
-    return Text(OpenDatabase(*arguments, database));
+    return Text(OpenDatabase(*arguments, engine, database).text);
+  }
+  if (name == ".engine") {
+    return HandleEngineCommand(tokens, database, engine);
   }
   if (name == ".import") {
     std::optional<domain::ImportRequest> request = ParseImportArguments(tokens);
@@ -513,11 +593,13 @@ const char* PromptFor(const StatementBuffer& buffer) {
 void RunRepl(std::istream& input, std::ostream& output, bool is_interactive,
              const std::optional<InitialOpen>& initial_open) {
   Database database;
+  EngineKind engine = EngineKind::kFlatFile;  // not kept across runs
   StatementBuffer buffer;
   if (initial_open) {
-    output << OpenDatabase(
-        OpenArguments{initial_open->directory, initial_open->is_parallel},
-        database);
+    output << OpenDatabase(OpenArguments{initial_open->directory,
+                                         initial_open->is_parallel},
+                           engine, database)
+                  .text;
   }
   std::string line;
   while (true) {
@@ -538,7 +620,8 @@ void RunRepl(std::istream& input, std::ostream& output, bool is_interactive,
         output << hint;
         continue;
       }
-      CommandOutcome command = HandleCommand(line, database, is_interactive);
+      CommandOutcome command =
+          HandleCommand(line, database, engine, is_interactive);
       if (command.is_command) {
         output << command.text;
         if (command.should_quit) {

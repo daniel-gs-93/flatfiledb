@@ -122,10 +122,12 @@ bool IsAllowed(Layer layer, const std::string& header) {
              header == "flatfiledb/sql_parser.h";
     case Layer::kBootstrap:
       // The composition root: the only file outside Infrastructure that may
-      // name infrastructure types.
+      // name infrastructure types, and (bootstrap.cpp alone, see
+      // CheckPagedRules) paged types.
       return StartsWith(header, "flatfiledb/domain/") ||
              header == "flatfiledb/application.h" ||
              header == "flatfiledb/bootstrap.h" ||
+             StartsWith(header, "flatfiledb/paged/") ||
              IsInfrastructureHeader(header);
     case Layer::kCli:
       return StartsWith(header, "flatfiledb/domain/") ||
@@ -187,6 +189,9 @@ TEST(test_layering_includes_follow_dependency_direction) {
 
 namespace {
 
+// The only file outside paged/ that may include a paged/ header.
+const char* const kPagedComposer = "bootstrap.cpp";
+
 // The byte layer of the paged engine: pure functions on bytes. It may include
 // the domain, the shared types and each other, but nothing that does I/O,
 // locks or pins (docs/PagedEngineDesignDocument.md 2.1).
@@ -241,7 +246,9 @@ int CheckPagedRules(const std::filesystem::path& root) {
         continue;
       }
       if (!is_paged) {
-        if (StartsWith(header, "flatfiledb/paged/")) {
+        // The composition root builds the paged engine; bootstrap.h only
+        // forward-declares it (docs/PagedExecutionDesignDocument.md 2.1).
+        if (StartsWith(header, "flatfiledb/paged/") && path != kPagedComposer) {
           ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
                                                path + " includes " + header);
         }
@@ -272,4 +279,137 @@ TEST(test_layering_paged_depends_only_on_domain_and_itself) {
                           CheckPagedRules(source_dir / "src");
   // The scan must have found the layer; an empty scan would pass vacuously.
   CHECK(paged_files >= 20);
+}
+
+namespace {
+
+// The row layer of the paged engine: the operators, the mutation planner and
+// the keys they use, which read rows only through IRowStream (design document
+// 2.1). It may include the domain, the shared types, the byte layer's tuple
+// codec and its own files, and nothing that pins, locks or does I/O.
+const char* const kRowLayerNames[] = {"row_stream", "row_keys", "operators",
+                                      "mutation_planner"};
+
+bool IsRowLayerFile(const std::string& path) {
+  for (const char* name : kRowLayerNames) {
+    if (path == std::string("flatfiledb/paged/") + name + ".h" ||
+        path == std::string("paged/") + name + ".cpp") {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsRowLayerAllowedHeader(const std::string& header) {
+  if (StartsWith(header, "flatfiledb/domain/")) {
+    return true;
+  }
+  if (header == "flatfiledb/paged/paged_types.h" ||
+      header == "flatfiledb/paged/tuple_codec.h") {
+    return true;
+  }
+  for (const char* name : kRowLayerNames) {
+    if (header == std::string("flatfiledb/paged/") + name + ".h") {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool IsApplicationFile(const std::string& path) {
+  return path == "flatfiledb/application.h" || path == "application.cpp";
+}
+
+bool IsBootstrapHeader(const std::string& path) {
+  return path == "flatfiledb/bootstrap.h";
+}
+
+bool IsPagedFile(const std::string& path) {
+  return StartsWith(path, "flatfiledb/paged/") || StartsWith(path, "paged/");
+}
+
+// What the scan of one root found.
+struct RowLayerScan {
+  int row_layer_files = 0;
+  int application_files = 0;
+  int bootstrap_files = 0;
+};
+
+void ReportViolation(const std::string& path, const std::string& header,
+                     const std::string& rule) {
+  ::flatfiledb::testing::ReportFailure(
+      __FILE__, __LINE__, path + " includes " + header + ": " + rule);
+}
+
+// Checks one include line of one file against the rules that concern the row
+// layer, Application and Bootstrap.
+void CheckRowLayerRulesFor(const std::string& path, const std::string& header) {
+  if (IsRowLayerFile(path) && !IsRowLayerAllowedHeader(header)) {
+    ReportViolation(path, header, "the row layer must not include it");
+  }
+  if (IsApplicationFile(path) && !StartsWith(header, "flatfiledb/domain/") &&
+      header != "flatfiledb/application.h") {
+    ReportViolation(path, header,
+                    "Application includes only the domain and itself");
+  }
+  if (IsBootstrapHeader(path) && StartsWith(header, "flatfiledb/paged/")) {
+    ReportViolation(path, header, "bootstrap.h only forward-declares paged");
+  }
+  if (!IsPagedFile(path) && path != kPagedComposer &&
+      StartsWith(header, "flatfiledb/paged/")) {
+    ReportViolation(path, header, "only bootstrap.cpp includes paged/");
+  }
+}
+
+RowLayerScan ScanRowLayerRules(const std::filesystem::path& root) {
+  RowLayerScan scan;
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(root)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const std::string extension = entry.path().extension().string();
+    if (extension != ".h" && extension != ".cpp") {
+      continue;
+    }
+    const std::string path =
+        std::filesystem::relative(entry.path(), root).generic_string();
+    if (IsRowLayerFile(path)) {
+      ++scan.row_layer_files;
+    }
+    if (IsApplicationFile(path)) {
+      ++scan.application_files;
+    }
+    if (IsBootstrapHeader(path) || path == kPagedComposer) {
+      ++scan.bootstrap_files;
+    }
+    std::ifstream file(entry.path());
+    std::string line;
+    while (std::getline(file, line)) {
+      const std::string header = ProjectHeaderOf(line);
+      if (header.empty()) {
+        continue;
+      }
+      CheckRowLayerRulesFor(path, header);
+    }
+  }
+  return scan;
+}
+
+}  // namespace
+
+TEST(test_layering_row_layer_and_bootstrap_rules) {
+  const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
+  const RowLayerScan include_scan = ScanRowLayerRules(source_dir / "include");
+  const RowLayerScan source_scan = ScanRowLayerRules(source_dir / "src");
+
+  // An empty scan would pass vacuously: the four row layer headers, the three
+  // row layer sources (row_stream has none), application.h and .cpp, and
+  // bootstrap.h and .cpp must all have been found.
+  CHECK_EQ(include_scan.row_layer_files, 4);
+  CHECK_EQ(source_scan.row_layer_files, 3);
+  CHECK_EQ(include_scan.application_files, 1);
+  CHECK_EQ(source_scan.application_files, 1);
+  CHECK_EQ(include_scan.bootstrap_files, 1);
+  CHECK_EQ(source_scan.bootstrap_files, 1);
 }

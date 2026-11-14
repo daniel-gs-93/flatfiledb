@@ -516,3 +516,46 @@ TEST(test_paged_heap_open_rejects_broken_chains) {
   CHECK_EQ(wrong_type.error_name, "kCorrupt");
   CHECK(wrong_type.message.find("page ") != std::string::npos);
 }
+
+// A scan that failed on the second slot of a page has already decoded the
+// first slot. The error ends the scan: every later Next returns no value, and
+// never the row that was decoded before the failure.
+TEST(test_paged_heap_scan_ends_after_a_page_error) {
+  HeapEnv env(4);
+  if (!env.is_ready()) {
+    return;
+  }
+  for (std::int64_t id = 0; id < 3; ++id) {
+    MustInsert(env.heap(), PersonRow(id));
+  }
+  CHECK_EQ(ScanAll(env.heap()).size(), static_cast<std::size_t>(3));
+
+  // Slot 1 gets an offset inside the page header: Get reports kCorrupt.
+  {
+    auto fetched =
+        env.buffer().FetchPage(env.heap().first_page(), LatchMode::kExclusive);
+    CHECK_OK(fetched);
+    if (!fetched.ok()) {
+      return;
+    }
+    PageGuard guard = std::move(fetched).value();
+    const std::size_t slot_position =
+        flatfiledb::paged::kPageHeaderSize + flatfiledb::paged::kSlotSize;
+    flatfiledb::paged::WriteLe16(guard.mutable_data() + slot_position, 8);
+    flatfiledb::paged::WriteLe16(guard.mutable_data() + slot_position + 2, 10);
+    guard.MarkDirty();
+  }
+
+  flatfiledb::paged::HeapScan scan = env.heap().Scan();
+  auto first = scan.Next();
+  CHECK_ERROR(first, kCorrupt);
+  CHECK_MESSAGE_CONTAINS(first, "slot 1");
+  for (int call = 0; call < 3; ++call) {
+    auto after_error = scan.Next();
+    CHECK_OK(after_error);
+    if (after_error.ok()) {
+      CHECK(!after_error.value().has_value());
+    }
+  }
+  CHECK_EQ(env.buffer().PinnedFrameCount(), static_cast<std::size_t>(0));
+}

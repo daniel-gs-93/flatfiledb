@@ -33,7 +33,11 @@ PageResult<std::optional<ScanItem>> HeapScan::Next() {
       return std::optional<ScanItem>();
     }
     if (Status status = LoadPage(next_page_)) {
+      // The rows decoded before the failing slot must not be returned by a
+      // later call: after an error the scan is over.
       is_done_ = true;
+      rows_.clear();
+      position_ = 0;
       return *status;
     }
   }
