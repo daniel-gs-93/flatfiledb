@@ -10,11 +10,11 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/paged_engine.h"
-#include "flatfiledb/repl.h"
+#include "strata/application.h"
+#include "strata/domain/value.h"
+#include "strata/paged/database.h"
+#include "strata/paged/paged_engine.h"
+#include "strata/repl.h"
 #include "test_equivalence_generator.h"
 #include "test_equivalence_support.h"
 #include "test_harness.h"
@@ -24,11 +24,11 @@
 // results are compared under design document 2.6 (ADR-0044); see
 // docs/PagedExecutionTestDocument.md.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
-namespace cli = flatfiledb::cli;
+namespace cli = strata::cli;
 
 using application::QueryService;
 using domain::ErrorKind;
@@ -1090,4 +1090,4 @@ TEST(test_equivalence_randomized_statements_match) {
   RunRandomStatements({20260303, ReplacementPolicyKind::kLru, 16});
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

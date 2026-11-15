@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/row_keys.h"
+#include "strata/paged/row_keys.h"
 
 #include <bit>
 #include <cstddef>
@@ -6,7 +6,7 @@
 #include <string>
 #include <variant>
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -63,4 +63,4 @@ std::string JoinKey(const Value& value) {
   return key;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

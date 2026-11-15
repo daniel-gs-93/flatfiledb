@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_PAGED_SUPPORT_H_
-#define FLATFILEDB_TESTS_TEST_PAGED_SUPPORT_H_
+#ifndef STRATA_TESTS_TEST_PAGED_SUPPORT_H_
+#define STRATA_TESTS_TEST_PAGED_SUPPORT_H_
 
 #include <array>
 #include <cstdint>
@@ -8,22 +8,22 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/paged_types.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/domain/value.h"
+#include "strata/paged/paged_types.h"
+#include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 
 // Helpers shared by the paged-layer tests (docs/PagedEngineTestDocument.md).
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 inline std::ostream& operator<<(std::ostream& stream, const Rid& rid) {
   return stream << "(" << rid.page_id << "," << rid.slot_id << ")";
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 using Page = std::array<std::uint8_t, paged::kPageSize>;
 
@@ -84,19 +84,19 @@ inline std::string MessageOf(const paged::Status& status) {
   return status.has_value() ? status->message : "";
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
 #define CHECK_OK(expression) \
-  CHECK_EQ(::flatfiledb::testing::Describe(expression), std::string("ok"))
+  CHECK_EQ(::strata::testing::Describe(expression), std::string("ok"))
 
 #define CHECK_ERROR(expression, code) \
-  CHECK_EQ(::flatfiledb::testing::ErrorName(expression), std::string(#code))
+  CHECK_EQ(::strata::testing::ErrorName(expression), std::string(#code))
 
-#define CHECK_MESSAGE_CONTAINS(expression, text)                   \
-  CHECK(::flatfiledb::testing::MessageOf(expression).find(text) != \
+#define CHECK_MESSAGE_CONTAINS(expression, text)               \
+  CHECK(::strata::testing::MessageOf(expression).find(text) != \
         std::string::npos)
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 inline paged::ByteView ViewOf(const std::vector<std::uint8_t>& bytes) {
   return paged::ByteView{bytes.data(), bytes.size()};
@@ -150,6 +150,6 @@ inline domain::TableSchema MakeSchema(
   return schema;
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-#endif  // FLATFILEDB_TESTS_TEST_PAGED_SUPPORT_H_
+#endif  // STRATA_TESTS_TEST_PAGED_SUPPORT_H_

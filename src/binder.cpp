@@ -1,4 +1,4 @@
-#include "flatfiledb/domain/binder.h"
+#include "strata/domain/binder.h"
 
 #include <algorithm>
 #include <cassert>
@@ -12,14 +12,14 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/expression.h"
+#include "strata/domain/expression.h"
 
 // The Binder is pure: it reads the AST and the catalog and builds a plan. The
 // checks run in the order of docs/DesignDocument.md section 2.4 and the first
 // error wins. Each statement kind first rejects null expression pointers where
 // the AST requires one, so the later passes dereference them unchecked.
 
-namespace flatfiledb::domain {
+namespace strata::domain {
 
 namespace {
 
@@ -1930,4 +1930,4 @@ BindResult Bind(const Statement& statement, const ICatalog& catalog) {
   return std::move(bound.Value());
 }
 
-}  // namespace flatfiledb::domain
+}  // namespace strata::domain

@@ -1,8 +1,8 @@
-#include "flatfiledb/paged/crc32c.h"
+#include "strata/paged/crc32c.h"
 
 #include <array>
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -35,4 +35,4 @@ std::uint32_t Crc32c(const std::uint8_t* data, std::size_t size) {
   return crc ^ 0xFFFFFFFFu;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

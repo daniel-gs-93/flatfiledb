@@ -7,16 +7,16 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/binder.h"
-#include "flatfiledb/flat_file_engine.h"
+#include "strata/application.h"
+#include "strata/domain/binder.h"
+#include "strata/flat_file_engine.h"
 #include "test_harness.h"
 #include "test_support.h"
 
 // Integration tests of FlatFileEngine driven through the parser, the Binder
 // and CsvRepository over temporary CSV files.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -2281,4 +2281,4 @@ TEST(test_engine_consecutive_writes_do_not_trip_the_change_check) {
       1);
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

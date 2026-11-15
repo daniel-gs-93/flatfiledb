@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/repl.h"
-#include "flatfiledb/sql_parser.h"
+#include "strata/repl.h"
+#include "strata/sql_parser.h"
 #include "test_support.h"
 
 // Unit and Integration tiers for the REPL (docs/TestDocument.md sections 3.1
@@ -13,10 +13,10 @@
 
 namespace {
 
-namespace adapter = flatfiledb::adapter;
-namespace cli = flatfiledb::cli;
-namespace domain = flatfiledb::domain;
-namespace testing = flatfiledb::testing;
+namespace adapter = strata::adapter;
+namespace cli = strata::cli;
+namespace domain = strata::domain;
+namespace testing = strata::testing;
 
 using Lines = std::vector<std::string>;
 
@@ -291,11 +291,11 @@ TEST(test_repl_prompts_are_printed_only_when_interactive) {
   std::string plain = RunText(input, false);
   std::string prompted = RunText(input, true);
 
-  CHECK(plain.find("flatfiledb>") == std::string::npos);
+  CHECK(plain.find("strata>") == std::string::npos);
   CHECK_EQ(plain, std::string(kFixtureALoaded) + "\nusername\nalice\n");
-  CHECK_EQ(prompted, std::string("flatfiledb> ") + kFixtureALoaded +
-                         "\nflatfiledb>        ...> username\nalice\n"
-                         "flatfiledb> ");
+  CHECK_EQ(prompted, std::string("strata> ") + kFixtureALoaded +
+                         "\nstrata>    ...> username\nalice\n"
+                         "strata> ");
 }
 
 TEST(test_repl_help_lists_commands_and_quit_stops_reading) {
@@ -422,16 +422,16 @@ TEST(test_repl_missing_dot_command_names_print_hint_and_are_not_executed) {
 TEST(test_repl_string_continuation_prompt_is_distinct) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
-  const std::string idle = "flatfiledb> ";
-  const std::string in_string = "         '> ";
-  const std::string pending = "       ...> ";
+  const std::string idle = "strata> ";
+  const std::string in_string = "     '> ";
+  const std::string pending = "   ...> ";
 
   const std::string prompted = RunText(
       {OpenLine(dir.path()), "SELECT username FROM users WHERE username = 'a",
        "b';", "SELECT 1"},
       true);
 
-  CHECK_EQ(idle.size(), std::size_t{12});
+  CHECK_EQ(idle.size(), std::size_t{8});
   CHECK_EQ(in_string.size(), idle.size());
   CHECK_EQ(pending.size(), idle.size());
   CHECK_EQ(prompted, idle + kFixtureALoaded + "\n" + idle + in_string +

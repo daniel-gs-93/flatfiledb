@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/buffer_manager.h"
+#include "strata/paged/buffer_manager.h"
 
 #include <cassert>
 #include <cstring>
@@ -8,10 +8,10 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/slotted_page.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -370,4 +370,4 @@ const void* BufferManager::FrameLatchAddress(FrameId frame) const {
   return &latches_[frame];
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

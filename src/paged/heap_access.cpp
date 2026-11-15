@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/heap_access.h"
+#include "strata/paged/heap_access.h"
 
 #include <cstddef>
 #include <memory>
@@ -12,7 +12,7 @@
 // the pages. Error mapping is pure; the stream and the reader hold a pointer
 // to a TableHeap or a reference to a Database; ApplyChangeSet writes pages.
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -307,4 +307,4 @@ std::optional<ExecutionError> InsertRows(Database& database,
   return std::nullopt;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

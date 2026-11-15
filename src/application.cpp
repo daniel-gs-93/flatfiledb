@@ -1,4 +1,4 @@
-#include "flatfiledb/application.h"
+#include "strata/application.h"
 
 #include <memory>
 #include <mutex>
@@ -9,9 +9,9 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/binder.h"
+#include "strata/domain/binder.h"
 
-namespace flatfiledb::application {
+namespace strata::application {
 
 namespace {
 
@@ -96,4 +96,4 @@ domain::ExecutionResult QueryService::ImportCsv(
   return domain::CommandComplete{std::move(tag), std::move(plan.notes)};
 }
 
-}  // namespace flatfiledb::application
+}  // namespace strata::application

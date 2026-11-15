@@ -11,26 +11,26 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/ast.h"
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/domain/plan.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/paged_engine.h"
-#include "flatfiledb/sql_parser.h"
+#include "strata/application.h"
+#include "strata/domain/ast.h"
+#include "strata/domain/import.h"
+#include "strata/domain/plan.h"
+#include "strata/domain/value.h"
+#include "strata/paged/paged_engine.h"
+#include "strata/sql_parser.h"
 #include "test_equivalence_support.h"
 #include "test_harness.h"
 #include "test_support.h"
 
-#ifndef FLATFILEDB_SOURCE_DIR
-#error "FLATFILEDB_SOURCE_DIR must be defined by the build"
+#ifndef STRATA_SOURCE_DIR
+#error "STRATA_SOURCE_DIR must be defined by the build"
 #endif
 
 // The real data volume of data/ and the sample database of sample_my_db/ on
 // both engines (docs/PagedExecutionTestDocument.md). Every file the tests write
 // is in a temporary directory; data/ and sample_my_db/ are only read.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -41,7 +41,7 @@ using paged::ReplacementPolicyKind;
 constexpr std::size_t kPagedFrames = 64;  // 256 KiB, far below the data volume
 
 std::filesystem::path SourceDirectory() {
-  return std::filesystem::path(FLATFILEDB_SOURCE_DIR);
+  return std::filesystem::path(STRATA_SOURCE_DIR);
 }
 
 std::filesystem::path DataDirectory() { return SourceDirectory() / "data"; }
@@ -64,7 +64,7 @@ bool CopyFiles(const std::filesystem::path& from,
       continue;
     }
     // The lock file of a database directory is not data.
-    if (entry.path().filename() == ".flatfiledb.lock") {
+    if (entry.path().filename() == ".strata.lock") {
       continue;
     }
     std::filesystem::copy_file(
@@ -538,4 +538,4 @@ TEST(test_environment_timing_of_both_engines) {
               TimeWorkload(engines.paged.service.get(), unordered_sql));
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

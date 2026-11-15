@@ -5,7 +5,7 @@
 
 #include "test_harness.h"
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -41,12 +41,12 @@ void MarkSkipped(const std::string& reason) {
   Current().skip_reason = reason;
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-// Usage: flatfiledb_tests [name-substring]. Runs the tests whose name contains
+// Usage: strata_tests [name-substring]. Runs the tests whose name contains
 // the substring, or every test when it is omitted.
 int main(int argc, char** argv) {
-  using flatfiledb::testing::Registry;
+  using strata::testing::Registry;
   const char* filter = argc > 1 ? argv[1] : "";
   int passed = 0;
   int failed = 0;
@@ -55,10 +55,10 @@ int main(int argc, char** argv) {
     if (std::strstr(test_case.name, filter) == nullptr) {
       continue;
     }
-    flatfiledb::testing::Current() = flatfiledb::testing::CurrentTest();
+    strata::testing::Current() = strata::testing::CurrentTest();
     std::cerr << "[ RUN  ] " << test_case.name << "\n";
     test_case.function();
-    const auto& current = flatfiledb::testing::Current();
+    const auto& current = strata::testing::Current();
     if (current.is_skipped) {
       ++skipped;
       std::cerr << "[ SKIP ] " << test_case.name << ": " << current.skip_reason

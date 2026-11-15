@@ -8,11 +8,11 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/binder.h"
+#include "strata/domain/binder.h"
 #include "test_harness.h"
 #include "test_support.h"
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -1186,4 +1186,4 @@ TEST(test_binder_suggests_close_names_for_unknown_tables_and_columns) {
   }
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

@@ -8,15 +8,15 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/ast.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/sql_parser.h"
+#include "strata/domain/ast.h"
+#include "strata/domain/value.h"
+#include "strata/sql_parser.h"
 #include "test_harness.h"
 
 namespace {
 
-namespace adapter = flatfiledb::adapter;
-namespace domain = flatfiledb::domain;
+namespace adapter = strata::adapter;
+namespace domain = strata::domain;
 
 constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
@@ -26,7 +26,7 @@ constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
 constexpr std::size_t kParserMaxExpressionDepth = 500;
 
 void ReportError(const std::string& message) {
-  flatfiledb::testing::ReportFailure(__FILE__, __LINE__, message);
+  strata::testing::ReportFailure(__FILE__, __LINE__, message);
 }
 
 // Rendering of the AST for shape assertions. A binary node reads OP(lhs, rhs)

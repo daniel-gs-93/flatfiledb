@@ -1,4 +1,4 @@
-#include "flatfiledb/flat_file_engine.h"
+#include "strata/flat_file_engine.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -16,7 +16,7 @@
 // persists the effect first and replaces the in-memory tables only after the
 // repository reported success, so a failed write leaves memory untouched.
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
@@ -283,4 +283,4 @@ domain::ExecutionResult FlatFileEngine::Execute(const domain::PlanNode& plan) {
   return ApplyRewrite(*repository_, store_, mutation);
 }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

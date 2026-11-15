@@ -1,4 +1,4 @@
-#include "flatfiledb/infrastructure.h"
+#include "strata/infrastructure.h"
 
 #include <algorithm>
 #include <atomic>
@@ -18,9 +18,9 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/csv_codec.h"
+#include "strata/csv_codec.h"
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
@@ -847,4 +847,4 @@ std::optional<std::string> CsvRepository::AppendRows(
   return failure;
 }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

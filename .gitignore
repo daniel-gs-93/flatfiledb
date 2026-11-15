@@ -15,7 +15,7 @@ compile_commands.json
 
 # Engine data files
 *.dat
-.flatfiledb.lock
+.strata.lock
 
 # CSV data, kept local only
 /data/

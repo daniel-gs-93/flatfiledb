@@ -6,14 +6,14 @@
 #include <memory>
 #include <string>
 
-#include "flatfiledb/directory_lock.h"
+#include "strata/directory_lock.h"
 #include "test_harness.h"
 #include "test_support.h"
 
 namespace {
 
-namespace infrastructure = flatfiledb::infrastructure;
-namespace testing = flatfiledb::testing;
+namespace infrastructure = strata::infrastructure;
+namespace testing = strata::testing;
 
 }  // namespace
 

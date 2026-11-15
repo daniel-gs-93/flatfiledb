@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_SUPPORT_H_
-#define FLATFILEDB_TESTS_TEST_SUPPORT_H_
+#ifndef STRATA_TESTS_TEST_SUPPORT_H_
+#define STRATA_TESTS_TEST_SUPPORT_H_
 
 #include <filesystem>
 #include <memory>
@@ -7,19 +7,19 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/engine.h"
-#include "flatfiledb/domain/plan.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/flat_file_engine.h"
-#include "flatfiledb/infrastructure.h"
+#include "strata/application.h"
+#include "strata/domain/engine.h"
+#include "strata/domain/plan.h"
+#include "strata/domain/value.h"
+#include "strata/flat_file_engine.h"
+#include "strata/infrastructure.h"
 #include "test_harness.h"
 
 // Shared helpers for the test files: temporary directories, the CSV fixtures
 // of docs/TestDocument.md section 1, a fake catalog, a decorator repository,
 // and small accessors for ExecutionResult.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 // A unique directory under the system temp directory, removed on destruction.
 // The destructor restores write permission first, so tests may chmod it.
@@ -141,6 +141,6 @@ const domain::ExecutionError* AsError(const domain::ExecutionResult& result);
 // Each row as its FormatValue cells joined by a Tab.
 std::vector<std::string> RowsAsText(const domain::ResultSet& result_set);
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-#endif  // FLATFILEDB_TESTS_TEST_SUPPORT_H_
+#endif  // STRATA_TESTS_TEST_SUPPORT_H_

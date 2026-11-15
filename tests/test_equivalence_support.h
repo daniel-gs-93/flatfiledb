@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_EQUIVALENCE_SUPPORT_H_
-#define FLATFILEDB_TESTS_TEST_EQUIVALENCE_SUPPORT_H_
+#ifndef STRATA_TESTS_TEST_EQUIVALENCE_SUPPORT_H_
+#define STRATA_TESTS_TEST_EQUIVALENCE_SUPPORT_H_
 
 #include <cstddef>
 #include <filesystem>
@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/paged_engine.h"
-#include "flatfiledb/paged/paged_types.h"
+#include "strata/application.h"
+#include "strata/domain/import.h"
+#include "strata/domain/value.h"
+#include "strata/paged/paged_engine.h"
+#include "strata/paged/paged_types.h"
 
 // The cross-engine comparison of docs/PagedExecutionDesignDocument.md section
 // 2.6 (ADR-0044), shared by the integration tests and the environment tests.
@@ -22,7 +22,7 @@
 // content of every table. Every function returns the description of the first
 // difference (or an empty optional), so a test decides how to report it.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 // ----------------------------------------------------------------------------
 // Result comparison (pure).
@@ -147,11 +147,11 @@ class EquivalenceRunner {
 bool ReportDifference(const char* file, int line,
                       const std::optional<std::string>& difference);
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
 // Runs sql on both engines of `runner` and fails the running test on the first
 // difference. Evaluates to true when the two are equivalent.
 #define RUN_EQUIVALENT(runner, sql) \
-  ::flatfiledb::testing::ReportDifference(__FILE__, __LINE__, (runner).Run(sql))
+  ::strata::testing::ReportDifference(__FILE__, __LINE__, (runner).Run(sql))
 
-#endif  // FLATFILEDB_TESTS_TEST_EQUIVALENCE_SUPPORT_H_
+#endif  // STRATA_TESTS_TEST_EQUIVALENCE_SUPPORT_H_

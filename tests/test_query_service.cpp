@@ -8,8 +8,8 @@
 
 namespace {
 
-namespace domain = flatfiledb::domain;
-namespace testing = flatfiledb::testing;
+namespace domain = strata::domain;
+namespace testing = strata::testing;
 
 struct FakeEngineLog {
   int execute_calls = 0;
@@ -52,7 +52,7 @@ domain::ResultSet OneRowResult() {
 
 TEST(test_query_service_binds_then_executes_on_engine) {
   auto log = std::make_shared<FakeEngineLog>();
-  flatfiledb::application::QueryService service(std::make_unique<FakeEngine>(
+  strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(OneRowResult())));
 
   domain::Statement statement = testing::MustParse("SELECT id FROM users");
@@ -76,7 +76,7 @@ TEST(test_query_service_binds_then_executes_on_engine) {
 
 TEST(test_query_service_bind_error_does_not_reach_engine) {
   auto log = std::make_shared<FakeEngineLog>();
-  flatfiledb::application::QueryService service(std::make_unique<FakeEngine>(
+  strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(OneRowResult())));
 
   domain::Statement statement = testing::MustParse("SELECT nosuch FROM users");
@@ -100,7 +100,7 @@ TEST(test_query_service_propagates_engine_errors) {
   for (domain::ErrorKind kind : kinds) {
     auto log = std::make_shared<FakeEngineLog>();
     domain::ExecutionError canned{kind, "canned message"};
-    flatfiledb::application::QueryService service(
+    strata::application::QueryService service(
         std::make_unique<FakeEngine>(log, domain::ExecutionResult(canned)));
 
     domain::Statement statement = testing::MustParse("SELECT id FROM users");
@@ -118,7 +118,7 @@ TEST(test_query_service_propagates_engine_errors) {
 
 TEST(test_query_service_returns_command_complete_from_engine) {
   auto log = std::make_shared<FakeEngineLog>();
-  flatfiledb::application::QueryService service(std::make_unique<FakeEngine>(
+  strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(domain::CommandComplete{"CREATE TABLE t"})));
 
   domain::Statement statement =
@@ -136,7 +136,7 @@ TEST(test_query_service_returns_command_complete_from_engine) {
 
 TEST(test_query_service_describe_catalog_returns_schemas_in_order) {
   auto log = std::make_shared<FakeEngineLog>();
-  flatfiledb::application::QueryService service(std::make_unique<FakeEngine>(
+  strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(domain::AffectedRows{0})));
   testing::FakeCatalog catalog;
 

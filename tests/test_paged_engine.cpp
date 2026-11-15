@@ -13,16 +13,16 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/binder.h"
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/heap_access.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/paged_engine.h"
-#include "flatfiledb/paged/slotted_page.h"
-#include "flatfiledb/paged/table_heap.h"
+#include "strata/application.h"
+#include "strata/domain/binder.h"
+#include "strata/domain/import.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/database.h"
+#include "strata/paged/heap_access.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/paged_engine.h"
+#include "strata/paged/slotted_page.h"
+#include "strata/paged/table_heap.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 #include "test_support.h"
@@ -30,7 +30,7 @@
 // HeapAccess and PagedEngine over a Database on a MemoryPageStore, and for one
 // test over real files (docs/PagedExecutionTestDocument.md).
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -2056,4 +2056,4 @@ TEST(test_paged_engine_statement_without_changes_does_not_write_back) {
   ExpectNoPins(engine);
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

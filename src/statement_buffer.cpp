@@ -1,4 +1,4 @@
-#include "flatfiledb/statement_buffer.h"
+#include "strata/statement_buffer.h"
 
 #include <cstddef>
 #include <string>
@@ -6,9 +6,9 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/sql_parser.h"
+#include "strata/sql_parser.h"
 
-namespace flatfiledb::cli {
+namespace strata::cli {
 
 namespace {
 
@@ -116,4 +116,4 @@ bool StatementBuffer::HasFullWidthSemicolon(const std::string& line) const {
   return false;
 }
 
-}  // namespace flatfiledb::cli
+}  // namespace strata::cli

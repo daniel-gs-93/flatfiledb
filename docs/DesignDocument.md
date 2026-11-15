@@ -1,8 +1,8 @@
-# FlatFileDB
+# Strata
 
 ## 1. Project Description
 
-FlatFileDB is a terminal database that accepts Structured Query Language (SQL) statements. One front end parses each statement, resolves names and builds a plan, and a replaceable engine executes the plan. This document covers that front end, the engine port (the interface every engine implements), the flatfile engine and the Command-Line Interface (CLI). The flatfile engine treats a directory as one database. `catalog.csv` records the table definitions, each table lives in its own Comma-Separated Values (CSV) file, and `CREATE TABLE` adds a table. It is the baseline that other engines are compared with. The paged engine, which persists data with pages and indexes, implements the same port. Its storage layer is designed in [PagedEngineDesignDocument.md](PagedEngineDesignDocument.md), and its execution layer and the `.engine` command in [PagedExecutionDesignDocument.md](PagedExecutionDesignDocument.md).
+Strata is a terminal database that accepts Structured Query Language (SQL) statements. One front end parses each statement, resolves names and builds a plan, and a replaceable engine executes the plan. This document covers that front end, the engine port (the interface every engine implements), the flatfile engine and the Command-Line Interface (CLI). The flatfile engine treats a directory as one database. `catalog.csv` records the table definitions, each table lives in its own Comma-Separated Values (CSV) file, and `CREATE TABLE` adds a table. It is the baseline that other engines are compared with. The paged engine, which persists data with pages and indexes, implements the same port. Its storage layer is designed in [PagedEngineDesignDocument.md](PagedEngineDesignDocument.md), and its execution layer and the `.engine` command in [PagedExecutionDesignDocument.md](PagedExecutionDesignDocument.md).
 
 The design leaves out NULL, transactions, a Write-Ahead Log (WAL), concurrency control inside the process, composite primary keys and composite foreign keys, and table-level constraints. A statement that is not in the syntax table of section 2.3 is a syntax error.
 
@@ -16,7 +16,7 @@ The text uses these terms:
 | plan | The Binder's output, columns referenced by position | `domain::PlanNode` |
 | engine | Executes a plan and persists data | `domain::IEngine`; `FlatFileEngine` here |
 | catalog | The table definitions | `domain::ICatalog`; `catalog.csv` |
-| database directory | `catalog.csv`, one CSV file per table and `.flatfiledb.lock` | The argument of `.open` |
+| database directory | `catalog.csv`, one CSV file per table and `.strata.lock` | The argument of `.open` |
 | command | A CLI meta command that starts with `.` | `.open`, `.import`, `.tables`, `.schema`, `.clear`, `.cancel`, `.help`, `.quit` |
 
 ## 2. Architecture
@@ -80,7 +80,7 @@ flowchart LR
     CsvRepository --> CsvCodec
 ```
 
-Headers are in `include/flatfiledb/` and implementations in `src/`. The Type column says whether a component is pure logic or library-backed.
+Headers are in `include/strata/` and implementations in `src/`. The Type column says whether a component is pure logic or library-backed.
 
 | Concern | Layer | Type | Files |
 |---|---|---|---|
@@ -298,7 +298,7 @@ Signatures of the functions that other components call:
 | `FormatParseError` | `std::string(const std::string& statement, const ParseError&)` | Places the `ParseError` as a column on a single line, or as a line and a column number |
 | `IEngine::Execute` | `ExecutionResult(const PlanNode&)` | An unsupported plan returns `kUnsupported` (ADR-0005), a write node `AffectedRows` and a DDL node `CommandComplete` |
 | `OpenFlatFileDatabase` | `std::variant<OpenedDatabase, std::string>(const std::string& directory, bool is_parallel, const OpenedDatabase* current)` | Flow in 3.5. `current` is the database the caller has open, or null; the string is the failure reason |
-| `DirectoryLock::Acquire` | `LockOutcome(const std::string& directory)` | Takes an exclusive `flock` on `.flatfiledb.lock` in the directory; rules in 2.6 |
+| `DirectoryLock::Acquire` | `LockOutcome(const std::string& directory)` | Takes an exclusive `flock` on `.strata.lock` in the directory; rules in 2.6 |
 | `FlatFileExecutor::RunQuery` | `ExecutionResult(const PlanNode&, const TableStore&)` | Executes Scan, Filter, Join, Aggregate, Project, Sort and Limit |
 | `FlatFileExecutor::PlanMutation` | `MutationOutcome(const PlanNode&, const TableStore&)` | Checks a write node per 2.5 and computes the new rows; `TableStore` is unchanged |
 | `FlatFileExecutor::PlanSchemaChange` | `SchemaChangeOutcome(const PlanNode&, const TableStore&, const std::optional<std::vector<Row>>&)` | Plans a DDL node without changing `TableStore`. The third argument holds the rows of an existing CSV when a table is created, and is empty when there is none |
@@ -462,7 +462,7 @@ The flatfile engine keeps every row in memory and stores each table as one CSV f
 |---|---|
 | Join | No upper limit on the number of tables. Joins are left-deep, and each `JoinNode` hashes on the equality condition between the accumulated left rows and the newly added table (ADR-0011) |
 | TEXT | No `\r` or line break, because load and write work line by line (ADR-0012). Commas and double quotes are stored quoted per RFC 4180 |
-| Database directory | `catalog.csv`, one `<table>.csv` per table (table name in lowercase) and `.flatfiledb.lock`. Temporary files are `<file name>.temp` and `<file name>.orig`. Other files are ignored |
+| Database directory | `catalog.csv`, one `<table>.csv` per table (table name in lowercase) and `.strata.lock`. Temporary files are `<file name>.temp` and `<file name>.orig`. Other files are ignored |
 | Reserved table name | `catalog`, case-insensitively, because `catalog.csv` is the catalog file |
 | Line break | A table write keeps the line break of the file's header line: `\r\n` when the header ends with `\r`, otherwise `\n`. `catalog.csv` always uses `\n` |
 | Header | A write keeps the original first non-blank line, unless `TableWrite::should_regenerate_header` is true (set by `ALTER TABLE ADD COLUMN`) or the file is missing or empty. Then the header is generated from the schema (ADR-0012) |
@@ -474,7 +474,7 @@ The flatfile engine keeps every row in memory and stores each table as one CSV f
 | `AppendRows` | Writes all rows at once. It adds a line break first when the file does not end with one, and writes the header first when the file does not exist or is empty. On failure it truncates the file to its size before the append and removes a file it created; when that cleanup also fails, the description says so |
 | External modification | At load, `CsvRepository` records the size and modification time of `catalog.csv` and each table file (a missing file is recorded too). Before writing or deleting, `Commit` and `AppendRows` compare each affected file with its record. On a difference they return `<file name> changed on disk since it was loaded; run .open again` and write no file. A successful write updates the record, and reads are unaffected (ADR-0022). A change that keeps both size and modification time goes unnoticed |
 | Durability | `fsync` is not called. If the process stops during the renames, the leftover `.orig` makes the next `Commit` fail, and the user restores the file. If it stops during `AppendRows`, the half-appended row stays in the file, and the next load rejects it or, when the cut falls at the last field, reads a different value |
-| Concurrency | One process at a time opens a database directory: `DirectoryLock::Acquire` takes an exclusive `flock` on `.flatfiledb.lock` (ADR-0015). The lock is advisory and does not stop a text editor. When the directory is not writable (creating the lock file fails with `EACCES` or `EROFS`), no lock is taken, since the process could not write anyway. When another process holds the lock, `database is locked by another process` is returned |
+| Concurrency | One process at a time opens a database directory: `DirectoryLock::Acquire` takes an exclusive `flock` on `.strata.lock` (ADR-0015). The lock is advisory and does not stop a text editor. When the directory is not writable (creating the lock file fails with `EACCES` or `EROFS`), no lock is taken, since the process could not write anyway. When another process holds the lock, `database is locked by another process` is returned |
 
 ### 2.7 Import Rules
 
@@ -685,7 +685,7 @@ Steps 14 to 17: the engine registers the tables in catalog order, and `Bootstrap
 
 ### 3.6 Interface
 
-`flatfiledb_cli [<directory> [--parallel]]` reads `stdin` line by line until the end of input and exits with status 0, as `.quit` does. If a `<directory>` is given, it is opened with the rules of `.open` before any input is read. The path is not split on whitespace, so it may contain spaces. If opening fails, the error is printed and reading continues. Arguments that do not match print `usage: flatfiledb_cli [<directory> [--parallel]]` to `stderr` and exit with status 2 without reading any input.
+`strata_cli [<directory> [--parallel]]` reads `stdin` line by line until the end of input and exits with status 0, as `.quit` does. If a `<directory>` is given, it is opened with the rules of `.open` before any input is read. The path is not split on whitespace, so it may contain spaces. If opening fails, the error is printed and reading continues. Arguments that do not match print `usage: strata_cli [<directory> [--parallel]]` to `stderr` and exit with status 2 without reading any input.
 
 The input is divided into commands and statements. When no statement is in progress, a line that starts with `.` and whose first whitespace-separated token is one of the commands in the table below (case-sensitive) is handled by `Cli`, and the command takes the whole line. Any other line that starts with `.`, and every line read while a statement is in progress, belongs to a statement.
 
@@ -716,7 +716,7 @@ stateDiagram-v2
 
 `Idle` has no statement in progress, and the next line may be a command. `Pending` holds statement text that no `;` has ended. `InString` is inside a string literal, where newlines and `;` both belong to the literal. A `;` in a line returns `Pending` to `Idle`, and the text after that `;` on the same line starts again from `Idle`. In `Pending`, a line that is only `.cancel` (leading and trailing whitespace removed) returns the buffer to `Idle`, discards the accumulated text and prints nothing. In `InString`, `.cancel` is not recognized and the line is literal content. The way out is a closing quote followed by `;`, or Ctrl-C (ADR-0023).
 
-When `stdin` is a terminal (`main` decides `is_interactive` of `RunRepl` with `isatty`), the prompt `flatfiledb> ` is printed before each line is read. While a statement is in progress the prompt is the continuation prompt `       ...> `, and inside a string literal it is `         '> ` (9 spaces plus `'> `). All three are 12 characters wide, so the input column stays put, and the last one shows that the input is inside a string. For a pipe or a file no prompt is printed, so the output is identical character for character to a run without prompts.
+When `stdin` is a terminal (`main` decides `is_interactive` of `RunRepl` with `isatty`), the prompt `strata> ` is printed before each line is read. While a statement is in progress the prompt is the continuation prompt `   ...> `, and inside a string literal it is `     '> ` (5 spaces plus `'> `). All three are 8 characters wide, so the input column stays put, and the last one shows that the input is inside a string. For a pipe or a file no prompt is printed, so the output is identical character for character to a run without prompts.
 
 A syntax error is reported as `syntax error at column <n>: <description>` when the statement has one line or the error falls on its first line. When the statement spans several lines and the error falls on the second line or later, the report is `syntax error at line <l>, column <c>: <description>`. Both `l` and `c` count from 1, and `c` is the position within that line.
 
@@ -757,11 +757,11 @@ Write statements and DDL rewrite the database directory, so the demonstration wo
 
 ```bash
 (
-  CLI="$PWD/build/flatfiledb_cli"
-  rm -rf /tmp/flatfiledb_demo
-  mkdir /tmp/flatfiledb_demo
-  cp -R data /tmp/flatfiledb_demo/
-  cd /tmp/flatfiledb_demo
+  CLI="$PWD/build/strata_cli"
+  rm -rf /tmp/strata_demo
+  mkdir /tmp/strata_demo
+  cp -R data /tmp/strata_demo/
+  cd /tmp/strata_demo
   "$CLI" <<'EOF'
 .open data
 CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location TEXT);
@@ -793,7 +793,7 @@ username	location
 knorman	Grahamside
 ```
 
-`build/flatfiledb_cli` is what `cmake --build build` produces. `CLI` holds its absolute path, taken before the `cd`.
+`build/strata_cli` is what `cmake --build build` produces. `CLI` holds its absolute path, taken before the `cd`.
 
 Each user action maps to one operation:
 
@@ -803,7 +803,7 @@ Each user action maps to one operation:
 | Connect (no catalog) | `OpenFlatFileDatabase` | `.open <empty directory>` | `loaded no tables` |
 | Connect (directory does not exist) | `OpenFlatFileDatabase` | `.open <nonexistent directory>` (parent directory exists) | `created new database <directory>` |
 | Connect with mismatched arguments | `Cli` | `.open` | `syntax error at column 1: usage: .open <directory> [--parallel]` |
-| Path on the command line | `OpenFlatFileDatabase` | `flatfiledb_cli data` | Same as `.open data`, then `stdin` is read |
+| Path on the command line | `OpenFlatFileDatabase` | `strata_cli data` | Same as `.open data`, then `stdin` is read |
 | Connection failure | `OpenFlatFileDatabase` | `.open nosuch/db` (parent directory does not exist) | `error: could not open nosuch/db: no such directory` |
 | Connection held by another process | `OpenFlatFileDatabase` | `.open data` while another process has `data` open | `error: could not open data: database is locked by another process` |
 | List the tables | `QueryService::DescribeCatalog` | `.tables` | `users`, `posts`, `engagements`, one per line |
@@ -812,7 +812,7 @@ Each user action maps to one operation:
 | Multi-line statement | `QueryService::Execute` | The three lines `CREATE TABLE notes (`, `  id INT PRIMARY KEY`, `);` | `OK CREATE TABLE notes` |
 | Incomplete statement | `Cli` | End of input after `SELECT 1` | `error: incomplete statement at end of input` |
 | Quit | `Cli` | `.quit` | No output; later input is not read |
-| Cancel the accumulated statement | `Cli` | `.cancel` entered after `SELECT 1` (without `;`) | No output; the prompt returns to `flatfiledb> ` |
+| Cancel the accumulated statement | `Cli` | `.cancel` entered after `SELECT 1` (without `;`) | No output; the prompt returns to `strata> ` |
 | Command missing `.` | `Cli` | `open shop` | `error: commands start with '.'; did you mean .open` |
 | Import a CSV | `QueryService::ImportCsv` | `.import data/posts.csv` | `OK IMPORT posts (imported 10000 rows)` |
 | Import a CSV with bad rows (strict by default) | `QueryService::ImportCsv` | `.import data/users.csv` | `error: bind: line 17: expected 3 fields, found 2` |
@@ -928,7 +928,7 @@ This table and the output listed verbatim in 2.5 are the contract. Other descrip
 | A check of `.import` fails (table name, column name, `--pk`, `--type`, bad row, duplicate primary key, 2.7) | `InferImport` | `error: bind: <description>` | No change |
 | Command name missing `.` | `Cli` | `error: commands start with '.'; did you mean .<name>` | The line is discarded |
 | Full-width semicolon | `Cli` | `error: full-width ';' (U+FF1B) found; use ASCII ';'` | The line is discarded |
-| Mismatched command-line arguments | `main` | `stderr`: `usage: flatfiledb_cli [<directory> [--parallel]]`, exit status 2 | No input is read |
+| Mismatched command-line arguments | `main` | `stderr`: `usage: strata_cli [<directory> [--parallel]]`, exit status 2 | No input is read |
 | Incomplete statement (end of input) | `Cli` | `error: incomplete statement at end of input` | No change |
 | Mismatched arguments of a command | `Cli` | `syntax error at column 1: usage: <usage>` | No change |
 | The table of `.schema` does not exist | `Cli` | `error: no such table: <table>` | No change |
@@ -1021,4 +1021,4 @@ The test plan is in [TestDocument.md](TestDocument.md). This section covers only
 
 `CsvRepository`, `FlatFileEngine`, `DirectoryLock`, `Bootstrap` and `QueryService::ImportCsv` (with a real engine) run in a temporary directory and reload after each write to see what reached the disk. That is how the all-or-nothing multi-file writes, the directory lock, parallel loading and the detection of outside edits are checked (2.5, 2.6, 3.3, 3.4, 3.5, 3.8).
 
-`flatfiledb_cli` runs the actions and examples of 3.6 on a copy of `data/`, `RunRepl` and `StatementBuffer` run on string streams, and one test scans the `#include` lines of `include/` and `src/` to check the dependency direction of 2.1.
+`strata_cli` runs the actions and examples of 3.6 on a copy of `data/`, `RunRepl` and `StatementBuffer` run on string streams, and one test scans the `#include` lines of `include/` and `src/` to check the dependency direction of 2.1.

@@ -7,10 +7,10 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/crc32c.h"
-#include "flatfiledb/paged/tuple_codec.h"
+#include "strata/domain/value.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/crc32c.h"
+#include "strata/paged/tuple_codec.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 
@@ -18,24 +18,24 @@
 
 namespace {
 
-using flatfiledb::domain::DataType;
-using flatfiledb::domain::Row;
-using flatfiledb::domain::TableSchema;
-using flatfiledb::domain::Value;
-using flatfiledb::paged::ByteView;
-using flatfiledb::paged::Crc32c;
-using flatfiledb::paged::ReadLe16;
-using flatfiledb::paged::ReadLe32;
-using flatfiledb::paged::ReadLe64;
-using flatfiledb::paged::TupleCodec;
-using flatfiledb::paged::WriteLe16;
-using flatfiledb::paged::WriteLe32;
-using flatfiledb::paged::WriteLe64;
-using flatfiledb::testing::BytesFrom;
-using flatfiledb::testing::BytesOf;
-using flatfiledb::testing::Column;
-using flatfiledb::testing::MakeSchema;
-using flatfiledb::testing::ViewOf;
+using strata::domain::DataType;
+using strata::domain::Row;
+using strata::domain::TableSchema;
+using strata::domain::Value;
+using strata::paged::ByteView;
+using strata::paged::Crc32c;
+using strata::paged::ReadLe16;
+using strata::paged::ReadLe32;
+using strata::paged::ReadLe64;
+using strata::paged::TupleCodec;
+using strata::paged::WriteLe16;
+using strata::paged::WriteLe32;
+using strata::paged::WriteLe64;
+using strata::testing::BytesFrom;
+using strata::testing::BytesOf;
+using strata::testing::Column;
+using strata::testing::MakeSchema;
+using strata::testing::ViewOf;
 
 std::uint32_t CrcOf(const std::vector<std::uint8_t>& bytes) {
   return Crc32c(bytes.data(), bytes.size());

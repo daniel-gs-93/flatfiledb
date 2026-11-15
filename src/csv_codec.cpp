@@ -1,4 +1,4 @@
-#include "flatfiledb/csv_codec.h"
+#include "strata/csv_codec.h"
 
 #include <algorithm>
 #include <charconv>
@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
@@ -517,4 +517,4 @@ std::variant<std::vector<domain::TableSchema>, std::string> ParseCatalog(
   return schemas;
 }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

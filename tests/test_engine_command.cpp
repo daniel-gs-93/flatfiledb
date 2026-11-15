@@ -7,23 +7,23 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/repl.h"
+#include "strata/repl.h"
 #include "test_support.h"
 
-#ifndef FLATFILEDB_CLI_PATH
-#error "FLATFILEDB_CLI_PATH must be defined by the build"
+#ifndef STRATA_CLI_PATH
+#error "STRATA_CLI_PATH must be defined by the build"
 #endif
 
 // The `.engine` command, the engine setting of `.open`, the `note:` lines and
 // the failure output of the paged engine (docs/PagedExecutionTestDocument.md).
 // RunRepl runs over string streams on temporary directories; the documented
-// demonstration of design document 3.4 runs the real flatfiledb_cli
+// demonstration of design document 3.4 runs the real strata_cli
 // executable.
 
 namespace {
 
-namespace cli = flatfiledb::cli;
-namespace testing = flatfiledb::testing;
+namespace cli = strata::cli;
+namespace testing = strata::testing;
 
 using Lines = std::vector<std::string>;
 
@@ -278,7 +278,7 @@ struct CliRun {
 CliRun RunCli(const std::filesystem::path& work_dir, const Lines& input_lines) {
   testing::WriteFile(work_dir / "input.txt", Joined(input_lines));
   const std::string command = "cd '" + work_dir.string() + "' && '" +
-                              FLATFILEDB_CLI_PATH +
+                              STRATA_CLI_PATH +
                               "' < input.txt > output.txt 2> error.txt";
   const int raw_status = std::system(command.c_str());
   CliRun run;

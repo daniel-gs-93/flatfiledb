@@ -1,4 +1,4 @@
-#include "flatfiledb/directory_lock.h"
+#include "strata/directory_lock.h"
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -9,11 +9,11 @@
 #include <memory>
 #include <string>
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
-constexpr const char* kLockFileName = ".flatfiledb.lock";
+constexpr const char* kLockFileName = ".strata.lock";
 
 LockOutcome Failure(const std::string& description) {
   return LockOutcome{nullptr, description};
@@ -66,4 +66,4 @@ LockOutcome DirectoryLock::Acquire(const std::string& directory) {
 
 DirectoryLock::~DirectoryLock() { ::close(file_descriptor_); }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

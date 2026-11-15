@@ -8,10 +8,10 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/plan.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/mutation_planner.h"
-#include "flatfiledb/paged/row_stream.h"
+#include "strata/domain/plan.h"
+#include "strata/domain/value.h"
+#include "strata/paged/mutation_planner.h"
+#include "strata/paged/row_stream.h"
 #include "test_harness.h"
 #include "test_paged_row_fakes.h"
 #include "test_support.h"
@@ -22,8 +22,8 @@
 
 namespace {
 
-namespace domain = flatfiledb::domain;
-namespace paged = flatfiledb::paged;
+namespace domain = strata::domain;
+namespace paged = strata::paged;
 
 using domain::ColumnDef;
 using domain::DataType;
@@ -33,15 +33,15 @@ using domain::PlanPtr;
 using domain::Row;
 using domain::TableSchema;
 using domain::Value;
-using flatfiledb::testing::EngagementsSchema;
-using flatfiledb::testing::FakeRid;
-using flatfiledb::testing::FakeTableReader;
-using flatfiledb::testing::JobsSchema;
-using flatfiledb::testing::MapCatalog;
-using flatfiledb::testing::MeasuresSchema;
-using flatfiledb::testing::MustBind;
-using flatfiledb::testing::PostsSchema;
-using flatfiledb::testing::UsersSchema;
+using strata::testing::EngagementsSchema;
+using strata::testing::FakeRid;
+using strata::testing::FakeTableReader;
+using strata::testing::JobsSchema;
+using strata::testing::MapCatalog;
+using strata::testing::MeasuresSchema;
+using strata::testing::MustBind;
+using strata::testing::PostsSchema;
+using strata::testing::UsersSchema;
 
 constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 

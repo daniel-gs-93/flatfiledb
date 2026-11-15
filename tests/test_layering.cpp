@@ -6,8 +6,8 @@
 
 #include "test_harness.h"
 
-#ifndef FLATFILEDB_SOURCE_DIR
-#error "FLATFILEDB_SOURCE_DIR must be defined by the build"
+#ifndef STRATA_SOURCE_DIR
+#error "STRATA_SOURCE_DIR must be defined by the build"
 #endif
 
 namespace {
@@ -24,9 +24,9 @@ enum class Layer {
 };
 
 const char* const kInfrastructureHeaders[] = {
-    "flatfiledb/infrastructure.h",     "flatfiledb/flat_file_engine.h",
-    "flatfiledb/flat_file_executor.h", "flatfiledb/csv_codec.h",
-    "flatfiledb/directory_lock.h",     "flatfiledb/csv_file_source.h"};
+    "strata/infrastructure.h",     "strata/flat_file_engine.h",
+    "strata/flat_file_executor.h", "strata/csv_codec.h",
+    "strata/directory_lock.h",     "strata/csv_file_source.h"};
 
 bool StartsWith(const std::string& text, const std::string& prefix) {
   return text.starts_with(prefix);
@@ -44,7 +44,7 @@ bool IsInfrastructureHeader(const std::string& header) {
 // Layer of a source or header file, by its name relative to include/ or src/.
 Layer LayerOf(const std::filesystem::path& relative) {
   const std::string path = relative.generic_string();
-  if (StartsWith(path, "flatfiledb/domain/")) {
+  if (StartsWith(path, "strata/domain/")) {
     return Layer::kDomain;
   }
   const std::set<std::string> domain_sources = {
@@ -53,46 +53,40 @@ Layer LayerOf(const std::filesystem::path& relative) {
   if (domain_sources.contains(path)) {
     return Layer::kDomain;
   }
-  if (path == "flatfiledb/application.h" || path == "application.cpp") {
+  if (path == "strata/application.h" || path == "application.cpp") {
     return Layer::kApplication;
   }
-  if (StartsWith(path, "flatfiledb/paged/") || StartsWith(path, "paged/")) {
+  if (StartsWith(path, "strata/paged/") || StartsWith(path, "paged/")) {
     return Layer::kPaged;
   }
   const std::set<std::string> infrastructure_files = {
-      "flatfiledb/infrastructure.h",
-      "flatfiledb/flat_file_engine.h",
-      "flatfiledb/flat_file_executor.h",
-      "flatfiledb/csv_codec.h",
-      "flatfiledb/directory_lock.h",
-      "flatfiledb/csv_file_source.h",
-      "infrastructure.cpp",
-      "flat_file_engine.cpp",
-      "flat_file_executor.cpp",
-      "csv_codec.cpp",
-      "csv_file_source.cpp",
-      "directory_lock.cpp"};
+      "strata/infrastructure.h",     "strata/flat_file_engine.h",
+      "strata/flat_file_executor.h", "strata/csv_codec.h",
+      "strata/directory_lock.h",     "strata/csv_file_source.h",
+      "infrastructure.cpp",          "flat_file_engine.cpp",
+      "flat_file_executor.cpp",      "csv_codec.cpp",
+      "csv_file_source.cpp",         "directory_lock.cpp"};
   if (infrastructure_files.contains(path)) {
     return Layer::kInfrastructure;
   }
-  if (path == "flatfiledb/sql_parser.h" || path == "sql_parser.cpp") {
+  if (path == "strata/sql_parser.h" || path == "sql_parser.cpp") {
     return Layer::kParser;
   }
-  if (path == "flatfiledb/bootstrap.h" || path == "bootstrap.cpp") {
+  if (path == "strata/bootstrap.h" || path == "bootstrap.cpp") {
     return Layer::kBootstrap;
   }
   const std::set<std::string> cli_files = {
-      "cli.cpp", "repl.cpp", "statement_buffer.cpp", "flatfiledb/repl.h",
-      "flatfiledb/statement_buffer.h"};
+      "cli.cpp", "repl.cpp", "statement_buffer.cpp", "strata/repl.h",
+      "strata/statement_buffer.h"};
   if (cli_files.contains(path)) {
     return Layer::kCli;
   }
   return Layer::kUnknown;
 }
 
-// The header named by an `#include "flatfiledb/..."` line, or empty.
+// The header named by an `#include "strata/..."` line, or empty.
 std::string ProjectHeaderOf(const std::string& line) {
-  const std::string marker = "#include \"flatfiledb/";
+  const std::string marker = "#include \"strata/";
   if (!StartsWith(line, marker)) {
     return "";
   }
@@ -107,35 +101,34 @@ std::string ProjectHeaderOf(const std::string& line) {
 bool IsAllowed(Layer layer, const std::string& header) {
   switch (layer) {
     case Layer::kDomain:
-      return StartsWith(header, "flatfiledb/domain/");
+      return StartsWith(header, "strata/domain/");
     case Layer::kApplication:
-      return StartsWith(header, "flatfiledb/domain/") ||
-             header == "flatfiledb/application.h";
+      return StartsWith(header, "strata/domain/") ||
+             header == "strata/application.h";
     case Layer::kInfrastructure:
-      return StartsWith(header, "flatfiledb/domain/") ||
+      return StartsWith(header, "strata/domain/") ||
              IsInfrastructureHeader(header);
     case Layer::kPaged:
-      return StartsWith(header, "flatfiledb/domain/") ||
-             StartsWith(header, "flatfiledb/paged/");
+      return StartsWith(header, "strata/domain/") ||
+             StartsWith(header, "strata/paged/");
     case Layer::kParser:
-      return StartsWith(header, "flatfiledb/domain/") ||
-             header == "flatfiledb/sql_parser.h";
+      return StartsWith(header, "strata/domain/") ||
+             header == "strata/sql_parser.h";
     case Layer::kBootstrap:
       // The composition root: the only file outside Infrastructure that may
       // name infrastructure types, and (bootstrap.cpp alone, see
       // CheckPagedRules) paged types.
-      return StartsWith(header, "flatfiledb/domain/") ||
-             header == "flatfiledb/application.h" ||
-             header == "flatfiledb/bootstrap.h" ||
-             StartsWith(header, "flatfiledb/paged/") ||
+      return StartsWith(header, "strata/domain/") ||
+             header == "strata/application.h" ||
+             header == "strata/bootstrap.h" ||
+             StartsWith(header, "strata/paged/") ||
              IsInfrastructureHeader(header);
     case Layer::kCli:
-      return StartsWith(header, "flatfiledb/domain/") ||
-             header == "flatfiledb/application.h" ||
-             header == "flatfiledb/bootstrap.h" ||
-             header == "flatfiledb/sql_parser.h" ||
-             header == "flatfiledb/repl.h" ||
-             header == "flatfiledb/statement_buffer.h";
+      return StartsWith(header, "strata/domain/") ||
+             header == "strata/application.h" ||
+             header == "strata/bootstrap.h" ||
+             header == "strata/sql_parser.h" || header == "strata/repl.h" ||
+             header == "strata/statement_buffer.h";
     case Layer::kUnknown:
       return false;
   }
@@ -156,15 +149,15 @@ void CheckDirectory(const std::filesystem::path& root) {
         std::filesystem::relative(entry.path(), root);
     Layer layer = LayerOf(relative);
     if (layer == Layer::kUnknown) {
-      ::flatfiledb::testing::ReportFailure(
+      ::strata::testing::ReportFailure(
           __FILE__, __LINE__,
           "file has no layer assignment: " + relative.string());
       continue;
     }
     std::ifstream file(entry.path());
     if (!file.is_open()) {
-      ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
-                                           "cannot read " + relative.string());
+      ::strata::testing::ReportFailure(__FILE__, __LINE__,
+                                       "cannot read " + relative.string());
       continue;
     }
     std::string line;
@@ -173,7 +166,7 @@ void CheckDirectory(const std::filesystem::path& root) {
       if (header.empty() || IsAllowed(layer, header)) {
         continue;
       }
-      ::flatfiledb::testing::ReportFailure(
+      ::strata::testing::ReportFailure(
           __FILE__, __LINE__, relative.string() + " includes " + header);
     }
   }
@@ -182,7 +175,7 @@ void CheckDirectory(const std::filesystem::path& root) {
 }  // namespace
 
 TEST(test_layering_includes_follow_dependency_direction) {
-  const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
+  const std::filesystem::path source_dir = STRATA_SOURCE_DIR;
   CheckDirectory(source_dir / "include");
   CheckDirectory(source_dir / "src");
 }
@@ -198,7 +191,7 @@ const char* const kPagedComposer = "bootstrap.cpp";
 bool IsPagedByteLayerFile(const std::string& path) {
   const char* const names[] = {"tuple_codec", "slotted_page", "crc32c"};
   for (const char* name : names) {
-    if (path == std::string("flatfiledb/paged/") + name + ".h" ||
+    if (path == std::string("strata/paged/") + name + ".h" ||
         path == std::string("paged/") + name + ".cpp") {
       return true;
     }
@@ -208,9 +201,9 @@ bool IsPagedByteLayerFile(const std::string& path) {
 
 bool IsPagedByteLayerHeader(const std::string& header) {
   const char* const allowed[] = {
-      "flatfiledb/paged/paged_types.h", "flatfiledb/paged/byte_codec.h",
-      "flatfiledb/paged/crc32c.h", "flatfiledb/paged/slotted_page.h",
-      "flatfiledb/paged/tuple_codec.h"};
+      "strata/paged/paged_types.h", "strata/paged/byte_codec.h",
+      "strata/paged/crc32c.h", "strata/paged/slotted_page.h",
+      "strata/paged/tuple_codec.h"};
   for (const char* candidate : allowed) {
     if (header == candidate) {
       return true;
@@ -248,21 +241,20 @@ int CheckPagedRules(const std::filesystem::path& root) {
       if (!is_paged) {
         // The composition root builds the paged engine; bootstrap.h only
         // forward-declares it (docs/PagedExecutionDesignDocument.md 2.1).
-        if (StartsWith(header, "flatfiledb/paged/") && path != kPagedComposer) {
-          ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
-                                               path + " includes " + header);
+        if (StartsWith(header, "strata/paged/") && path != kPagedComposer) {
+          ::strata::testing::ReportFailure(__FILE__, __LINE__,
+                                           path + " includes " + header);
         }
         continue;
       }
-      if (!StartsWith(header, "flatfiledb/domain/") &&
-          !StartsWith(header, "flatfiledb/paged/")) {
-        ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,
-                                             path + " includes " + header);
+      if (!StartsWith(header, "strata/domain/") &&
+          !StartsWith(header, "strata/paged/")) {
+        ::strata::testing::ReportFailure(__FILE__, __LINE__,
+                                         path + " includes " + header);
       }
-      if (IsPagedByteLayerFile(path) &&
-          StartsWith(header, "flatfiledb/paged/") &&
+      if (IsPagedByteLayerFile(path) && StartsWith(header, "strata/paged/") &&
           !IsPagedByteLayerHeader(header)) {
-        ::flatfiledb::testing::ReportFailure(
+        ::strata::testing::ReportFailure(
             __FILE__, __LINE__,
             path + " is in the byte layer but includes " + header);
       }
@@ -274,7 +266,7 @@ int CheckPagedRules(const std::filesystem::path& root) {
 }  // namespace
 
 TEST(test_layering_paged_depends_only_on_domain_and_itself) {
-  const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
+  const std::filesystem::path source_dir = STRATA_SOURCE_DIR;
   const int paged_files = CheckPagedRules(source_dir / "include") +
                           CheckPagedRules(source_dir / "src");
   // The scan must have found the layer; an empty scan would pass vacuously.
@@ -292,7 +284,7 @@ const char* const kRowLayerNames[] = {"row_stream", "row_keys", "operators",
 
 bool IsRowLayerFile(const std::string& path) {
   for (const char* name : kRowLayerNames) {
-    if (path == std::string("flatfiledb/paged/") + name + ".h" ||
+    if (path == std::string("strata/paged/") + name + ".h" ||
         path == std::string("paged/") + name + ".cpp") {
       return true;
     }
@@ -301,15 +293,15 @@ bool IsRowLayerFile(const std::string& path) {
 }
 
 bool IsRowLayerAllowedHeader(const std::string& header) {
-  if (StartsWith(header, "flatfiledb/domain/")) {
+  if (StartsWith(header, "strata/domain/")) {
     return true;
   }
-  if (header == "flatfiledb/paged/paged_types.h" ||
-      header == "flatfiledb/paged/tuple_codec.h") {
+  if (header == "strata/paged/paged_types.h" ||
+      header == "strata/paged/tuple_codec.h") {
     return true;
   }
   for (const char* name : kRowLayerNames) {
-    if (header == std::string("flatfiledb/paged/") + name + ".h") {
+    if (header == std::string("strata/paged/") + name + ".h") {
       return true;
     }
   }
@@ -317,15 +309,15 @@ bool IsRowLayerAllowedHeader(const std::string& header) {
 }
 
 bool IsApplicationFile(const std::string& path) {
-  return path == "flatfiledb/application.h" || path == "application.cpp";
+  return path == "strata/application.h" || path == "application.cpp";
 }
 
 bool IsBootstrapHeader(const std::string& path) {
-  return path == "flatfiledb/bootstrap.h";
+  return path == "strata/bootstrap.h";
 }
 
 bool IsPagedFile(const std::string& path) {
-  return StartsWith(path, "flatfiledb/paged/") || StartsWith(path, "paged/");
+  return StartsWith(path, "strata/paged/") || StartsWith(path, "paged/");
 }
 
 // What the scan of one root found.
@@ -337,8 +329,8 @@ struct RowLayerScan {
 
 void ReportViolation(const std::string& path, const std::string& header,
                      const std::string& rule) {
-  ::flatfiledb::testing::ReportFailure(
-      __FILE__, __LINE__, path + " includes " + header + ": " + rule);
+  ::strata::testing::ReportFailure(__FILE__, __LINE__,
+                                   path + " includes " + header + ": " + rule);
 }
 
 // Checks one include line of one file against the rules that concern the row
@@ -347,16 +339,16 @@ void CheckRowLayerRulesFor(const std::string& path, const std::string& header) {
   if (IsRowLayerFile(path) && !IsRowLayerAllowedHeader(header)) {
     ReportViolation(path, header, "the row layer must not include it");
   }
-  if (IsApplicationFile(path) && !StartsWith(header, "flatfiledb/domain/") &&
-      header != "flatfiledb/application.h") {
+  if (IsApplicationFile(path) && !StartsWith(header, "strata/domain/") &&
+      header != "strata/application.h") {
     ReportViolation(path, header,
                     "Application includes only the domain and itself");
   }
-  if (IsBootstrapHeader(path) && StartsWith(header, "flatfiledb/paged/")) {
+  if (IsBootstrapHeader(path) && StartsWith(header, "strata/paged/")) {
     ReportViolation(path, header, "bootstrap.h only forward-declares paged");
   }
   if (!IsPagedFile(path) && path != kPagedComposer &&
-      StartsWith(header, "flatfiledb/paged/")) {
+      StartsWith(header, "strata/paged/")) {
     ReportViolation(path, header, "only bootstrap.cpp includes paged/");
   }
 }
@@ -399,7 +391,7 @@ RowLayerScan ScanRowLayerRules(const std::filesystem::path& root) {
 }  // namespace
 
 TEST(test_layering_row_layer_and_bootstrap_rules) {
-  const std::filesystem::path source_dir = FLATFILEDB_SOURCE_DIR;
+  const std::filesystem::path source_dir = STRATA_SOURCE_DIR;
   const RowLayerScan include_scan = ScanRowLayerRules(source_dir / "include");
   const RowLayerScan source_scan = ScanRowLayerRules(source_dir / "src");
 

@@ -6,12 +6,12 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/catalog.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/table_heap.h"
+#include "strata/domain/value.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/catalog.h"
+#include "strata/paged/database.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/table_heap.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 
@@ -19,22 +19,22 @@
 
 namespace {
 
-using flatfiledb::domain::ColumnDef;
-using flatfiledb::domain::DataType;
-using flatfiledb::domain::ForeignKey;
-using flatfiledb::domain::Row;
-using flatfiledb::domain::TableSchema;
-using flatfiledb::domain::Value;
-using flatfiledb::paged::Catalog;
-using flatfiledb::paged::Database;
-using flatfiledb::paged::DatabaseOptions;
-using flatfiledb::paged::LatchMode;
-using flatfiledb::paged::MemoryPageStore;
-using flatfiledb::paged::PageGuard;
-using flatfiledb::paged::PageId;
-using flatfiledb::paged::Rid;
-using flatfiledb::paged::TableHeap;
-using Operation = flatfiledb::paged::MemoryPageStore::Operation;
+using strata::domain::ColumnDef;
+using strata::domain::DataType;
+using strata::domain::ForeignKey;
+using strata::domain::Row;
+using strata::domain::TableSchema;
+using strata::domain::Value;
+using strata::paged::Catalog;
+using strata::paged::Database;
+using strata::paged::DatabaseOptions;
+using strata::paged::LatchMode;
+using strata::paged::MemoryPageStore;
+using strata::paged::PageGuard;
+using strata::paged::PageId;
+using strata::paged::Rid;
+using strata::paged::TableHeap;
+using Operation = strata::paged::MemoryPageStore::Operation;
 
 struct OpenedDatabase {
   MemoryPageStore* store = nullptr;  // owned by database
@@ -232,7 +232,7 @@ TEST(test_paged_catalog_create_table_validation) {
   const std::size_t columns_before = SystemRowCount(database, 2);
   for (const Case& item : cases) {
     auto result = database.CreateTable(item.schema);
-    CHECK_EQ(flatfiledb::testing::ErrorName(result),
+    CHECK_EQ(strata::testing::ErrorName(result),
              std::string(item.expected_error));
     CHECK_EQ(env.store->PageCount(), pages_before);
     CHECK_EQ(SystemRowCount(database, 1), tables_before);
@@ -296,7 +296,7 @@ enum class SystemDamage {
 
 // The row of a system table whose column `column` equals `value` and, when
 // position is given, whose column 1 equals position (sys_columns).
-std::optional<flatfiledb::paged::ScanItem> FindSystemRow(
+std::optional<strata::paged::ScanItem> FindSystemRow(
     TableHeap& heap, std::size_t column, std::int64_t value,
     std::optional<std::int64_t> position = std::nullopt) {
   auto scan = heap.Scan();
@@ -316,7 +316,7 @@ std::optional<flatfiledb::paged::ScanItem> FindSystemRow(
   }
 }
 
-void SetIntColumn(TableHeap& heap, const flatfiledb::paged::ScanItem& item,
+void SetIntColumn(TableHeap& heap, const strata::paged::ScanItem& item,
                   std::size_t column, std::int64_t value) {
   Row row = item.row;
   row[column] = Value(value);
@@ -431,16 +431,16 @@ std::string LoadAfterDamage(SystemDamage damage) {
       CHECK_OK(header);
       if (header.ok()) {
         PageGuard guard = std::move(header).value();
-        flatfiledb::paged::WriteLe32(guard.mutable_data() + 48, 3);
+        strata::paged::WriteLe32(guard.mutable_data() + 48, 3);
         guard.MarkDirty();
       }
       break;
     }
   }
   Catalog fresh(database.buffer(), 1, 2);
-  const flatfiledb::paged::Status loaded = fresh.Load();
+  const strata::paged::Status loaded = fresh.Load();
   return loaded.has_value()
-             ? std::string(flatfiledb::testing::ErrorCodeName(loaded->code)) +
+             ? std::string(strata::testing::ErrorCodeName(loaded->code)) +
                    ": " + loaded->message
              : "ok";
 }

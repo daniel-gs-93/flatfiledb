@@ -1,4 +1,4 @@
-#include "flatfiledb/domain/value.h"
+#include "strata/domain/value.h"
 
 #include <cassert>
 #include <charconv>
@@ -6,7 +6,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace flatfiledb::domain {
+namespace strata::domain {
 
 namespace {
 
@@ -135,4 +135,4 @@ const char* ErrorKindName(ErrorKind kind) {
   return "";
 }
 
-}  // namespace flatfiledb::domain
+}  // namespace strata::domain

@@ -17,11 +17,11 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/domain/value.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/database.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 #include "test_support.h"
@@ -31,28 +31,28 @@
 
 namespace {
 
-using flatfiledb::domain::DataType;
-using flatfiledb::domain::Row;
-using flatfiledb::domain::TableSchema;
-using flatfiledb::domain::Value;
-using flatfiledb::paged::Database;
-using flatfiledb::paged::DatabaseOptions;
-using flatfiledb::paged::MemoryPageStore;
-using flatfiledb::paged::PageId;
-using flatfiledb::paged::ReadLe16;
-using flatfiledb::paged::ReadLe32;
-using flatfiledb::paged::ReadLe64;
-using flatfiledb::paged::ReplacementPolicyKind;
-using flatfiledb::paged::Rid;
-using flatfiledb::paged::SlottedPage;
-using flatfiledb::paged::TableHeap;
-using flatfiledb::paged::WriteLe32;
-using flatfiledb::testing::Column;
-using flatfiledb::testing::MakeSchema;
-using flatfiledb::testing::ReadFile;
-using flatfiledb::testing::TempDir;
-using flatfiledb::testing::WriteFile;
-using Operation = flatfiledb::paged::MemoryPageStore::Operation;
+using strata::domain::DataType;
+using strata::domain::Row;
+using strata::domain::TableSchema;
+using strata::domain::Value;
+using strata::paged::Database;
+using strata::paged::DatabaseOptions;
+using strata::paged::MemoryPageStore;
+using strata::paged::PageId;
+using strata::paged::ReadLe16;
+using strata::paged::ReadLe32;
+using strata::paged::ReadLe64;
+using strata::paged::ReplacementPolicyKind;
+using strata::paged::Rid;
+using strata::paged::SlottedPage;
+using strata::paged::TableHeap;
+using strata::paged::WriteLe32;
+using strata::testing::Column;
+using strata::testing::MakeSchema;
+using strata::testing::ReadFile;
+using strata::testing::TempDir;
+using strata::testing::WriteFile;
+using Operation = strata::paged::MemoryPageStore::Operation;
 
 constexpr std::size_t kPageBytes = 4096;
 
@@ -300,7 +300,7 @@ TEST(test_paged_database_rejects_invalid_headers) {
 
 TEST(test_paged_database_reopen_preserves_catalog_and_rows) {
   TempDir directory;
-  std::vector<std::vector<flatfiledb::paged::PageCapacity>> maps_before;
+  std::vector<std::vector<strata::paged::PageCapacity>> maps_before;
   const std::vector<std::string> names = {"alpha", "beta", "gamma"};
   {
     auto database = OpenDatabase(directory.path());
@@ -431,7 +431,7 @@ TEST(test_paged_database_reports_directory_problems) {
   DatabaseOptions options;
   auto missing = Database::Open(parent.path() / "no_such_directory", options);
   CHECK_ERROR(missing, kIo);
-  CHECK(!flatfiledb::testing::MessageOf(missing).empty());
+  CHECK(!strata::testing::MessageOf(missing).empty());
   WriteFile(parent.path() / "a_file", "x");
   CHECK_ERROR(Database::Open(parent.path() / "a_file", options), kIo);
   if (::geteuid() != 0) {
@@ -803,9 +803,9 @@ TEST(test_paged_database_close_reports_sync_failure) {
   CHECK_OK(database.Close());  // the injected failure is used up
 
   TempDir directory;
-  auto file = flatfiledb::paged::FilePageStore::Open(
+  auto file = strata::paged::FilePageStore::Open(
       directory.path() / "sync_probe.db",
-      flatfiledb::paged::OpenMode::kOpenOrCreate);
+      strata::paged::OpenMode::kOpenOrCreate);
   CHECK_OK(file);
   if (file.ok()) {
     CHECK_OK(file.value().Sync());

@@ -2,7 +2,7 @@
 
 ## 1. Project Description
 
-The paged engine is the second storage engine of FlatFileDB. It persists data with fixed-size pages, a buffer pool and, later, indexes. The execution layer, which implements the same `domain::IEngine` port as the flatfile engine on top of this layer, is described in [PagedExecutionDesignDocument.md](PagedExecutionDesignDocument.md). This document covers the storage layer: the format of the single database file, tuple encoding and decoding, the slotted page, the table heap, the catalog stored in system tables, the buffer pool and two replacement policies. The Structured Query Language (SQL) front end, `IEngine` and the flatfile engine are described in [DesignDocument.md](DesignDocument.md).
+The paged engine is the second storage engine of Strata. It persists data with fixed-size pages, a buffer pool and, later, indexes. The execution layer, which implements the same `domain::IEngine` port as the flatfile engine on top of this layer, is described in [PagedExecutionDesignDocument.md](PagedExecutionDesignDocument.md). This document covers the storage layer: the format of the single database file, tuple encoding and decoding, the slotted page, the table heap, the catalog stored in system tables, the buffer pool and two replacement policies. The Structured Query Language (SQL) front end, `IEngine` and the flatfile engine are described in [DesignDocument.md](DesignDocument.md).
 
 This document leaves out the `IEngine` adapter and plan execution, the cross-process directory lock and the database-level reader-writer lock, which the execution design document covers. It also leaves out indexes, the Write-Ahead Log (WAL) and crash recovery, transactions, tuples larger than one page, NULL, page reclamation and file shrinking, and `DROP TABLE`. Indexes, the WAL and crash recovery are planned. This layer has no user interface. The Command-Line Interface (CLI) reaches it through `QueryService` and the paged engine.
 
@@ -206,7 +206,7 @@ classDiagram
 
 ### 2.3 File and Page Format
 
-The database file is `paged.db` in the database directory. The directory also holds `.flatfiledb.lock`, which Bootstrap acquires. The planned WAL adds `paged.wal`. The file size is `page count * 4096`. The page count is not stored in the file, and is derived from the file size. All multi-byte integers are written little-endian at fixed width. `byte_codec.h` encodes them byte by byte, so the layout does not depend on the byte order of the host.
+The database file is `paged.db` in the database directory. The directory also holds `.strata.lock`, which Bootstrap acquires. The planned WAL adds `paged.wal`. The file size is `page count * 4096`. The page count is not stored in the file, and is derived from the file size. All multi-byte integers are written little-endian at fixed width. `byte_codec.h` encodes them byte by byte, so the layout does not depend on the byte order of the host.
 
 Common header, the start of every page, 32 bytes:
 

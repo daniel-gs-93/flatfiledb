@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 
@@ -12,20 +12,20 @@
 
 namespace {
 
-using flatfiledb::paged::ByteView;
-using flatfiledb::paged::kInvalidPageId;
-using flatfiledb::paged::kPageSize;
-using flatfiledb::paged::PageType;
-using flatfiledb::paged::ReadLe16;
-using flatfiledb::paged::SlottedPage;
-using flatfiledb::paged::SlottedPageView;
-using flatfiledb::paged::WriteLe16;
-using flatfiledb::paged::WriteLe32;
-using flatfiledb::testing::Filled;
-using flatfiledb::testing::FormattedPage;
-using flatfiledb::testing::Page;
-using flatfiledb::testing::ToString;
-using flatfiledb::testing::ViewOf;
+using strata::paged::ByteView;
+using strata::paged::kInvalidPageId;
+using strata::paged::kPageSize;
+using strata::paged::PageType;
+using strata::paged::ReadLe16;
+using strata::paged::SlottedPage;
+using strata::paged::SlottedPageView;
+using strata::paged::WriteLe16;
+using strata::paged::WriteLe32;
+using strata::testing::Filled;
+using strata::testing::FormattedPage;
+using strata::testing::Page;
+using strata::testing::ToString;
+using strata::testing::ViewOf;
 
 constexpr std::size_t kSlotArrayStart = 32;
 

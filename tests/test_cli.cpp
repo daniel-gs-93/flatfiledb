@@ -8,22 +8,22 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/directory_lock.h"
+#include "strata/directory_lock.h"
 #include "test_support.h"
 
-#ifndef FLATFILEDB_SOURCE_DIR
-#error "FLATFILEDB_SOURCE_DIR must be defined by the build"
+#ifndef STRATA_SOURCE_DIR
+#error "STRATA_SOURCE_DIR must be defined by the build"
 #endif
-#ifndef FLATFILEDB_CLI_PATH
-#error "FLATFILEDB_CLI_PATH must be defined by the build"
+#ifndef STRATA_CLI_PATH
+#error "STRATA_CLI_PATH must be defined by the build"
 #endif
 
-// Environment tier: runs the flatfiledb_cli executable against a copy of the
+// Environment tier: runs the strata_cli executable against a copy of the
 // real data/ directory. Each test owns a work directory containing data/.
 
 namespace {
 
-namespace testing = flatfiledb::testing;
+namespace testing = strata::testing;
 
 const char* const kDataFiles[] = {"users.csv", "posts.csv", "engagements.csv"};
 const char* const kOpenLine = ".open data";
@@ -34,12 +34,12 @@ const char* const kLoadedLine =
 const char* const kRejectedLine = "users.csv: rejected lines 12, 17, 18";
 
 std::filesystem::path SourceData() {
-  return std::filesystem::path(FLATFILEDB_SOURCE_DIR) / "data";
+  return std::filesystem::path(STRATA_SOURCE_DIR) / "data";
 }
 
 // The sample database that ships with the repository (README, Quick Start).
 std::filesystem::path SampleDatabase() {
-  return std::filesystem::path(FLATFILEDB_SOURCE_DIR) / "sample_my_db";
+  return std::filesystem::path(STRATA_SOURCE_DIR) / "sample_my_db";
 }
 
 bool HasSourceData() {
@@ -111,10 +111,10 @@ std::vector<std::string> RunCli(const std::filesystem::path& work_dir,
   }
   testing::WriteFile(work_dir / "input.txt", input);
   std::string command = "cd '" + work_dir.string() + "' && '" +
-                        FLATFILEDB_CLI_PATH + "' < input.txt > output.txt 2>&1";
+                        STRATA_CLI_PATH + "' < input.txt > output.txt 2>&1";
   int status = std::system(command.c_str());
   if (status != 0) {
-    flatfiledb::testing::ReportFailure(
+    strata::testing::ReportFailure(
         __FILE__, __LINE__, "cli exited with status " + std::to_string(status));
   }
   return SplitLines(testing::ReadFile(work_dir / "output.txt"));
@@ -138,7 +138,7 @@ CliRun RunCliWithArguments(const std::filesystem::path& work_dir,
   }
   testing::WriteFile(work_dir / "input.txt", input);
   std::string command = "cd '" + work_dir.string() + "' && '" +
-                        FLATFILEDB_CLI_PATH + "' " + arguments +
+                        STRATA_CLI_PATH + "' " + arguments +
                         " < input.txt > output.txt 2> error.txt";
   int raw_status = std::system(command.c_str());
   CliRun run;
@@ -498,8 +498,8 @@ TEST(test_cli_open_locked_directory_prints_error) {
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> while_locked;
   {
-    flatfiledb::infrastructure::LockOutcome held =
-        flatfiledb::infrastructure::DirectoryLock::Acquire(
+    strata::infrastructure::LockOutcome held =
+        strata::infrastructure::DirectoryLock::Acquire(
             (work.path() / "data").string());
     CHECK(held.lock != nullptr);
     while_locked = RunCli(work.path(), {kOpenLine});
@@ -620,7 +620,7 @@ TEST(test_cli_piped_input_prints_no_prompt) {
   CHECK_EQ(output, std::vector<std::string>({"username", "knorman"}));
   CHECK_EQ(raw, std::string(kLoadedLine) + "\n" + kRejectedLine +
                     "\nusername\nknorman\n");
-  CHECK(raw.find("flatfiledb>") == std::string::npos);
+  CHECK(raw.find("strata>") == std::string::npos);
 }
 
 TEST(test_cli_quit_stops_reading_with_status_zero) {
@@ -862,7 +862,7 @@ TEST(test_cli_bad_arguments_print_usage_and_exit_with_status_two) {
   for (const CliRun* run : {&too_many, &bad_option, &option_first}) {
     CHECK_EQ(run->status, 2);
     CHECK_EQ(run->error_text,
-             std::string("usage: flatfiledb_cli [<directory> [--parallel]]\n"));
+             std::string("usage: strata_cli [<directory> [--parallel]]\n"));
     CHECK(run->output.empty());
   }
   CHECK(!std::filesystem::exists(work.path() / "a"));

@@ -1,4 +1,4 @@
-#include "flatfiledb/flat_file_executor.h"
+#include "strata/flat_file_executor.h"
 
 #include <algorithm>
 #include <cassert>
@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/expression.h"
+#include "strata/domain/expression.h"
 
 // Pure logic: every function here reads a TableStore and returns a value. It
 // never touches a file or the repository; FlatFileEngine does that.
@@ -31,7 +31,7 @@
 //   table, O(n); UPDATE and DELETE build one unordered_set per checked column,
 //   O(n + m).
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
@@ -1443,4 +1443,4 @@ SchemaChangeOutcome PlanSchemaChange(
   return MakeError(ErrorKind::kUnsupported, "not a schema change node");
 }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

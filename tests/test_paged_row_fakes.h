@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_PAGED_ROW_FAKES_H_
-#define FLATFILEDB_TESTS_TEST_PAGED_ROW_FAKES_H_
+#ifndef STRATA_TESTS_TEST_PAGED_ROW_FAKES_H_
+#define STRATA_TESTS_TEST_PAGED_ROW_FAKES_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -11,10 +11,10 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/engine.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/paged_types.h"
-#include "flatfiledb/paged/row_stream.h"
+#include "strata/domain/engine.h"
+#include "strata/domain/value.h"
+#include "strata/paged/paged_types.h"
+#include "strata/paged/row_stream.h"
 
 // In-memory fakes of the row layer's interfaces, shared by the operator tests
 // (docs/PagedExecutionTestDocument.md) and the mutation planner tests. Nothing
@@ -44,7 +44,7 @@
 //   * Not thread-safe, apart from what ITableReader::Scan promises: do not
 //     share a FakeTableReader between threads that run at the same time.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 // What the streams of one table saw. Shared (std::shared_ptr) between the
 // table in a FakeTableReader and every stream it hands out.
@@ -207,6 +207,6 @@ class MapCatalog : public domain::ICatalog {
   std::vector<domain::TableSchema> schemas_;
 };
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-#endif  // FLATFILEDB_TESTS_TEST_PAGED_ROW_FAKES_H_
+#endif  // STRATA_TESTS_TEST_PAGED_ROW_FAKES_H_

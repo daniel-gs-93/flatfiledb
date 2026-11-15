@@ -7,9 +7,9 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/csv_file_source.h"
-#include "flatfiledb/domain/import.h"
+#include "strata/application.h"
+#include "strata/csv_file_source.h"
+#include "strata/domain/import.h"
 #include "test_harness.h"
 #include "test_support.h"
 
@@ -17,7 +17,7 @@
 // over text cells (Unit tier) and the whole import through QueryService, the
 // engine and the files (Integration tier).
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -101,7 +101,7 @@ std::string ColumnTypes(const domain::TableSchema& schema) {
 std::map<std::string, std::string> Snapshot(const std::filesystem::path& dir) {
   std::map<std::string, std::string> files;
   for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-    if (entry.path().filename() == ".flatfiledb.lock") {
+    if (entry.path().filename() == ".strata.lock") {
       continue;
     }
     if (entry.is_regular_file()) {
@@ -523,4 +523,4 @@ TEST(test_file_csv_source_reads_lines_bom_crlf_and_quotes) {
   }
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

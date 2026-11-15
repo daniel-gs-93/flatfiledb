@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/tuple_codec.h"
+#include "strata/paged/tuple_codec.h"
 
 #include <bit>
 #include <cstring>
@@ -6,9 +6,9 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/byte_codec.h"
+#include "strata/paged/byte_codec.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -149,4 +149,4 @@ PageResult<domain::Row> TupleCodec::Decode(const domain::TableSchema& schema,
   return row;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

@@ -1,4 +1,4 @@
-#include "flatfiledb/domain/expression.h"
+#include "strata/domain/expression.h"
 
 #include <cassert>
 #include <cmath>
@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/domain/scalar_functions.h"
+#include "strata/domain/scalar_functions.h"
 
-namespace flatfiledb::domain {
+namespace strata::domain {
 
 namespace {
 
@@ -268,4 +268,4 @@ Value AggregateAccumulator::Result() const {
   return Value(int_sum_);
 }
 
-}  // namespace flatfiledb::domain
+}  // namespace strata::domain

@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/paged_engine.h"
+#include "strata/paged/paged_engine.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,18 +9,18 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/paged/heap_access.h"
-#include "flatfiledb/paged/mutation_planner.h"
-#include "flatfiledb/paged/operators.h"
-#include "flatfiledb/paged/row_stream.h"
-#include "flatfiledb/paged/tuple_codec.h"
+#include "strata/paged/heap_access.h"
+#include "strata/paged/mutation_planner.h"
+#include "strata/paged/operators.h"
+#include "strata/paged/row_stream.h"
+#include "strata/paged/tuple_codec.h"
 
 // Resource-aware (design document 2.1): the engine decides which pure function
 // handles a plan node, hands it a reader over the Database, and writes the
 // dirty pages out after a write statement succeeded. Every function below
 // returns a value; a failure of a page call is mapped by ToExecutionError.
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -253,4 +253,4 @@ std::optional<ExecutionError> PagedEngine::Close() {
   return ToExecutionError(*status, WholeDatabase());
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

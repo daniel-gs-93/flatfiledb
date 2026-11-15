@@ -1,4 +1,4 @@
-#include "flatfiledb/bootstrap.h"
+#include "strata/bootstrap.h"
 
 #include <filesystem>
 #include <memory>
@@ -9,16 +9,16 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/csv_file_source.h"
-#include "flatfiledb/directory_lock.h"
-#include "flatfiledb/flat_file_engine.h"
-#include "flatfiledb/infrastructure.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/heap_access.h"
-#include "flatfiledb/paged/paged_engine.h"
+#include "strata/application.h"
+#include "strata/csv_file_source.h"
+#include "strata/directory_lock.h"
+#include "strata/flat_file_engine.h"
+#include "strata/infrastructure.h"
+#include "strata/paged/database.h"
+#include "strata/paged/heap_access.h"
+#include "strata/paged/paged_engine.h"
 
-namespace flatfiledb::bootstrap {
+namespace strata::bootstrap {
 
 namespace {
 
@@ -216,4 +216,4 @@ std::variant<OpenedDatabase, std::string> OpenPagedDatabase(
       std::move(notes)};
 }
 
-}  // namespace flatfiledb::bootstrap
+}  // namespace strata::bootstrap

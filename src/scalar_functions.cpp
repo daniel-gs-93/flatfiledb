@@ -1,4 +1,4 @@
-#include "flatfiledb/domain/scalar_functions.h"
+#include "strata/domain/scalar_functions.h"
 
 #include <cassert>
 #include <cmath>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-namespace flatfiledb::domain {
+namespace strata::domain {
 
 namespace {
 
@@ -412,4 +412,4 @@ std::optional<Value> ApplyScalarFunction(ScalarFn fn, ExprType result_type,
   return std::nullopt;
 }
 
-}  // namespace flatfiledb::domain
+}  // namespace strata::domain

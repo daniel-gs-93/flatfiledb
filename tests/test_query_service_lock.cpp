@@ -12,11 +12,11 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/paged_engine.h"
+#include "strata/application.h"
+#include "strata/domain/import.h"
+#include "strata/paged/database.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/paged_engine.h"
 #include "test_support.h"
 
 // The database-level reader-writer lock of QueryService (design document 2.5,
@@ -35,10 +35,10 @@
 
 namespace {
 
-namespace domain = flatfiledb::domain;
-namespace paged = flatfiledb::paged;
-namespace testing = flatfiledb::testing;
-using flatfiledb::application::QueryService;
+namespace domain = strata::domain;
+namespace paged = strata::paged;
+namespace testing = strata::testing;
+using strata::application::QueryService;
 
 // Upper bound of every wait whose condition must come true.
 constexpr std::chrono::seconds kHangGuard(10);

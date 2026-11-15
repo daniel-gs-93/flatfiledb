@@ -65,7 +65,7 @@ flowchart TD
     HeapAccess --> Storage
 ```
 
-The headers are in `include/flatfiledb/paged/` and the implementations in `src/paged/`. `QueryService`, `Bootstrap` and `Cli` keep their existing files.
+The headers are in `include/strata/paged/` and the implementations in `src/paged/`. `QueryService`, `Bootstrap` and `Cli` keep their existing files.
 
 | Concern | Layer | Nature | Files |
 |---|---|---|---|
@@ -317,7 +317,7 @@ The `Flush` that `Bootstrap` calls before a same-directory reopen goes through t
 
 `std::shared_mutex` does not specify fairness between readers and writers, so continuously arriving readers can delay a writer. This is not measured yet.
 
-Across processes, the directory lock (`flock`, ADR-0015) is unchanged, and both engines share the same `.flatfiledb.lock`.
+Across processes, the directory lock (`flock`, ADR-0015) is unchanged, and both engines share the same `.strata.lock`.
 
 ### 2.6 Equivalence Rules
 
@@ -389,7 +389,7 @@ The known and accepted differences between the two engines:
 | Corrupt `paged.db` | When `Database::Open` returns `kCorrupt`, or `RowCounts()` reads a corrupt page, `.open` and `.engine` output `error: could not open <directory>: corrupt: <message>`, and the current database and engine setting stay as they were. This is consistent with flatfile returning no partial data on a load failure. A statement after the open affects only the table that the corrupt page belongs to |
 | Unwritable directory | paged writes `paged.db`, so it always needs the directory lock. When `DirectoryLock::Acquire` does not obtain the lock because of `EACCES` or `EROFS`, `OpenPagedDatabase` returns `directory is not writable` and does not open. flatfile can still read without acquiring the lock in this case, because that process cannot write. paged has no read-only open mode, and without the lock two processes could write the same file at the same time. `OpenPagedDatabase` returns `database is locked by another process` when another process holds the lock, the same as flatfile. The lock of `current` is reused only when it is not null. A flatfile database that was opened in an unwritable directory has no lock, so `.engine paged` on it returns `directory is not writable` |
 | Known limitation: replacing a paged database that cannot be saved | `.open <other directory>` and `.engine flatfile` replace the open paged database without a `Flush` first, and the open does not abort when the old database cannot be written out. The destructor of the old `Database` prints `paged: failed to write the database on destruction: <message>` to standard error while the new database takes its place, before the `loaded` line of the new database is printed. The statements that were applied but not saved are lost. `.open` of the same directory is not affected, because `Bootstrap` calls `Flush` first and aborts the open on failure |
-| Known limitation: the directory is deleted while it is open | After the directory is deleted, `OpenPagedDatabase` creates it again when its parent exists. If the normalized path equals the one of the current database, it reuses `current->lock`, which refers to a deleted `.flatfiledb.lock` file. The new directory is then not protected against a second process. This also holds for flatfile |
+| Known limitation: the directory is deleted while it is open | After the directory is deleted, `OpenPagedDatabase` creates it again when its parent exists. If the normalized path equals the one of the current database, it reuses `current->lock`, which refers to a deleted `.strata.lock` file. The new directory is then not protected against a second process. This also holds for flatfile |
 
 ## 3. Flow of Control
 
@@ -560,10 +560,10 @@ The data of flatfile is `catalog.csv` and the CSV file of each table, and the da
 
 `.help` gains one line for `.engine`: `.engine [flatfile|paged]        show or set the engine (default flatfile)`.
 
-The demonstration runs in a temporary directory. The shell variable `CLI` is the CLI executable `build/flatfiledb_cli` under the project root, which `cmake --build build` produces. Resolve its absolute path before `cd`:
+The demonstration runs in a temporary directory. The shell variable `CLI` is the CLI executable `build/strata_cli` under the project root, which `cmake --build build` produces. Resolve its absolute path before `cd`:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 cd "$(mktemp -d)"
 printf '%s\n' '.engine paged' '.open demo' \
   'CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);' \

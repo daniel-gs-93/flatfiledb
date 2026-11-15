@@ -8,10 +8,10 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/buffer_manager.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/paged/buffer_manager.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 
@@ -19,15 +19,15 @@
 
 namespace {
 
-using flatfiledb::paged::BufferManager;
-using flatfiledb::paged::kPageSize;
-using flatfiledb::paged::LatchMode;
-using flatfiledb::paged::MemoryPageStore;
-using flatfiledb::paged::PageGuard;
-using flatfiledb::paged::PageId;
-using flatfiledb::paged::ReplacementPolicyKind;
-using flatfiledb::paged::SlottedPage;
-using Operation = flatfiledb::paged::MemoryPageStore::Operation;
+using strata::paged::BufferManager;
+using strata::paged::kPageSize;
+using strata::paged::LatchMode;
+using strata::paged::MemoryPageStore;
+using strata::paged::PageGuard;
+using strata::paged::PageId;
+using strata::paged::ReplacementPolicyKind;
+using strata::paged::SlottedPage;
+using Operation = strata::paged::MemoryPageStore::Operation;
 
 constexpr std::size_t kMarkerOffset = 100;
 
@@ -57,7 +57,7 @@ std::unique_ptr<BufferManager> MakeBuffer(
 // Fetches a page shared and releases it at once; returns "ok" or the error.
 std::string FetchAndRelease(BufferManager& buffer, PageId page_id) {
   auto result = buffer.FetchPage(page_id, LatchMode::kShared);
-  return flatfiledb::testing::Describe(result);
+  return strata::testing::Describe(result);
 }
 
 // Writes a marker byte into a page and marks it dirty.
@@ -291,7 +291,7 @@ TEST(test_paged_buffer_new_page_allocates_zeroed_pages) {
     PageGuard guard = std::move(result).value();
     CHECK_EQ(guard.page_id(), expected);
     const std::uint8_t* bytes = guard.data();
-    CHECK_EQ(flatfiledb::paged::ReadLe32(bytes + 4), expected);
+    CHECK_EQ(strata::paged::ReadLe32(bytes + 4), expected);
     CHECK_EQ(static_cast<int>(bytes[8]), 0);
     bool is_rest_zero = true;
     for (std::size_t i = 0; i < kPageSize; ++i) {
@@ -381,7 +381,7 @@ TEST(test_paged_buffer_rejects_corrupt_pages_without_leaking_frames) {
   MemoryPageStore store;
   FormatPages(store, 10);
   store.MutablePage(5)[200] ^= 0x01;  // CRC no longer matches
-  flatfiledb::paged::WriteLe32(store.MutablePage(6) + 4, 9);  // wrong page id
+  strata::paged::WriteLe32(store.MutablePage(6) + 4, 9);  // wrong page id
   SlottedPage::SealChecksum(store.MutablePage(6));
   std::unique_ptr<BufferManager> buffer = MakeBuffer(store, 4);
   if (buffer == nullptr) {
@@ -528,7 +528,7 @@ TEST(test_paged_buffer_frame_latches_occupy_separate_cache_lines) {
     return;
   }
   std::uintptr_t previous = 0;
-  for (flatfiledb::paged::FrameId frame = 0; frame < 16; ++frame) {
+  for (strata::paged::FrameId frame = 0; frame < 16; ++frame) {
     const auto address =
         reinterpret_cast<std::uintptr_t>(buffer->FrameLatchAddress(frame));
     CHECK_EQ(address % 128, static_cast<std::uintptr_t>(0));

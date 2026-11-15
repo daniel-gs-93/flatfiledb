@@ -7,10 +7,10 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/domain/scalar_functions.h"
+#include "strata/domain/import.h"
+#include "strata/domain/scalar_functions.h"
 
-namespace flatfiledb::domain {
+namespace strata::domain {
 
 namespace {
 
@@ -312,4 +312,4 @@ std::variant<ImportPlan, ExecutionError> InferImport(
   return plan;
 }
 
-}  // namespace flatfiledb::domain
+}  // namespace strata::domain

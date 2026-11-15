@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_EQUIVALENCE_GENERATOR_H_
-#define FLATFILEDB_TESTS_TEST_EQUIVALENCE_GENERATOR_H_
+#ifndef STRATA_TESTS_TEST_EQUIVALENCE_GENERATOR_H_
+#define STRATA_TESTS_TEST_EQUIVALENCE_GENERATOR_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -7,13 +7,13 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
+#include "strata/domain/value.h"
 #include "test_equivalence_support.h"
 
 // The statements of the equivalence tests (docs/PagedExecutionTestDocument.md):
 // the schema and data they start from, and the random statement generator.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 // CREATE TABLE and INSERT statements for users (6 rows), posts (10 rows) and
 // engagements (20 rows), in an order the foreign keys allow. The data repeats
@@ -119,6 +119,6 @@ class StatementGenerator {
   std::size_t next_name_number_ = 0;
 };
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-#endif  // FLATFILEDB_TESTS_TEST_EQUIVALENCE_GENERATOR_H_
+#endif  // STRATA_TESTS_TEST_EQUIVALENCE_GENERATOR_H_

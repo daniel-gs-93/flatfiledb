@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/paged/slotted_page.h"
 
 #include <algorithm>
 #include <cstring>
@@ -7,10 +7,10 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/crc32c.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/crc32c.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -439,4 +439,4 @@ Status SlottedPage::CompactKeepingSlots(bool is_trimming_dead_slots) {
   return std::nullopt;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/operators.h"
+#include "strata/paged/operators.h"
 
 #include <algorithm>
 #include <cassert>
@@ -13,8 +13,8 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/expression.h"
-#include "flatfiledb/paged/row_keys.h"
+#include "strata/domain/expression.h"
+#include "strata/paged/row_keys.h"
 
 // Pure logic: every operator reads rows from its child (or, at a leaf, from an
 // IRowStream) and evaluates domain expressions. It never touches a page.
@@ -30,7 +30,7 @@
 //   time and O(g) memory. Sort: std::stable_sort, O(n log n) time, O(n)
 //   memory.
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -980,4 +980,4 @@ BuildResult BuildOperatorTree(const PlanNode& plan,
   return BuildNode(plan, reader);
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

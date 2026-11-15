@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/page_store.h"
+#include "strata/paged/page_store.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -9,7 +9,7 @@
 #include <string>
 #include <utility>
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -248,4 +248,4 @@ const std::uint8_t* MemoryPageStore::PageBytes(PageId page_id) const {
   return pages_[page_id].data();
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

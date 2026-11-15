@@ -3,21 +3,21 @@
 #include <unordered_map>
 #include <vector>
 
-#include "flatfiledb/paged/paged_types.h"
-#include "flatfiledb/paged/replacement_policy.h"
+#include "strata/paged/paged_types.h"
+#include "strata/paged/replacement_policy.h"
 #include "test_harness.h"
 
 // LruPolicy and TwoQPolicy.
 
 namespace {
 
-using flatfiledb::paged::FrameId;
-using flatfiledb::paged::IReplacementPolicy;
-using flatfiledb::paged::LruPolicy;
-using flatfiledb::paged::MakeReplacementPolicy;
-using flatfiledb::paged::PageId;
-using flatfiledb::paged::ReplacementPolicyKind;
-using flatfiledb::paged::TwoQPolicy;
+using strata::paged::FrameId;
+using strata::paged::IReplacementPolicy;
+using strata::paged::LruPolicy;
+using strata::paged::MakeReplacementPolicy;
+using strata::paged::PageId;
+using strata::paged::ReplacementPolicyKind;
+using strata::paged::TwoQPolicy;
 
 // The evicted frame, or -1 when no frame is evictable.
 int Evicted(IReplacementPolicy& policy) {

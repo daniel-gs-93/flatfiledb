@@ -1,4 +1,4 @@
-#include "flatfiledb/csv_file_source.h"
+#include "strata/csv_file_source.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -10,9 +10,9 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/csv_codec.h"
+#include "strata/csv_codec.h"
 
-namespace flatfiledb::infrastructure {
+namespace strata::infrastructure {
 
 namespace {
 
@@ -54,4 +54,4 @@ std::variant<std::vector<domain::CsvLine>, std::string> FileCsvSource::Read(
   return lines;
 }
 
-}  // namespace flatfiledb::infrastructure
+}  // namespace strata::infrastructure

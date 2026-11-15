@@ -7,13 +7,13 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/expression.h"
-#include "flatfiledb/domain/scalar_functions.h"
+#include "strata/domain/expression.h"
+#include "strata/domain/scalar_functions.h"
 #include "test_harness.h"
 
 namespace {
 
-namespace domain = flatfiledb::domain;
+namespace domain = strata::domain;
 
 constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
@@ -349,7 +349,7 @@ TEST(test_like_matches_wildcards_case_and_utf8) {
   for (const LikeCase& like_case : cases) {
     if (domain::LikeMatches(like_case.text, like_case.pattern) !=
         like_case.is_match) {
-      flatfiledb::testing::ReportFailure(
+      strata::testing::ReportFailure(
           __FILE__, __LINE__,
           std::string("LIKE [") + like_case.text + "] [" + like_case.pattern +
               "] expected " + (like_case.is_match ? "true" : "false"));

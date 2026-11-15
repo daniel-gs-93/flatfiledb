@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/table_heap.h"
+#include "strata/paged/table_heap.h"
 
 #include <algorithm>
 #include <string>
@@ -6,10 +6,10 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/slotted_page.h"
-#include "flatfiledb/paged/tuple_codec.h"
+#include "strata/paged/slotted_page.h"
+#include "strata/paged/tuple_codec.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -295,4 +295,4 @@ Status TableHeap::Delete(Rid rid) {
   return std::nullopt;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

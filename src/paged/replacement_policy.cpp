@@ -1,10 +1,10 @@
-#include "flatfiledb/paged/replacement_policy.h"
+#include "strata/paged/replacement_policy.h"
 
 #include <algorithm>
 #include <list>
 #include <memory>
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 void LruPolicy::RecordLoad(FrameId frame, PageId /*page_id*/) { Remove(frame); }
 
@@ -189,4 +189,4 @@ std::unique_ptr<IReplacementPolicy> MakeReplacementPolicy(
   return std::make_unique<LruPolicy>();
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

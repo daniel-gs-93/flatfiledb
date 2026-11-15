@@ -1,5 +1,5 @@
-#ifndef FLATFILEDB_TESTS_TEST_HARNESS_H_
-#define FLATFILEDB_TESTS_TEST_HARNESS_H_
+#ifndef STRATA_TESTS_TEST_HARNESS_H_
+#define STRATA_TESTS_TEST_HARNESS_H_
 
 #include <cstddef>
 #include <ostream>
@@ -10,7 +10,7 @@
 // Minimal test harness. A test is a void function registered with
 // TEST; CHECK records a failure and continues, SKIP ends the test as skipped.
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 using TestFunction = void (*)();
 
@@ -52,37 +52,37 @@ std::string DescribeMismatch(const char* left_expr, const char* right_expr,
   return stream.str();
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing
 
-#define TEST(name)                                                        \
-  static void name();                                                     \
-  static ::flatfiledb::testing::Registrar registrar_##name(#name, &name); \
+#define TEST(name)                                                    \
+  static void name();                                                 \
+  static ::strata::testing::Registrar registrar_##name(#name, &name); \
   static void name()
 
-#define CHECK(condition)                                                    \
-  do {                                                                      \
-    if (!(condition)) {                                                     \
-      ::flatfiledb::testing::ReportFailure(__FILE__, __LINE__,              \
-                                           "CHECK(" #condition ") failed"); \
-    }                                                                       \
+#define CHECK(condition)                                                \
+  do {                                                                  \
+    if (!(condition)) {                                                 \
+      ::strata::testing::ReportFailure(__FILE__, __LINE__,              \
+                                       "CHECK(" #condition ") failed"); \
+    }                                                                   \
   } while (false)
 
-#define CHECK_EQ(left, right)                                       \
-  do {                                                              \
-    auto&& check_left_value = (left);                               \
-    auto&& check_right_value = (right);                             \
-    if (!(check_left_value == check_right_value)) {                 \
-      ::flatfiledb::testing::ReportFailure(                         \
-          __FILE__, __LINE__,                                       \
-          ::flatfiledb::testing::DescribeMismatch(                  \
-              #left, #right, check_left_value, check_right_value)); \
-    }                                                               \
+#define CHECK_EQ(left, right)                                                  \
+  do {                                                                         \
+    auto&& check_left_value = (left);                                          \
+    auto&& check_right_value = (right);                                        \
+    if (!(check_left_value == check_right_value)) {                            \
+      ::strata::testing::ReportFailure(                                        \
+          __FILE__, __LINE__,                                                  \
+          ::strata::testing::DescribeMismatch(#left, #right, check_left_value, \
+                                              check_right_value));             \
+    }                                                                          \
   } while (false)
 
-#define SKIP(reason)                            \
-  do {                                          \
-    ::flatfiledb::testing::MarkSkipped(reason); \
-    return;                                     \
+#define SKIP(reason)                        \
+  do {                                      \
+    ::strata::testing::MarkSkipped(reason); \
+    return;                                 \
   } while (false)
 
-#endif  // FLATFILEDB_TESTS_TEST_HARNESS_H_
+#endif  // STRATA_TESTS_TEST_HARNESS_H_

@@ -13,11 +13,11 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/csv_codec.h"
+#include "strata/csv_codec.h"
 #include "test_harness.h"
 #include "test_support.h"
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -752,7 +752,7 @@ TEST(test_csv_load_ignores_files_not_in_catalog) {
   WriteFixtureA(extra_dir.path());
   WriteFile(extra_dir.path() / "extra.csv", "a,b\n1,2\n");
   WriteFile(extra_dir.path() / "users.csv.orig", "stale\n");
-  WriteFile(extra_dir.path() / ".flatfiledb.lock", "");
+  WriteFile(extra_dir.path() / ".strata.lock", "");
   WriteFile(extra_dir.path() / "notes.txt", "hello\n");
   auto plain = MakeCsvRepository(plain_dir.path());
   auto extra = MakeCsvRepository(extra_dir.path());
@@ -1050,4 +1050,4 @@ TEST(test_csv_load_reports_rejected_line_numbers) {
   }
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

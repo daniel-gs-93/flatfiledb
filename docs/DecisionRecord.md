@@ -1,6 +1,6 @@
 # Decision Record
 
-This document records the design decisions of flatfiledb, a database driven from a Command-Line Interface (CLI), as Architecture Decision Records (ADR). An entry has up to five parts: the Decision, the Rationale, the Cost, the Current state (what can be observed in the system today) and the Rejected alternatives. The design is in [DesignDocument.md](DesignDocument.md) and the tests are in [TestDocument.md](TestDocument.md).
+This document records the design decisions of strata, a database driven from a Command-Line Interface (CLI), as Architecture Decision Records (ADR). An entry has up to five parts: the Decision, the Rationale, the Cost, the Current state (what can be observed in the system today) and the Rejected alternatives. The design is in [DesignDocument.md](DesignDocument.md) and the tests are in [TestDocument.md](TestDocument.md).
 
 ## Decisions
 
@@ -113,7 +113,7 @@ This document records the design decisions of flatfiledb, a database driven from
 
 ### ADR-0015: The database directory is protected by `flock`
 
-- **Decision:** At `.open`, `DirectoryLock::Acquire` takes an exclusive `flock` (`LOCK_EX | LOCK_NB`) on the dedicated file `.flatfiledb.lock` in the database directory. If another process holds it, `.open` fails and the current connection stays. `OpenedDatabase` holds the lock as a `std::shared_ptr<void>`, and reopening the same directory in the same process reuses it. When the directory is not writable (creating the lock file returns `EACCES` or `EROFS`), no lock is taken.
+- **Decision:** At `.open`, `DirectoryLock::Acquire` takes an exclusive `flock` (`LOCK_EX | LOCK_NB`) on the dedicated file `.strata.lock` in the database directory. If another process holds it, `.open` fails and the current connection stays. `OpenedDatabase` holds the lock as a `std::shared_ptr<void>`, and reopening the same directory in the same process reuses it. When the directory is not writable (creating the lock file returns `EACCES` or `EROFS`), no lock is taken.
 - **Rationale:** Two processes that `.open` the same directory and then write lose data silently: the later writer rewrites the whole file from its own memory. The lock cannot sit on `catalog.csv`, because the staged commit replaces that file by rename and a lock on the old inode protects nothing. An `flock` lock belongs to each `open()`, so a process locking the same directory twice would block on itself, hence the reuse on reopen. The kernel drops the lock when the process exits or crashes, which a Process Identifier (PID) file cannot do.
 - **Cost:** Only one process can open a database at a time, even one that only queries. The lock is advisory, so it cannot stop a text editor, and `flock` behaves differently on network file systems. A second writer now gets an explicit error instead of silently overwriting the first.
 - **Current state:** When the lock is held, the output is `error: could not open <directory>: database is locked by another process`.
@@ -258,10 +258,10 @@ This document records the design decisions of flatfiledb, a database driven from
 
 ### ADR-0033: The engine is named `paged`
 
-- **Decision:** The second storage engine is called `paged`. The name is used in the directories `include/flatfiledb/paged/` and `src/paged/`, in the namespace `flatfiledb::paged`, in the argument of `.engine flatfile|paged` and in the documents.
+- **Decision:** The second storage engine is called `paged`. The name is used in the directories `include/strata/paged/` and `src/paged/`, in the namespace `strata::paged`, in the argument of `.engine flatfile|paged` and in the documents.
 - **Rationale:** The name describes the mechanism, storage in units of pages, and is symmetric with `flatfile`, so the difference between the two engines shows in the names. The name appears in every file path and namespace, and deferring the decision would make a later rename cover all of the paged code.
 - **Cost:** The name `paged` does not point to a specific implementation. The engine is still called `paged` if the page organization is replaced later. In return the names of the two engines each describe their storage mechanism.
-- **Current state:** The directories `include/flatfiledb/paged/` and `src/paged/` and the namespace `flatfiledb::paged` exist. The engine name is reviewed together with the project name, and the final name is not decided yet. The type names inside `paged` carry no engine name (ADR-0035), so a rename affects the namespace, the directories, the argument of `.engine`, the `test_paged_` prefix of test function names and the prefixes of test IDs (`PU-`, `PI-`, `PE-`).
+- **Current state:** The directories `include/strata/paged/` and `src/paged/` and the namespace `strata::paged` exist. The engine name is reviewed together with the project name, and the final name is not decided yet. The type names inside `paged` carry no engine name (ADR-0035), so a rename affects the namespace, the directories, the argument of `.engine`, the `test_paged_` prefix of test function names and the prefixes of test IDs (`PU-`, `PI-`, `PE-`).
 - **Rejected:** A product-style code name (the name does not show the storage mechanism); `page` (too short and confusable with a common noun).
 
 ### ADR-0034: Each frame latch occupies one cache line
@@ -274,7 +274,7 @@ This document records the design decisions of flatfiledb, a database driven from
 
 ### ADR-0035: Type names in the paged layer carry no engine prefix, and a table's page chain is called `TableHeap`
 
-- **Decision:** The types inside `flatfiledb::paged` do not take the `Paged` prefix. They are `Database`, `Catalog`, `DatabaseOptions` and `PageResult<T>`, and the files are `paged/database.h` and `paged/catalog.h`. The page chain of a table is called `TableHeap`, in the file `paged/table_heap.h`, and the documents call it the table heap. Test function names keep the `test_paged_` prefix.
+- **Decision:** The types inside `strata::paged` do not take the `Paged` prefix. They are `Database`, `Catalog`, `DatabaseOptions` and `PageResult<T>`, and the files are `paged/database.h` and `paged/catalog.h`. The page chain of a table is called `TableHeap`, in the file `paged/table_heap.h`, and the documents call it the table heap. Test function names keep the `test_paged_` prefix.
 - **Rationale:** The types are already inside the `paged` namespace, and `paged::PagedDatabase` repeats the engine name. The engine name is reviewed together with the project name, and type names without it keep a rename from touching these types. `IPageStore`, `BufferManager`, `PageGuard` and `PageError` in the same namespace have no prefix, so the prefix would appear on only 4 types. `PageResult` and `PageError` share the same stem. For the page chain of a table, the "File" in `HeapFile` refers to a series of pages, while the real files in this project are `paged.db` and the CSVs of the flatfile engine. The object returned by `Database::Table(name)` is named after its internal arrangement, not after its role. `TableHeap` keeps the "heap" used by textbooks and PostgreSQL and drops "File". See Design Document 2.1, 2.2 and 2.5.
 - **Cost:** Code outside `paged` has to write `paged::Database` and `paged::Catalog` to tell which engine is meant. In return the type names are independent of the engine name. `PageResult<T>` is also used for the return values of operations that are not page operations, for example table creation, and its semantics are narrower than those of `Result<T>`. In return its stem is consistent with `PageError`.
 - **Current state:** The code and the documents use these names: `paged::Database`, `Catalog`, `DatabaseOptions`, `PageResult<T>` and `TableHeap`.

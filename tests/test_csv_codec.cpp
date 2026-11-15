@@ -8,13 +8,13 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/csv_codec.h"
+#include "strata/csv_codec.h"
 #include "test_harness.h"
 
 namespace {
 
-namespace domain = flatfiledb::domain;
-namespace infrastructure = flatfiledb::infrastructure;
+namespace domain = strata::domain;
+namespace infrastructure = strata::infrastructure;
 
 using Fields = std::vector<std::string>;
 
@@ -23,7 +23,7 @@ constexpr const char* kCatalogHeader =
     "default,ref_table,ref_column\n";
 
 void ReportError(const std::string& message) {
-  flatfiledb::testing::ReportFailure(__FILE__, __LINE__, message);
+  strata::testing::ReportFailure(__FILE__, __LINE__, message);
 }
 
 // The fields of line, or an empty list after reporting a failure.

@@ -8,12 +8,12 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/buffer_manager.h"
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/paged/slotted_page.h"
-#include "flatfiledb/paged/table_heap.h"
+#include "strata/domain/value.h"
+#include "strata/paged/buffer_manager.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/page_store.h"
+#include "strata/paged/slotted_page.h"
+#include "strata/paged/table_heap.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 
@@ -21,23 +21,23 @@
 
 namespace {
 
-using flatfiledb::domain::DataType;
-using flatfiledb::domain::Row;
-using flatfiledb::domain::TableSchema;
-using flatfiledb::domain::Value;
-using flatfiledb::paged::BufferManager;
-using flatfiledb::paged::kInvalidPageId;
-using flatfiledb::paged::LatchMode;
-using flatfiledb::paged::MemoryPageStore;
-using flatfiledb::paged::PageGuard;
-using flatfiledb::paged::PageId;
-using flatfiledb::paged::ReplacementPolicyKind;
-using flatfiledb::paged::Rid;
-using flatfiledb::paged::SlottedPage;
-using flatfiledb::paged::SlottedPageView;
-using flatfiledb::paged::TableHeap;
-using flatfiledb::testing::Column;
-using flatfiledb::testing::MakeSchema;
+using strata::domain::DataType;
+using strata::domain::Row;
+using strata::domain::TableSchema;
+using strata::domain::Value;
+using strata::paged::BufferManager;
+using strata::paged::kInvalidPageId;
+using strata::paged::LatchMode;
+using strata::paged::MemoryPageStore;
+using strata::paged::PageGuard;
+using strata::paged::PageId;
+using strata::paged::ReplacementPolicyKind;
+using strata::paged::Rid;
+using strata::paged::SlottedPage;
+using strata::paged::SlottedPageView;
+using strata::paged::TableHeap;
+using strata::testing::Column;
+using strata::testing::MakeSchema;
 
 constexpr std::uint32_t kTableId = 5;
 
@@ -103,9 +103,9 @@ Rid MustInsert(TableHeap& heap, const Row& row) {
 }
 
 // Every row of the heap with its Rid, in scan order.
-std::vector<flatfiledb::paged::ScanItem> ScanAll(const TableHeap& heap) {
-  std::vector<flatfiledb::paged::ScanItem> items;
-  flatfiledb::paged::HeapScan scan = heap.Scan();
+std::vector<strata::paged::ScanItem> ScanAll(const TableHeap& heap) {
+  std::vector<strata::paged::ScanItem> items;
+  strata::paged::HeapScan scan = heap.Scan();
   while (true) {
     auto next = scan.Next();
     CHECK_OK(next);
@@ -217,7 +217,7 @@ TEST(test_paged_heap_delete_frees_space_for_reuse) {
   for (const Rid& rid : deleted) {
     CHECK_ERROR(env.heap().Get(rid), kNotFound);
   }
-  const flatfiledb::paged::PageId pages_before = env.store().PageCount();
+  const strata::paged::PageId pages_before = env.store().PageCount();
   for (std::int64_t id = 200; id < 300; ++id) {
     CHECK_OK(env.heap().Insert(HundredByteRow(id)));
   }
@@ -282,7 +282,7 @@ TEST(test_paged_heap_rejects_invalid_arguments) {
   if (!env.is_ready()) {
     return;
   }
-  const flatfiledb::paged::PageId pages_before = env.store().PageCount();
+  const strata::paged::PageId pages_before = env.store().PageCount();
   // 8 + (2 + 4043) + 8 = 4061 bytes.
   CHECK_ERROR(env.heap().Insert(PersonRow(1, 4043)), kTooLarge);
   CHECK_EQ(env.store().PageCount(), pages_before);
@@ -400,11 +400,10 @@ void RunRandomOperations(ReplacementPolicyKind policy, std::uint64_t seed) {
     } else if (choice < 85) {
       const std::size_t index = generator() % live.size();
       const Row row = RandomRow(generator, next_id++);
-      const flatfiledb::paged::Status updated =
-          env.heap().Update(live[index], row);
+      const strata::paged::Status updated = env.heap().Update(live[index], row);
       if (!updated.has_value()) {
         model[live[index]] = row;
-      } else if (updated->code == flatfiledb::paged::PageErrorCode::kNoSpace) {
+      } else if (updated->code == strata::paged::PageErrorCode::kNoSpace) {
         CHECK_OK(env.heap().Delete(live[index]));
         model.erase(live[index]);
         auto reinserted = env.heap().Insert(row);
@@ -475,7 +474,7 @@ OpenOutcome OpenAfterDamage(ChainDamage damage) {
     if (damage == ChainDamage::kCycle) {
       SlottedPage(guard.mutable_data()).set_next_page_id(first_page);
     } else if (damage == ChainDamage::kForeignTableId) {
-      flatfiledb::paged::WriteLe32(guard.mutable_data() + 20, 99);
+      strata::paged::WriteLe32(guard.mutable_data() + 20, 99);
     } else {
       guard.mutable_data()[8] = 1;
     }
@@ -490,8 +489,8 @@ OpenOutcome OpenAfterDamage(ChainDamage damage) {
   }
   std::unique_ptr<BufferManager> buffer = std::move(fresh).value();
   auto opened = TableHeap::Open(*buffer, env.schema(), kTableId, first_page);
-  return OpenOutcome{flatfiledb::testing::ErrorName(opened),
-                     flatfiledb::testing::MessageOf(opened)};
+  return OpenOutcome{strata::testing::ErrorName(opened),
+                     strata::testing::MessageOf(opened)};
 }
 
 }  // namespace
@@ -540,13 +539,13 @@ TEST(test_paged_heap_scan_ends_after_a_page_error) {
     }
     PageGuard guard = std::move(fetched).value();
     const std::size_t slot_position =
-        flatfiledb::paged::kPageHeaderSize + flatfiledb::paged::kSlotSize;
-    flatfiledb::paged::WriteLe16(guard.mutable_data() + slot_position, 8);
-    flatfiledb::paged::WriteLe16(guard.mutable_data() + slot_position + 2, 10);
+        strata::paged::kPageHeaderSize + strata::paged::kSlotSize;
+    strata::paged::WriteLe16(guard.mutable_data() + slot_position, 8);
+    strata::paged::WriteLe16(guard.mutable_data() + slot_position + 2, 10);
     guard.MarkDirty();
   }
 
-  flatfiledb::paged::HeapScan scan = env.heap().Scan();
+  strata::paged::HeapScan scan = env.heap().Scan();
   auto first = scan.Next();
   CHECK_ERROR(first, kCorrupt);
   CHECK_MESSAGE_CONTAINS(first, "slot 1");

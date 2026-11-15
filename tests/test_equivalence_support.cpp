@@ -8,17 +8,17 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/csv_file_source.h"
-#include "flatfiledb/domain/ast.h"
-#include "flatfiledb/domain/binder.h"
-#include "flatfiledb/domain/engine.h"
-#include "flatfiledb/domain/plan.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/page_store.h"
-#include "flatfiledb/sql_parser.h"
+#include "strata/csv_file_source.h"
+#include "strata/domain/ast.h"
+#include "strata/domain/binder.h"
+#include "strata/domain/engine.h"
+#include "strata/domain/plan.h"
+#include "strata/paged/database.h"
+#include "strata/paged/page_store.h"
+#include "strata/sql_parser.h"
 #include "test_harness.h"
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -703,4 +703,4 @@ bool ReportDifference(const char* file, int line,
   return false;
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

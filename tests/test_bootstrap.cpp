@@ -13,21 +13,21 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/bootstrap.h"
-#include "flatfiledb/directory_lock.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/paged_engine.h"
-#include "flatfiledb/paged/paged_types.h"
+#include "strata/bootstrap.h"
+#include "strata/directory_lock.h"
+#include "strata/domain/value.h"
+#include "strata/paged/database.h"
+#include "strata/paged/paged_engine.h"
+#include "strata/paged/paged_types.h"
 #include "test_paged_support.h"
 #include "test_support.h"
 
 namespace {
 
-namespace bootstrap = flatfiledb::bootstrap;
-namespace domain = flatfiledb::domain;
-namespace infrastructure = flatfiledb::infrastructure;
-namespace testing = flatfiledb::testing;
+namespace bootstrap = strata::bootstrap;
+namespace domain = strata::domain;
+namespace infrastructure = strata::infrastructure;
+namespace testing = strata::testing;
 
 using OpenOutcome = std::variant<bootstrap::OpenedDatabase, std::string>;
 
@@ -162,7 +162,7 @@ TEST(test_bootstrap_open_creates_missing_directory) {
   CHECK(first->tables.empty());
   CHECK(std::filesystem::is_directory(dir.path() / "fresh"));
   CHECK(std::filesystem::is_directory(dir.path() / "fresh2"));
-  CHECK(std::filesystem::exists(dir.path() / "fresh" / ".flatfiledb.lock"));
+  CHECK(std::filesystem::exists(dir.path() / "fresh" / ".strata.lock"));
 }
 
 TEST(test_bootstrap_create_failure_returns_description) {
@@ -280,7 +280,7 @@ TEST(test_bootstrap_empty_directory_has_no_tables) {
 
 namespace {
 
-constexpr std::size_t kPageBytes = flatfiledb::paged::kPageSize;
+constexpr std::size_t kPageBytes = strata::paged::kPageSize;
 const char* const kNotWritableReason = "directory is not writable";
 const char* const kLockedReason = "database is locked by another process";
 
@@ -312,7 +312,7 @@ std::string PagedOpenFailure(
 }
 
 // Executes sql and reports a failure when it is an error.
-void MustExecute(flatfiledb::application::QueryService& service,
+void MustExecute(strata::application::QueryService& service,
                  const std::string& sql) {
   domain::ExecutionResult result = testing::ExecuteSql(service, sql);
   if (const domain::ExecutionError* error = testing::AsError(result)) {
@@ -335,7 +335,7 @@ std::string TablesText(const bootstrap::OpenedDatabase& opened) {
 
 // A paged database in `directory` with users (2 rows) and posts (no row),
 // closed again. Returns the first page of users, or 0 after a failure.
-flatfiledb::paged::PageId WritePagedFixture(
+strata::paged::PageId WritePagedFixture(
     const std::filesystem::path& directory) {
   std::unique_ptr<bootstrap::OpenedDatabase> opened = MustOpenPaged(directory);
   if (opened == nullptr) {
@@ -347,7 +347,7 @@ flatfiledb::paged::PageId WritePagedFixture(
               "CREATE TABLE posts (id INT PRIMARY KEY, body TEXT)");
   MustExecute(*opened->service,
               "INSERT INTO users VALUES (1, 'ann'), (2, 'bob')");
-  const std::optional<flatfiledb::paged::PageId> first_page =
+  const std::optional<strata::paged::PageId> first_page =
       opened->paged_engine->database().catalog().FirstPage("users");
   CHECK(first_page.has_value());
   return first_page.value_or(0);
@@ -385,7 +385,7 @@ void CheckOpenCreatesDirectoryAndFile() {
     CHECK_EQ(created->lock.use_count(), 2);
     CHECK_EQ(created->directory, std::filesystem::canonical(fresh).string());
     CHECK(std::filesystem::is_regular_file(fresh / "paged.db"));
-    CHECK(std::filesystem::exists(fresh / ".flatfiledb.lock"));
+    CHECK(std::filesystem::exists(fresh / ".strata.lock"));
     CHECK(IsLockHeld(fresh));
   }
   CHECK(!IsLockHeld(fresh));
@@ -515,10 +515,9 @@ void CheckCorruptFileFailsWholeOpen() {
 
   testing::TempDir header_dir;
   WritePagedFixture(header_dir.path());
-  FlipByte(header_dir.path() / "paged.db", flatfiledb::paged::layout::kMagic);
+  FlipByte(header_dir.path() / "paged.db", strata::paged::layout::kMagic);
   testing::TempDir page_dir;
-  const flatfiledb::paged::PageId table_page =
-      WritePagedFixture(page_dir.path());
+  const strata::paged::PageId table_page = WritePagedFixture(page_dir.path());
   CHECK(table_page != 0);
   FlipByte(page_dir.path() / "paged.db", table_page * kPageBytes + 200);
 

@@ -9,16 +9,16 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/csv_file_source.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/paged/database.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/csv_file_source.h"
+#include "strata/domain/value.h"
+#include "strata/paged/database.h"
+#include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 #include "test_paged_support.h"
 #include "test_support.h"
 
-#ifndef FLATFILEDB_SOURCE_DIR
-#error "FLATFILEDB_SOURCE_DIR must be defined by the build"
+#ifndef STRATA_SOURCE_DIR
+#error "STRATA_SOURCE_DIR must be defined by the build"
 #endif
 
 // The paged layer on the real data/ directory with a buffer pool smaller than
@@ -26,25 +26,25 @@
 
 namespace {
 
-using flatfiledb::domain::DataType;
-using flatfiledb::domain::Row;
-using flatfiledb::domain::TableSchema;
-using flatfiledb::domain::Value;
-using flatfiledb::paged::Database;
-using flatfiledb::paged::DatabaseOptions;
-using flatfiledb::paged::LatchMode;
-using flatfiledb::paged::ReplacementPolicyKind;
-using flatfiledb::paged::Rid;
-using flatfiledb::paged::SlottedPageView;
-using flatfiledb::testing::Column;
-using flatfiledb::testing::MakeSchema;
-using flatfiledb::testing::ReadFile;
-using flatfiledb::testing::TempDir;
+using strata::domain::DataType;
+using strata::domain::Row;
+using strata::domain::TableSchema;
+using strata::domain::Value;
+using strata::paged::Database;
+using strata::paged::DatabaseOptions;
+using strata::paged::LatchMode;
+using strata::paged::ReplacementPolicyKind;
+using strata::paged::Rid;
+using strata::paged::SlottedPageView;
+using strata::testing::Column;
+using strata::testing::MakeSchema;
+using strata::testing::ReadFile;
+using strata::testing::TempDir;
 
 constexpr std::size_t kPoolFrames = 64;  // 256 KiB, below the data size
 
 std::filesystem::path DataDirectory() {
-  return std::filesystem::path(FLATFILEDB_SOURCE_DIR) / "data";
+  return std::filesystem::path(STRATA_SOURCE_DIR) / "data";
 }
 
 bool HasData() {
@@ -110,13 +110,13 @@ bool RowIdLess(const Row& left, const Row& right) {
 CsvTable LoadCsv(const TableSchema& schema) {
   CsvTable table;
   table.schema = schema;
-  flatfiledb::infrastructure::FileCsvSource source;
+  strata::infrastructure::FileCsvSource source;
   auto read = source.Read((DataDirectory() / (schema.name + ".csv")).string());
-  CHECK(std::holds_alternative<std::vector<flatfiledb::domain::CsvLine>>(read));
-  if (!std::holds_alternative<std::vector<flatfiledb::domain::CsvLine>>(read)) {
+  CHECK(std::holds_alternative<std::vector<strata::domain::CsvLine>>(read));
+  if (!std::holds_alternative<std::vector<strata::domain::CsvLine>>(read)) {
     return table;
   }
-  const auto& lines = std::get<std::vector<flatfiledb::domain::CsvLine>>(read);
+  const auto& lines = std::get<std::vector<strata::domain::CsvLine>>(read);
   for (std::size_t i = 1; i < lines.size(); ++i) {  // line 0 is the header
     if (!lines[i].fields.has_value()) {
       continue;
@@ -286,9 +286,9 @@ TEST(test_paged_environment_reuses_space_after_deletes) {
   if (!heap.ok()) {
     return;
   }
-  const flatfiledb::paged::PageId pages_before = database->buffer().PageCount();
+  const strata::paged::PageId pages_before = database->buffer().PageCount();
 
-  std::vector<flatfiledb::paged::ScanItem> items;
+  std::vector<strata::paged::ScanItem> items;
   auto scan = heap.value()->Scan();
   while (true) {
     auto next = scan.Next();

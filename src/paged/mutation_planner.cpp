@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/mutation_planner.h"
+#include "strata/paged/mutation_planner.h"
 
 #include <algorithm>
 #include <cassert>
@@ -15,9 +15,9 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/expression.h"
-#include "flatfiledb/paged/row_keys.h"
-#include "flatfiledb/paged/tuple_codec.h"
+#include "strata/domain/expression.h"
+#include "strata/paged/row_keys.h"
+#include "strata/paged/tuple_codec.h"
 
 // Pure logic (design document 2.4): every function here reads schemas from an
 // ICatalog and rows from an ITableReader and returns a value. It touches no
@@ -25,7 +25,7 @@
 // value or by rvalue reference owns it afterwards; a pointer parameter is
 // borrowed for the call.
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -884,4 +884,4 @@ PlanMutationResult PlanMutation(const domain::PlanNode& plan,
   return MakeExecutionError(ErrorKind::kUnsupported, "not a write plan node");
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

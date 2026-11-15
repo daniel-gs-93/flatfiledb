@@ -1,6 +1,6 @@
-# FlatFileDB
+# Strata
 
-FlatFileDB is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that later engines will be compared with.
+Strata is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that later engines will be compared with.
 
 In the flatfile engine a directory is a database. `catalog.csv` records the table definitions, and each table is a Comma-Separated Values (CSV) file. Writes go back to the CSV immediately, and a write that spans several files either completes or changes nothing.
 
@@ -19,8 +19,8 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 ## Directory Structure
 
 ```text
-flatfiledb/
-├── include/flatfiledb/
+strata/
+├── include/strata/
 │   ├── domain/            # values, syntax tree, plan, Binder, expression evaluation, scalar functions, import inference, engine port
 │   ├── paged/             # storage layer of the paged engine: page format, buffer pool, table heap, catalog, Database
 │   ├── application.h      # QueryService: run one statement, import a CSV
@@ -47,15 +47,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-This produces `build/flatfiledb_cli` and `build/flatfiledb_tests`.
+This produces `build/strata_cli` and `build/strata_tests`.
 
 ## Quick Start
 
-The CLI reads commands and SQL statements from standard input, line by line, until the input ends. `flatfiledb_cli [<directory> [--parallel]]` opens a database at startup, like typing `.open <directory> [--parallel]` afterwards. Any other arguments print the usage to standard error and exit with status 2.
+The CLI reads commands and SQL statements from standard input, line by line, until the input ends. `strata_cli [<directory> [--parallel]]` opens a database at startup, like typing `.open <directory> [--parallel]` afterwards. Any other arguments print the usage to standard error and exit with status 2.
 
 A statement ends with `;` and can span several lines. One line can hold several statements, a `;` inside a string literal does not end one, and `--` starts a comment that runs to the end of the line. `.open <directory>` has to come before the first SQL statement. If the directory does not exist but its parent does, `.open` creates it and prints `created new database <directory>`.
 
-On a terminal the prompt is `flatfiledb> `, which changes to `       ...> ` inside an unfinished statement and to `         '> ` inside a string literal. Input from a pipe or a file gets no prompt.
+On a terminal the prompt is `strata> `, which changes to `   ...> ` inside an unfinished statement and to `     '> ` inside a string literal. Input from a pipe or a file gets no prompt.
 
 | Command | Effect |
 |---|---|
@@ -75,10 +75,10 @@ A command takes the whole line and only counts as one when no statement is unfin
 
 `sample_my_db/` is a small course enrollment database that ships with the repository. It has four tables: `instructors` (6 rows), `students` (30), `courses` (12) and `enrollments` (144). Each `enrollments` row references a student and a course, and each course references an instructor. `.schema` lists the columns. There is no NULL, so a `score` of 0 means no grade yet, and course capacity and duplicate enrollments are not checked. Every table has an `id`, so a join writes `courses.id`. The other column names are unique across the four tables and can be written bare.
 
-A read-only query can open the database directly (opening only creates `.flatfiledb.lock`, which `.gitignore` excludes):
+A read-only query can open the database directly (opening only creates `.strata.lock`, which `.gitignore` excludes):
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 "$CLI" <<'EOF'
 .open sample_my_db
 .tables
@@ -133,7 +133,7 @@ id	name	LENGTH(name)	UPPER(major)
 Writes rewrite the CSV, so this session uses a copy. The foreign key checks reject the `INSERT` and the `DELETE`, and the valid `UPDATE` is written to `enrollments.csv` at once:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 rm -rf /tmp/sample_my_db_copy && cp -R sample_my_db /tmp/sample_my_db_copy
 "$CLI" <<'EOF'
 .open /tmp/sample_my_db_copy
@@ -156,14 +156,14 @@ id	student_id	course_id	status	score
 100	1008	3	completed	90
 ```
 
-To use it interactively, run `"$CLI"` without a pipe, type `.open sample_my_db` at the `flatfiledb> ` prompt and enter statements line by line.
+To use it interactively, run `"$CLI"` without a pipe, type `.open sample_my_db` at the `strata> ` prompt and enter statements line by line.
 
 ### Starting from an Empty Directory
 
 `.open` creates a directory that does not exist, so no `mkdir` is needed:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 rm -rf /tmp/mydb
 "$CLI" <<'EOF'
 .open /tmp/mydb
@@ -196,7 +196,7 @@ id	body	owner	pinned
 A statement that spans lines, a `--` comment and `.schema`:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 "$CLI" <<'EOF'
 .open /tmp/mydb
 .tables
@@ -227,7 +227,7 @@ The `.schema` output doubles as a schema file: feed it to the CLI after `.open` 
 `.import` loads an external CSV into a new table. It infers the column types and the primary key from the data and leaves the source file alone. The example writes a small CSV to `/tmp` first. The comma in `"Eraser, large"` is inside double quotes, so it stays part of the value:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 rm -rf /tmp/shop_db
 cat > /tmp/products.csv <<'EOF'
 id,title,price,stock
@@ -275,7 +275,7 @@ A bad row has a different column count from the header, unpaired quotes, or a va
 In the file below, `10x3` on line 4 is not an integer and line 5 lacks a column. The first `.import` stops at line 5. The second stops at line 4 once `order_no` is declared `INT`, and the third skips both:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 rm -rf /tmp/shop_db2
 cat > /tmp/orders.csv <<'EOF'
 order_no,customer,amount
@@ -317,11 +317,11 @@ The statements below attach `users.csv`, `posts.csv` and `engagements.csv` from 
 
 ```bash
 (
-  CLI="$PWD/build/flatfiledb_cli"
-  rm -rf /tmp/flatfiledb_demo
-  mkdir /tmp/flatfiledb_demo
-  cp -R data /tmp/flatfiledb_demo/
-  cd /tmp/flatfiledb_demo
+  CLI="$PWD/build/strata_cli"
+  rm -rf /tmp/strata_demo
+  mkdir /tmp/strata_demo
+  cp -R data /tmp/strata_demo/
+  cd /tmp/strata_demo
   "$CLI" <<'EOF'
 .open data
 CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location TEXT);
@@ -353,16 +353,16 @@ username	location
 knorman	Grahamside
 ```
 
-From then on `.open /tmp/flatfiledb_demo/data` is enough.
+From then on `.open /tmp/strata_demo/data` is enough.
 
 Line 12 of `users.csv` has `1s0` where an integer belongs, and lines 17 and 18 have the wrong column count. The loader rejects all three, so `users=10000` is followed by `(rejected 3)` and a line naming them. A file lists at most 10 line numbers, then `, ...`.
 
 Queries can follow:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 "$CLI" <<'EOF'
-.open /tmp/flatfiledb_demo/data
+.open /tmp/strata_demo/data
 SELECT id, UPPER(username), LENGTH(username)
 FROM users WHERE username LIKE 'kn%' ORDER BY id LIMIT 2;
 SELECT COUNT(*), MIN(timestamp), MAX(timestamp), AVG(timestamp) FROM engagements;
@@ -423,7 +423,7 @@ Design Document 2.3 to 2.6 and 3.6 cover syntax, semantics, referential integrit
 
 ## Engines
 
-FlatFileDB has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) describes how `paged` runs statements.
+Strata has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) describes how `paged` runs statements.
 
 `.engine` shows the engine of the session, and `.engine paged` or `.engine flatfile` selects one. The choice lasts for one session and is not saved, so every start begins with `flatfile`. `.open` uses the selected engine. When a database is already open, naming the other engine reopens the same directory with it; if that fails, the database and the engine stay as they were.
 
@@ -434,7 +434,7 @@ Queries, writes and constraints behave the same on both engines, apart from a fe
 A session with `paged`, in a temporary directory:
 
 ```bash
-CLI="$PWD/build/flatfiledb_cli"
+CLI="$PWD/build/strata_cli"
 cd "$(mktemp -d)"
 printf '%s\n' '.engine paged' '.open demo' \
   'CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);' \
@@ -472,7 +472,7 @@ COUNT(*)
 - A TEXT value cannot contain a newline. Commas and double quotes are stored with CSV quoting.
 - A row that cannot be parsed at load (wrong column count, malformed number, unpaired quotes) is not loaded, and the next `UPDATE`, `DELETE` or `ALTER TABLE` rewrite of the table drops it from the file. `INSERT` only appends a row and leaves those lines in place.
 - Load does not check `UNIQUE` and foreign keys, which apply to later statements only.
-- Only one process can open a database directory at a time (`.flatfiledb.lock`, `flock`), but the lock does not stop a text editor. If a file's size or modification time changes outside the CLI after loading, a write statement prints `error: io: <file name> changed on disk since it was loaded; run .open again` and writes no file. An edit that leaves both unchanged goes unnoticed.
+- Only one process can open a database directory at a time (`.strata.lock`, `flock`), but the lock does not stop a text editor. If a file's size or modification time changes outside the CLI after loading, a write statement prints `error: io: <file name> changed on disk since it was loaded; run .open again` and writes no file. An edit that leaves both unchanged goes unnoticed.
 - Auto-increment takes the current maximum plus 1, so deleting the row with the maximum frees that value for reuse.
 - `fsync` is not called, so a write reported as done can still be lost in a power failure.
 
@@ -481,12 +481,12 @@ COUNT(*)
 Run all tests, or only those whose name contains a string:
 
 ```bash
-./build/flatfiledb_tests              # all
-./build/flatfiledb_tests test_binder  # tests whose name contains test_binder
+./build/strata_tests              # all
+./build/strata_tests test_binder  # tests whose name contains test_binder
 ```
 
 The tests use a small harness in the repository, so no framework is needed. Without `data/`, the `Environment` tests that read it are skipped, and the tests that use `sample_my_db/` do not depend on it.
 
 ## Acknowledgement
 
-The ideas of FlatFileDB are inspired by the flat-file database exercise in CS 6422: Database System Implementation at the Georgia Institute of Technology.
+The ideas of Strata are inspired by the flat-file database exercise in CS 6422: Database System Implementation at the Georgia Institute of Technology.

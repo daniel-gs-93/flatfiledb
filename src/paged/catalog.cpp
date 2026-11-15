@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/catalog.h"
+#include "strata/paged/catalog.h"
 
 #include <algorithm>
 #include <bit>
@@ -15,9 +15,9 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/paged/byte_codec.h"
+#include "strata/paged/byte_codec.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -579,4 +579,4 @@ PageResult<TableSchema> Catalog::CreateTable(const TableSchema& schema) {
   return schema;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

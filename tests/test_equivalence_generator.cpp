@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -1196,4 +1196,4 @@ std::string StatementGenerator::Next(const TableContents& tables) {
   return Delete();
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

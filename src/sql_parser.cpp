@@ -1,4 +1,4 @@
-#include "flatfiledb/sql_parser.h"
+#include "strata/sql_parser.h"
 
 #include <algorithm>
 #include <cassert>
@@ -17,8 +17,8 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/domain/ast.h"
-#include "flatfiledb/domain/value.h"
+#include "strata/domain/ast.h"
+#include "strata/domain/value.h"
 
 // A tokenizer and a recursive-descent parser for the SQL subset of
 // docs/DesignDocument.md section 2.3. Both are pure: they read the input text
@@ -45,7 +45,7 @@
 // aggregate) or one of the scalar functions, and is not a reserved word.
 // clang-format on
 
-namespace flatfiledb::adapter {
+namespace strata::adapter {
 
 namespace {
 
@@ -1601,4 +1601,4 @@ ParseResult ParseStatement(const std::string& text) {
   return parser.Run();
 }
 
-}  // namespace flatfiledb::adapter
+}  // namespace strata::adapter

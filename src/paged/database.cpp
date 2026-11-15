@@ -1,4 +1,4 @@
-#include "flatfiledb/paged/database.h"
+#include "strata/paged/database.h"
 
 #include <array>
 #include <cstring>
@@ -7,10 +7,10 @@
 #include <string>
 #include <utility>
 
-#include "flatfiledb/paged/byte_codec.h"
-#include "flatfiledb/paged/slotted_page.h"
+#include "strata/paged/byte_codec.h"
+#include "strata/paged/slotted_page.h"
 
-namespace flatfiledb::paged {
+namespace strata::paged {
 
 namespace {
 
@@ -249,4 +249,4 @@ Status Database::Close() {
   return std::nullopt;
 }
 
-}  // namespace flatfiledb::paged
+}  // namespace strata::paged

@@ -1,7 +1,7 @@
 #include <string>
 #include <vector>
 
-#include "flatfiledb/statement_buffer.h"
+#include "strata/statement_buffer.h"
 #include "test_harness.h"
 
 // Unit tier: StatementBuffer is pure, so each test feeds lines and reads back
@@ -9,7 +9,7 @@
 
 namespace {
 
-namespace cli = flatfiledb::cli;
+namespace cli = strata::cli;
 
 using Statements = std::vector<std::string>;
 

@@ -11,13 +11,13 @@
 #include <utility>
 #include <vector>
 
-#include "flatfiledb/csv_codec.h"
-#include "flatfiledb/csv_file_source.h"
-#include "flatfiledb/domain/binder.h"
-#include "flatfiledb/sql_parser.h"
+#include "strata/csv_codec.h"
+#include "strata/csv_file_source.h"
+#include "strata/domain/binder.h"
+#include "strata/sql_parser.h"
 #include "test_harness.h"
 
-namespace flatfiledb::testing {
+namespace strata::testing {
 
 namespace {
 
@@ -42,7 +42,7 @@ domain::ColumnDef Column(const std::string& name, domain::DataType type) {
 }  // namespace
 
 TempDir::TempDir() {
-  std::string name = "flatfiledb_test_" + std::to_string(::getpid()) + "_" +
+  std::string name = "strata_test_" + std::to_string(::getpid()) + "_" +
                      std::to_string(next_directory_number.fetch_add(1));
   std::error_code error;
   path_ = std::filesystem::temp_directory_path(error) / name;
@@ -408,4 +408,4 @@ std::vector<std::string> RowsAsText(const domain::ResultSet& result_set) {
   return lines;
 }
 
-}  // namespace flatfiledb::testing
+}  // namespace strata::testing

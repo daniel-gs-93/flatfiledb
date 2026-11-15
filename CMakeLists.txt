@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
-project(flatfiledb
+project(strata
         VERSION 0.1.0
-        DESCRIPTION "FlatFileDB: a SQL terminal over swappable storage engines"
+        DESCRIPTION "Strata: a SQL terminal over swappable storage engines"
         LANGUAGES CXX
         )
 
@@ -16,7 +16,7 @@ find_package(Threads REQUIRED)
 # Domain, Application, Infrastructure, and the SQL parser (Adapter), minus
 # main(), as one library so the test executable links it without recompiling
 # or depending on cli.cpp.
-add_library(flatfiledb_core STATIC
+add_library(strata_core STATIC
         src/application.cpp
         src/binder.cpp
         src/bootstrap.cpp
@@ -48,15 +48,15 @@ add_library(flatfiledb_core STATIC
         src/statement_buffer.cpp
         src/value.cpp
         )
-target_include_directories(flatfiledb_core PUBLIC include)
-target_compile_features(flatfiledb_core PUBLIC cxx_std_20)
-target_link_libraries(flatfiledb_core PUBLIC Threads::Threads)
+target_include_directories(strata_core PUBLIC include)
+target_compile_features(strata_core PUBLIC cxx_std_20)
+target_link_libraries(strata_core PUBLIC Threads::Threads)
 
-add_executable(flatfiledb_cli src/cli.cpp)
-target_link_libraries(flatfiledb_cli PRIVATE flatfiledb_core)
+add_executable(strata_cli src/cli.cpp)
+target_link_libraries(strata_cli PRIVATE strata_core)
 
 enable_testing()
-add_executable(flatfiledb_tests
+add_executable(strata_tests
         tests/test_main.cpp
         tests/test_support.cpp
         tests/test_binder.cpp
@@ -91,10 +91,10 @@ add_executable(flatfiledb_tests
         tests/test_sql_parser.cpp
         tests/test_statement_buffer.cpp
         )
-target_include_directories(flatfiledb_tests PRIVATE tests)
-target_link_libraries(flatfiledb_tests PRIVATE flatfiledb_core)
-target_compile_definitions(flatfiledb_tests PRIVATE
-        FLATFILEDB_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        FLATFILEDB_CLI_PATH="$<TARGET_FILE:flatfiledb_cli>")
-add_dependencies(flatfiledb_tests flatfiledb_cli)
-add_test(NAME flatfiledb_tests COMMAND flatfiledb_tests)
+target_include_directories(strata_tests PRIVATE tests)
+target_link_libraries(strata_tests PRIVATE strata_core)
+target_compile_definitions(strata_tests PRIVATE
+        STRATA_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        STRATA_CLI_PATH="$<TARGET_FILE:strata_cli>")
+add_dependencies(strata_tests strata_cli)
+add_test(NAME strata_tests COMMAND strata_tests)

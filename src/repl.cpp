@@ -1,4 +1,4 @@
-#include "flatfiledb/repl.h"
+#include "strata/repl.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -11,20 +11,20 @@
 #include <variant>
 #include <vector>
 
-#include "flatfiledb/application.h"
-#include "flatfiledb/bootstrap.h"
-#include "flatfiledb/domain/import.h"
-#include "flatfiledb/domain/value.h"
-#include "flatfiledb/sql_parser.h"
-#include "flatfiledb/statement_buffer.h"
+#include "strata/application.h"
+#include "strata/bootstrap.h"
+#include "strata/domain/import.h"
+#include "strata/domain/value.h"
+#include "strata/sql_parser.h"
+#include "strata/statement_buffer.h"
 
-namespace flatfiledb::cli {
+namespace strata::cli {
 
 namespace {
 
-constexpr const char* kPrompt = "flatfiledb> ";
-constexpr const char* kContinuationPrompt = "       ...> ";
-constexpr const char* kStringPrompt = "         '> ";
+constexpr const char* kPrompt = "strata> ";
+constexpr const char* kContinuationPrompt = "   ...> ";
+constexpr const char* kStringPrompt = "     '> ";
 constexpr const char* kClearScreen = "\033[H\033[2J";
 constexpr const char* kFullWidthSemicolonError =
     "error: full-width ';' (U+FF1B) found; use ASCII ';'\n";
@@ -646,4 +646,4 @@ void RunRepl(std::istream& input, std::ostream& output, bool is_interactive,
   }
 }
 
-}  // namespace flatfiledb::cli
+}  // namespace strata::cli
