@@ -235,8 +235,7 @@ TEST(test_expression_non_finite_double_returns_nullopt) {
   CHECK(!accumulator.Add(domain::Value(1e308)));
 }
 
-// ---- Stage 1d: arithmetic, concatenation, LIKE, functions, aggregates
-// -------------
+// ---- Arithmetic, concatenation, LIKE, functions, aggregates ----------------
 
 namespace {
 

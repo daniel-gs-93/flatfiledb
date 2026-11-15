@@ -968,8 +968,7 @@ TEST(test_parser_default_takes_one_expression) {
   CHECK_EQ(DescribeExpr(reference.default_value.get()), std::string("0"));
 }
 
-// ---- Stage 1d: operators, functions, LIMIT, multi-row VALUES
-// -------------------
+// ---- Operators, functions, LIMIT, multi-row VALUES -------------------------
 
 namespace {
 
@@ -1274,7 +1273,7 @@ TEST(test_parser_function_and_concat_depth_limits) {
   }
 }
 
-// ---- Stage 1e: comments, non-ASCII spaces, unexpected characters ------------
+// ---- Comments, non-ASCII spaces, unexpected characters ---------------------
 
 TEST(test_parser_comments_run_to_end_of_line) {
   domain::SelectStatement commented =

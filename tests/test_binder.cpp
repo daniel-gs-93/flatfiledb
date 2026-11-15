@@ -839,8 +839,7 @@ TEST(test_binder_insert_omitted_column_without_default_returns_bind_error) {
   EXPECT_BIND_ERROR("INSERT INTO drafts VALUES (1, 'a')");
 }
 
-// ---- Stage 1d: operators, functions, aggregates, LIMIT, multi-row INSERT
-// -----
+// ---- Operators, functions, aggregates, LIMIT, multi-row INSERT -------------
 
 TEST(test_binder_multiplication_and_division_types) {
   CHECK_EQ(OutputTypes("SELECT id * 2, id * 2.0, id / 2, id / 2.0, 1.5 / 2 "

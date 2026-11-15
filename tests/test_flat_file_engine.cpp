@@ -1701,8 +1701,7 @@ TEST(test_engine_insert_text_with_comma_and_quote_is_persisted) {
         std::string::npos);
 }
 
-// ---- Stage 1d: LIMIT, aggregates, LIKE, functions, joins, multi-row INSERT
-// ---
+// ---- LIMIT, aggregates, LIKE, functions, joins, multi-row INSERT -----------
 
 TEST(test_engine_limit_and_offset_select_ordered_window) {
   // Arrange

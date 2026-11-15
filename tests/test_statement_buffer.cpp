@@ -5,7 +5,7 @@
 #include "test_harness.h"
 
 // Unit tier: StatementBuffer is pure, so each test feeds lines and reads back
-// the statements (docs/TestDocument.md section 3.1, UT-82 to UT-85).
+// the statements (docs/TestDocument.md section 3.1).
 
 namespace {
 

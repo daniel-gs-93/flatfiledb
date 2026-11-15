@@ -8,9 +8,8 @@
 #include "test_support.h"
 
 // Unit and Integration tiers for the REPL (docs/TestDocument.md sections 3.1
-// and 3.2, UT-86, UT-87, IT-98 to IT-107): RunRepl runs over string streams, so
-// statement splitting, commands, prompts and `.schema` are checked without a
-// terminal.
+// and 3.2): RunRepl runs over string streams, so statement splitting, commands,
+// prompts and `.schema` are checked without a terminal.
 
 namespace {
 
@@ -355,8 +354,7 @@ TEST(test_repl_commands_without_open_still_parse_sql_first) {
   CHECK_EQ(output[1], std::string(kNoDatabaseLine));
 }
 
-// ---- Stage 1e
-// ----------------------------------------------------------------
+// ---- Clear, cancel, input hints, comments, open and import -----------------
 
 const char* const kClearCodes = "\033[H\033[2J";
 const char* const kFullWidthError =
