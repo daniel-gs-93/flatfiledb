@@ -383,7 +383,7 @@ std::optional<std::string> FindContentsDifference(const TableContents& flatfile,
     }
   }
   for (const auto& entry : paged) {
-    if (flatfile.find(entry.first) == flatfile.end()) {
+    if (!flatfile.contains(entry.first)) {
       return "table " + entry.first + " exists only in the paged engine";
     }
   }
@@ -400,7 +400,7 @@ std::optional<std::string> FindChangedTable(const TableContents& before,
     }
   }
   for (const auto& entry : before) {
-    if (after.find(entry.first) == after.end()) {
+    if (!after.contains(entry.first)) {
       return entry.first;
     }
   }
@@ -414,7 +414,7 @@ std::optional<std::string> FindChangedTable(const TableContents& before,
 // ----------------------------------------------------------------------------
 
 std::vector<Row> SortedRows(std::vector<Row> rows) {
-  std::sort(rows.begin(), rows.end(), RowLess);
+  std::ranges::sort(rows, RowLess);
   return rows;
 }
 

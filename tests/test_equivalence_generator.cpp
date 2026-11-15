@@ -685,7 +685,7 @@ std::string StatementGenerator::AggregateSelect() {
   const std::size_t key_count = Chance(30) ? 0 : (Chance(70) ? 1 : 2);
   for (std::size_t i = 0; i < key_count; ++i) {
     const std::string& key = PickText(key_candidates);
-    if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+    if (std::ranges::find(keys, key) == keys.end()) {
       keys.push_back(key);
     }
   }

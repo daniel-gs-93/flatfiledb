@@ -81,10 +81,6 @@ struct Outcomes {
   std::size_t other_errors = 0;
 };
 
-bool StartsWith(const std::string& text, const std::string& prefix) {
-  return text.compare(0, prefix.size(), prefix) == 0;
-}
-
 bool Contains(const std::string& text, const std::string& part) {
   return text.find(part) != std::string::npos;
 }
@@ -101,9 +97,9 @@ void CountErrorOutcome(const ExecutionError& error, Outcomes* outcomes) {
       ++outcomes->unsupported_errors;
       return;
     case ErrorKind::kConstraintViolation:
-      if (StartsWith(error.message, "duplicate key")) {
+      if (error.message.starts_with("duplicate key")) {
         ++outcomes->duplicate_keys;
-      } else if (StartsWith(error.message, "no matching row")) {
+      } else if (error.message.starts_with("no matching row")) {
         ++outcomes->missing_parents;
       } else if (Contains(error.message, "is referenced by")) {
         ++outcomes->restricted_deletes;
@@ -930,7 +926,7 @@ std::vector<std::string> RunRepl(const std::vector<std::string>& input_lines) {
 bool AnyLineStartsWith(const std::vector<std::string>& lines,
                        const std::string& prefix) {
   for (const std::string& line : lines) {
-    if (StartsWith(line, prefix)) {
+    if (line.starts_with(prefix)) {
       return true;
     }
   }

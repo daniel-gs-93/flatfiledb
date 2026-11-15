@@ -475,7 +475,7 @@ class JoinOperatorBase : public LifecycleOperator {
     }
     Row& left_row = **slot;
     assert(left_row.size() == left_width_);
-    std::move(left_row.begin(), left_row.end(), combined_.begin());
+    std::ranges::move(left_row, combined_.begin());
     candidates_ = &CandidatesFor(combined_);
     candidate_index_ = 0;
     has_left_row_ = true;
@@ -492,8 +492,9 @@ class JoinOperatorBase : public LifecycleOperator {
       if (!KeysMatch(combined_, right_row)) {
         continue;
       }
-      std::copy(right_row.begin(), right_row.end(),
-                combined_.begin() + static_cast<std::ptrdiff_t>(left_width_));
+      std::ranges::copy(
+          right_row,
+          combined_.begin() + static_cast<std::ptrdiff_t>(left_width_));
       std::string failure;
       std::optional<bool> holds = HoldsAll(residuals_, combined_, &failure);
       if (!holds.has_value()) {
@@ -827,7 +828,7 @@ class SortOperator final : public LifecycleOperator {
       if (auto error = ReadAll(child_.get(), &rows_)) {
         return ErrorResult(std::move(*error));
       }
-      std::stable_sort(rows_.begin(), rows_.end(), RowOrder(&sort_->keys));
+      std::ranges::stable_sort(rows_, RowOrder(&sort_->keys));
     }
     if (next_row_ >= rows_.size()) {
       return EndOfRows();

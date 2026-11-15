@@ -384,7 +384,7 @@ double MillisecondsSince(Clock::time_point start) {
 }
 
 double Median(std::vector<double> samples) {
-  std::sort(samples.begin(), samples.end());
+  std::ranges::sort(samples);
   return samples[samples.size() / 2];
 }
 

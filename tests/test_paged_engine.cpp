@@ -197,15 +197,6 @@ bool Contains(const std::string& text, const std::string& part) {
   return text.find(part) != std::string::npos;
 }
 
-bool EndsWith(const std::string& text, const std::string& suffix) {
-  return text.size() >= suffix.size() &&
-         text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool StartsWith(const std::string& text, const std::string& prefix) {
-  return text.compare(0, prefix.size(), prefix) == 0;
-}
-
 std::vector<std::string> TextOf(const std::vector<Row>& rows) {
   std::vector<std::string> lines;
   for (const Row& row : rows) {
@@ -223,7 +214,7 @@ std::vector<std::string> TextOf(const std::vector<Row>& rows) {
 
 std::vector<std::string> SortedTextOf(const std::vector<Row>& rows) {
   std::vector<std::string> lines = TextOf(rows);
-  std::sort(lines.begin(), lines.end());
+  std::ranges::sort(lines);
   return lines;
 }
 
@@ -485,7 +476,7 @@ std::vector<std::string> ExpectedPostsByViews(const Dataset& dataset) {
   for (std::int64_t id = 1; id <= dataset.post_count; ++id) {
     views_and_ids.emplace_back(Dataset::ViewsOf(id), id);
   }
-  std::sort(views_and_ids.begin(), views_and_ids.end(), ViewsDescendingThenId);
+  std::ranges::sort(views_and_ids, ViewsDescendingThenId);
   std::vector<std::string> ids;
   for (const auto& entry : views_and_ids) {
     ids.push_back(std::to_string(entry.second) + "\t" +
@@ -937,7 +928,7 @@ void CheckEveryWritePosition(const MemoryPageStore& loaded,
     }
     CHECK(Contains(error->message, "injected write failure"));
     CHECK(!Contains(error->message, "rollback failed"));
-    if (EndsWith(error->message, kSavedSuffix)) {
+    if (error->message.ends_with(kSavedSuffix)) {
       ++counts->write_back_failures;
       CHECK(SnapshotOf(engine) == after);
     } else {
@@ -1199,7 +1190,7 @@ TEST(test_paged_engine_apply_failure_rolls_back_at_every_write_position) {
   if (error != nullptr) {
     CHECK(Contains(error->message, "injected allocate failure"));
     CHECK(!Contains(error->message, "rollback failed"));
-    CHECK(!EndsWith(error->message, kSavedSuffix));
+    CHECK(!error->message.ends_with(kSavedSuffix));
   }
   CHECK_EQ(fixture.store->PageCount(), pages_before);
   // A failed statement writes no page, although its pages are dirty.
@@ -1217,8 +1208,8 @@ constexpr int kMaxReadPositions = 400;
 // differs counts twice (its old and its new line).
 std::size_t DifferingLines(std::vector<std::string> left,
                            std::vector<std::string> right) {
-  std::sort(left.begin(), left.end());
-  std::sort(right.begin(), right.end());
+  std::ranges::sort(left);
+  std::ranges::sort(right);
   std::vector<std::string> difference;
   std::set_symmetric_difference(left.begin(), left.end(), right.begin(),
                                 right.end(), std::back_inserter(difference));
@@ -1254,7 +1245,7 @@ void CheckCombination(const MemoryPageStore& loaded, const std::string& sql,
   if (error == nullptr) {
     return;
   }
-  CHECK(StartsWith(error->message, "injected "));
+  CHECK(error->message.starts_with("injected "));
   if (Contains(error->message, "; rollback failed: ")) {
     ++counts->rollback_failures;
     CHECK(Contains(error->message, "; rollback failed: injected "));
@@ -1266,7 +1257,7 @@ void CheckCombination(const MemoryPageStore& loaded, const std::string& sql,
   }
   // The undo worked, so the state is the one before the statement, unless the
   // failure was the write-back, which leaves the statement applied.
-  if (EndsWith(error->message, kSavedSuffix)) {
+  if (error->message.ends_with(kSavedSuffix)) {
     CHECK(SnapshotOf(engine) == after);
   } else {
     CHECK(SnapshotOf(engine) == before);
@@ -1355,7 +1346,7 @@ TEST(test_paged_engine_storage_errors_map_to_io) {
   CHECK(count_error != nullptr);
   if (count_error != nullptr) {
     CHECK(count_error->kind == ErrorKind::kIo);
-    CHECK(StartsWith(count_error->message, "corrupt: "));
+    CHECK(count_error->message.starts_with("corrupt: "));
   }
   ExpectNoPins(engine);
 
@@ -1373,7 +1364,7 @@ TEST(test_paged_engine_storage_errors_map_to_io) {
   const ExecutionError* corrupt_error =
       ExpectError(corrupt_result, ErrorKind::kIo);
   if (corrupt_error != nullptr) {
-    CHECK(StartsWith(corrupt_error->message, "corrupt: "));
+    CHECK(corrupt_error->message.starts_with("corrupt: "));
   }
   ExpectNoPins(engine);
 
@@ -1383,7 +1374,7 @@ TEST(test_paged_engine_storage_errors_map_to_io) {
   const ExecutionResult corrupt_again = Run(engine, "SELECT * FROM alpha");
   const ExecutionError* repeated = ExpectError(corrupt_again, ErrorKind::kIo);
   if (repeated != nullptr) {
-    CHECK(StartsWith(repeated->message, "corrupt: "));
+    CHECK(repeated->message.starts_with("corrupt: "));
   }
   ExpectNoPins(engine);
 
@@ -1462,7 +1453,7 @@ TEST(test_paged_engine_storage_errors_map_to_io) {
   const ExecutionResult decayed = Run(*decaying.engine, "SELECT * FROM beta");
   const ExecutionError* decayed_error = ExpectError(decayed, ErrorKind::kIo);
   if (decayed_error != nullptr) {
-    CHECK(StartsWith(decayed_error->message, "corrupt: "));
+    CHECK(decayed_error->message.starts_with("corrupt: "));
   }
   ExpectNoPins(*decaying.engine);
   CHECK_EQ(QueryText(*decaying.engine, "SELECT COUNT(*) FROM alpha"),
@@ -1499,7 +1490,7 @@ void ExpectInternalError(const ExecutionError& error,
                          const std::string& label) {
   CHECK_EQ(label + " " + domain::ErrorKindName(error.kind),
            label + " " + domain::ErrorKindName(ErrorKind::kIo));
-  CHECK(StartsWith(error.message, "internal error: "));
+  CHECK(error.message.starts_with("internal error: "));
   CHECK(!Contains(error.message, "unknown table"));
 }
 
@@ -1807,7 +1798,7 @@ TEST(test_paged_engine_import_table) {
     const ExecutionError* error = ExpectError(result, ErrorKind::kIo);
     if (error != nullptr) {
       CHECK(Contains(error->message, "injected allocate failure"));
-      CHECK(EndsWith(error->message, "; table partial was created"));
+      CHECK(error->message.ends_with("; table partial was created"));
       CHECK(!Contains(error->message, "rollback failed"));
     }
     CHECK(HasTable(service, "partial"));
@@ -1983,7 +1974,7 @@ TEST(test_paged_engine_write_back_failure_reports_applied_but_not_saved) {
   ExecutionResult failed = Run(engine, "INSERT INTO t VALUES (2, 'b')");
   const ExecutionError* error = ExpectError(failed, ErrorKind::kIo);
   if (error != nullptr) {
-    CHECK(EndsWith(error->message, kSavedSuffix));
+    CHECK(error->message.ends_with(kSavedSuffix));
     CHECK(Contains(error->message, "injected write failure"));
   }
   // The statement is applied in the pool, and the file still has one row.
@@ -2029,7 +2020,7 @@ TEST(test_paged_engine_statement_without_changes_does_not_write_back) {
   ExecutionResult failed = Run(engine, "INSERT INTO t VALUES (2, 'b')");
   const ExecutionError* error = ExpectError(failed, ErrorKind::kIo);
   if (error != nullptr) {
-    CHECK(EndsWith(error->message, kSavedSuffix));
+    CHECK(error->message.ends_with(kSavedSuffix));
   }
 
   // The next write call fails too. A statement that writes nothing never makes
@@ -2053,7 +2044,7 @@ TEST(test_paged_engine_statement_without_changes_does_not_write_back) {
   ExecutionResult changing = Run(engine, "DELETE FROM t WHERE id = 1");
   const ExecutionError* changing_error = ExpectError(changing, ErrorKind::kIo);
   if (changing_error != nullptr) {
-    CHECK(EndsWith(changing_error->message, kSavedSuffix));
+    CHECK(changing_error->message.ends_with(kSavedSuffix));
   }
   CHECK_EQ(fixture.store->CallCount(Operation::kWrite),
            store_writes_before + 1);

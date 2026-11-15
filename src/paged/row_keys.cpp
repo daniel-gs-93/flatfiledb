@@ -1,8 +1,8 @@
 #include "flatfiledb/paged/row_keys.h"
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <string>
 #include <variant>
 
@@ -21,9 +21,7 @@ void AppendDoubleBytes(double number, std::string* key) {
   if (number == 0.0) {
     number = 0.0;
   }
-  std::uint64_t bits = 0;
-  static_assert(sizeof(bits) == sizeof(number), "double must be 8 bytes");
-  std::memcpy(&bits, &number, sizeof(bits));
+  const std::uint64_t bits = std::bit_cast<std::uint64_t>(number);
   AppendBytes(&bits, sizeof(bits), key);
 }
 

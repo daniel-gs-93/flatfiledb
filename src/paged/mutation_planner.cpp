@@ -443,7 +443,7 @@ std::set<std::size_t> AssignedReferencedColumns(
   }
   std::set<std::size_t> assigned_referenced;
   for (const domain::BoundAssignment& assignment : update.assignments) {
-    if (referenced.count(assignment.column_index) > 0) {
+    if (referenced.contains(assignment.column_index)) {
       assigned_referenced.insert(assignment.column_index);
     }
   }
@@ -743,7 +743,7 @@ PlanMutationResult PlanUpdate(const domain::UpdateNode& update,
 
   // No-op rule: when no row changes there is nothing to check, write or
   // cascade.
-  if (std::none_of(candidates.begin(), candidates.end(), IsRowChanged)) {
+  if (std::ranges::none_of(candidates, IsRowChanged)) {
     MutationPlan unchanged;
     unchanged.affected = affected;
     return unchanged;

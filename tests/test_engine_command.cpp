@@ -66,15 +66,11 @@ Lines Run(const Lines& input_lines) {
   return SplitLines(output.str());
 }
 
-bool StartsWith(const std::string& text, const std::string& prefix) {
-  return text.compare(0, prefix.size(), prefix) == 0;
-}
-
 // How many lines start with marker followed by a space.
 int CountLinesStartingWith(const Lines& lines, const std::string& marker) {
   int count = 0;
   for (const std::string& line : lines) {
-    if (line.compare(0, marker.size() + 1, marker + " ") == 0) {
+    if (line.starts_with(marker + " ")) {
       ++count;
     }
   }
@@ -151,8 +147,8 @@ void CheckFailedSwitchKeepsDatabaseAndSetting() {
   CHECK(to_paged.size() == std::size_t{6});
   if (to_paged.size() == 6) {
     CHECK_EQ(to_paged[0], flatfile_loaded);
-    CHECK(StartsWith(to_paged[1], "error: could not open " + garbage_canonical +
-                                      ": corrupt: "));
+    CHECK(to_paged[1].starts_with("error: could not open " + garbage_canonical +
+                                  ": corrupt: "));
     CHECK_EQ(
         Lines(to_paged.begin() + 2, to_paged.end()),
         Lines({"engine flatfile", "username", "alice", "engine flatfile"}));
