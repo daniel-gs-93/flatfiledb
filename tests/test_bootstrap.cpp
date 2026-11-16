@@ -1,6 +1,6 @@
 // Integration tests of OpenFlatFileDatabase against real database directories
 // (docs/TestDocument.md section 3.2), and of OpenPagedDatabase
-// (docs/PagedExecutionTestDocument.md).
+// (docs/TestDocument.md).
 
 #include <unistd.h>
 
@@ -258,6 +258,37 @@ TEST(test_bootstrap_failed_open_keeps_current_lock_and_releases_new_one) {
   CHECK_EQ(reason, std::string("cannot read posts.csv"));
   CHECK(IsLockHeld(good_dir.path()));
   CHECK(!IsLockHeld(broken_dir.path()));
+}
+
+TEST(test_bootstrap_reopen_takes_the_lock_once_the_directory_is_writable) {
+  if (::geteuid() == 0) {
+    SKIP("running as root: directory permissions do not apply");
+  }
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+  std::filesystem::permissions(
+      dir.path(),
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
+      std::filesystem::perm_options::replace);
+  std::unique_ptr<bootstrap::OpenedDatabase> read_only =
+      MustOpen(dir.path(), false);
+  CHECK(read_only != nullptr);
+  if (read_only == nullptr) {
+    return;
+  }
+  std::filesystem::permissions(dir.path(), std::filesystem::perms::owner_all,
+                               std::filesystem::perm_options::replace);
+
+  std::unique_ptr<bootstrap::OpenedDatabase> writable =
+      MustOpen(dir.path(), false, read_only.get());
+
+  CHECK(read_only->lock == nullptr);
+  CHECK(writable != nullptr);
+  if (writable == nullptr) {
+    return;
+  }
+  CHECK(writable->lock != nullptr);
+  CHECK(IsLockHeld(dir.path()));
 }
 
 TEST(test_bootstrap_empty_directory_has_no_tables) {

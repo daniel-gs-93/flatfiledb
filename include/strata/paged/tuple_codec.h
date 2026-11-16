@@ -9,7 +9,7 @@
 
 namespace strata::paged {
 
-// Row <-> bytes by the column order of a TableSchema (design document 2.4):
+// Row <-> bytes by the column order of a TableSchema (design document 2.10):
 // INT is 8 bytes little-endian, DOUBLE is the 8 bytes of its IEEE 754 bit
 // pattern little-endian, TEXT is a 2-byte length plus the bytes. There is no
 // column count, type tag or NULL bitmap. Pure.

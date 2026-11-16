@@ -1,14 +1,14 @@
 #include "strata/domain/scalar_functions.h"
 
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <locale>
-#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -267,13 +267,14 @@ std::optional<double> ParseDecimalImpl(const std::string& text) {
   if (position != text.size()) {
     return std::nullopt;
   }
-  // The classic locale keeps the result independent of the process locale;
-  // overflow to infinity sets the fail bit.
-  std::istringstream stream(text);
-  stream.imbue(std::locale::classic());
+  // std::from_chars ignores the locale, reads a subnormal value, and reports
+  // a value beyond the largest double or below the smallest subnormal as
+  // result_out_of_range. It does not accept a '+' sign.
+  const char* begin = text.data() + (text.front() == '+' ? 1 : 0);
+  const char* end = text.data() + text.size();
   double value = 0.0;
-  stream >> value;
-  if (stream.fail() || !std::isfinite(value)) {
+  const std::from_chars_result result = std::from_chars(begin, end, value);
+  if (result.ec != std::errc() || result.ptr != end || !std::isfinite(value)) {
     return std::nullopt;
   }
   return value;

@@ -242,6 +242,30 @@ TEST(test_paged_catalog_create_table_validation) {
   CHECK(database.catalog().TableNames() == names);
 }
 
+TEST(test_paged_catalog_refuses_a_catalog_row_longer_than_a_tuple) {
+  OpenedDatabase env = OpenMemoryDatabase();
+  if (env.database == nullptr) {
+    return;
+  }
+  Database& database = *env.database;
+  TableSchema long_default = BasicSchema("t1");
+  long_default.columns[1].default_value = Value(std::string(4100, 'd'));
+  const TableSchema long_name = BasicSchema(std::string(4100, 'n'));
+  const PageId pages_before = env.store->PageCount();
+
+  auto by_default = database.CreateTable(long_default);
+  auto by_name = database.CreateTable(long_name);
+
+  CHECK_ERROR(by_default, kInvalidArgument);
+  CHECK_MESSAGE_CONTAINS(by_default, "column name of table t1");
+  CHECK_MESSAGE_CONTAINS(by_default, "the limit is 4060");
+  CHECK_ERROR(by_name, kInvalidArgument);
+  CHECK_MESSAGE_CONTAINS(by_name, "the limit is 4060");
+  // Refused before the first page of the table is allocated.
+  CHECK_EQ(env.store->PageCount(), pages_before);
+  CHECK(database.catalog().TableNames().empty());
+}
+
 TEST(test_paged_catalog_create_table_undoes_partial_rows) {
   OpenedDatabase env = OpenMemoryDatabase();
   if (env.database == nullptr) {
@@ -291,7 +315,12 @@ enum class SystemDamage {
   kBadRefColumn,
   kNextTableIdTooLow,
   kOrphanColumnRow,
-  kBadDefaultText
+  kBadDefaultText,
+  kMissingRefTable,
+  kSelfReference,
+  kRefColumnOutOfRange,
+  kRefTypeMismatch,
+  kRefNotUnique
 };
 
 // The row of a system table whose column `column` equals `value` and, when
@@ -323,6 +352,20 @@ void SetIntColumn(TableHeap& heap, const strata::paged::ScanItem& item,
   CHECK_OK(heap.Update(item.rid, row));
 }
 
+// Rewrites the foreign key of T (sys_columns, column position 2).
+void SetForeignKeyOfT(TableHeap& sys_columns, const std::string& ref_table,
+                      std::int64_t ref_column) {
+  const auto target = FindSystemRow(sys_columns, 0, 3, 2);
+  CHECK(target.has_value());
+  if (!target.has_value()) {
+    return;
+  }
+  Row row = target->row;
+  row[7] = Value(ref_table);
+  row[8] = Value(ref_column);
+  CHECK_OK(sys_columns.Update(target->rid, row));
+}
+
 // Outcome of Catalog::Load after the system tables or the file header were
 // damaged: "ok" or the error name and message.
 std::string LoadAfterDamage(SystemDamage damage) {
@@ -335,6 +378,13 @@ std::string LoadAfterDamage(SystemDamage damage) {
   schema.columns.push_back({"ref", DataType::kInt});
   schema.foreign_keys = {ForeignKey{2, "b", 0}};
   CHECK_OK(database.CreateTable(schema));  // table_id 3
+  // The target of the foreign key: id INT primary key, name TEXT, code INT,
+  // label TEXT UNIQUE.
+  TableSchema target = BasicSchema("b");
+  target.columns.push_back({"code", DataType::kInt});
+  target.columns.push_back({"label", DataType::kText});
+  target.unique_indexes = {3};
+  CHECK_OK(database.CreateTable(target));  // table_id 4
 
   auto tables =
       TableHeap::Open(database.buffer(), Catalog::SysTablesSchema(), 1, 1);
@@ -363,7 +413,7 @@ std::string LoadAfterDamage(SystemDamage damage) {
       break;
     case SystemDamage::kDuplicateName:
       CHECK_OK(sys_tables.Insert(Row{
-          Value(std::int64_t{4}), Value(std::string("t")), table_row->row[2],
+          Value(std::int64_t{5}), Value(std::string("t")), table_row->row[2],
           Value(std::int64_t{0}), Value(std::int64_t{-1})}));
       break;
     case SystemDamage::kFirstPageOutsideFile:
@@ -426,6 +476,21 @@ std::string LoadAfterDamage(SystemDamage damage) {
       }
       break;
     }
+    case SystemDamage::kMissingRefTable:
+      SetForeignKeyOfT(sys_columns, "nowhere", 0);
+      break;
+    case SystemDamage::kSelfReference:
+      SetForeignKeyOfT(sys_columns, "t", 0);
+      break;
+    case SystemDamage::kRefColumnOutOfRange:
+      SetForeignKeyOfT(sys_columns, "b", 9);
+      break;
+    case SystemDamage::kRefTypeMismatch:
+      SetForeignKeyOfT(sys_columns, "b", 3);  // label: TEXT, UNIQUE
+      break;
+    case SystemDamage::kRefNotUnique:
+      SetForeignKeyOfT(sys_columns, "b", 2);  // code: INT, not unique
+      break;
     case SystemDamage::kNextTableIdTooLow: {
       auto header = database.buffer().FetchPage(0, LatchMode::kExclusive);
       CHECK_OK(header);
@@ -455,13 +520,25 @@ TEST(test_paged_catalog_load_rejects_inconsistent_system_tables) {
       SystemDamage::kBadColumnType,        SystemDamage::kBadDefaultKind,
       SystemDamage::kBadPrimaryKeyIndex,   SystemDamage::kBadAutoIncrementIndex,
       SystemDamage::kBadRefColumn,         SystemDamage::kNextTableIdTooLow,
-      SystemDamage::kOrphanColumnRow,      SystemDamage::kBadDefaultText};
+      SystemDamage::kOrphanColumnRow,      SystemDamage::kBadDefaultText,
+      SystemDamage::kMissingRefTable,      SystemDamage::kSelfReference,
+      SystemDamage::kRefColumnOutOfRange,  SystemDamage::kRefTypeMismatch,
+      SystemDamage::kRefNotUnique};
   for (SystemDamage damage : damages) {
     const std::string outcome = LoadAfterDamage(damage);
     CHECK(outcome.starts_with("kCorrupt"));
     if (!outcome.starts_with("kCorrupt")) {
       CHECK_EQ(outcome, std::string("kCorrupt"));  // shows which case failed
     }
+  }
+  const SystemDamage foreign_key_damages[] = {
+      SystemDamage::kMissingRefTable, SystemDamage::kSelfReference,
+      SystemDamage::kRefColumnOutOfRange, SystemDamage::kRefTypeMismatch,
+      SystemDamage::kRefNotUnique};
+  for (SystemDamage damage : foreign_key_damages) {
+    const std::string outcome = LoadAfterDamage(damage);
+    CHECK(outcome.find("table T, column position 2: foreign key") !=
+          std::string::npos);
   }
   CHECK(
       LoadAfterDamage(SystemDamage::kNextTableIdTooLow).find("next_table_id") !=

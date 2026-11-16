@@ -30,7 +30,8 @@ class IPageStore {
   // is not below PageCount(). kIo: the medium failed.
   virtual Status WritePage(PageId page_id, const std::uint8_t* source) = 0;
 
-  // Appends a page of zeros and returns its number (the previous PageCount()).
+  // Writes a page of zeros after the last whole page and returns its number
+  // (the previous PageCount()).
   virtual PageResult<PageId> AllocatePage() = 0;
 
   virtual PageId PageCount() const = 0;
@@ -42,14 +43,17 @@ class IPageStore {
 enum class OpenMode { kOpenExisting, kOpenOrCreate };
 
 // Pages in one file: page n is at byte offset n * kPageSize, so PageCount() is
-// the file size divided by kPageSize. Reads and writes use pread and pwrite.
+// the number of whole pages. Bytes after the last whole page, which an
+// interrupted AllocatePage leaves, are ignored when they are all zero.
+// Reads and writes use pread and pwrite.
 // Sync uses fcntl(F_FULLFSYNC) on Apple platforms, where fsync does not
 // guarantee that data leaves the device's cache, and fsync elsewhere.
 // A FilePageStore owns its file descriptor and closes it on destruction.
 class FilePageStore : public IPageStore {
  public:
   // kIo: the file cannot be opened or inspected. kCorrupt: the file size is
-  // not a multiple of kPageSize.
+  // not a multiple of kPageSize and a byte after the last whole page is not
+  // zero.
   static PageResult<FilePageStore> Open(const std::filesystem::path& path,
                                         OpenMode mode);
 

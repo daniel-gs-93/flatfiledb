@@ -15,9 +15,9 @@
 #endif
 
 // The `.engine` command, the engine setting of `.open`, the `note:` lines and
-// the failure output of the paged engine (docs/PagedExecutionTestDocument.md).
-// RunRepl runs over string streams on temporary directories; the documented
-// demonstration of design document 3.4 runs the real strata_cli
+// the failure output of the paged engine (docs/TestDocument.md).
+// RunRepl runs over string streams on temporary directories; the paged
+// demonstration of XI-16 (docs/TestDocument.md) runs the real strata_cli
 // executable.
 
 namespace {

@@ -13,7 +13,7 @@
 #include "strata/paged/paged_types.h"
 #include "strata/paged/replacement_policy.h"
 
-// The buffer pool of the paged engine (design document 2.6, ADR-0028): a fixed
+// The buffer pool of the paged engine (design document 2.12, ADR-0028): a fixed
 // number of frames, each holding one page, in front of an IPageStore.
 //
 // Synchronization. A pool mutex protects the page table, the frame metadata

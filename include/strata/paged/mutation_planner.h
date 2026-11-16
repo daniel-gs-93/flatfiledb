@@ -13,7 +13,7 @@
 #include "strata/paged/row_stream.h"
 
 // Constraint checks, cascades and the change set of INSERT, UPDATE and DELETE
-// (design document 2.2 and 2.4). Pure: PlanMutation reads rows only through
+// (design document 2.13). Pure: PlanMutation reads rows only through
 // ITableReader and schemas only through domain::ICatalog, evaluates
 // expressions with domain::Evaluate, and modifies nothing. The change set it
 // returns is applied to the pages by HeapAccess::ApplyChangeSet, and only when
@@ -77,8 +77,8 @@ using PlanMutationResult = std::variant<MutationPlan, domain::ExecutionError>;
 //     <name>" with the name as written in the node;
 //   * a table the catalog has but the reader cannot scan yields the error of
 //     reader.Scan;
-//   * a violated rule yields the error of docs/PagedExecutionDesignDocument.md
-//     2.4, the first one in the order given there: kRuntime for a failed
+//   * a violated rule yields the error of docs/DesignDocument.md section
+//     2.5, the first one in the order given there: kRuntime for a failed
 //     evaluation or an auto-increment overflow, kBind for a type that an
 //     UPDATE cannot convert, kUnsupported for a row longer than kMaxTupleSize
 //     bytes (checked before uniqueness and foreign keys), kConstraintViolation

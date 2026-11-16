@@ -550,8 +550,8 @@ std::string StatementGenerator::JoinCondition(const Scope& scope,
 }
 
 // LIMIT 0 reads no row, so it hides an evaluation error below it, which the
-// other engine reports (the early-termination row of 2.6). A statement that can
-// fail therefore never uses it.
+// other engine reports (the early-termination row of 2.8). A statement that
+// can fail therefore never uses it.
 std::size_t StatementGenerator::LimitValue() {
   return risk_ == Risk::kNone ? Below(9) : 1 + Below(8);
 }

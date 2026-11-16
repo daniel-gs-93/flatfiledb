@@ -10,10 +10,11 @@
 #include "strata/application.h"
 #include "strata/csv_file_source.h"
 #include "strata/domain/import.h"
+#include "strata/sql_parser.h"
 #include "test_harness.h"
 #include "test_support.h"
 
-// `.import` (docs/DesignDocument.md sections 2.7 and 3.8): the pure inference
+// `.import` (docs/DesignDocument.md sections 2.7 and 3.5): the pure inference
 // over text cells (Unit tier) and the whole import through QueryService, the
 // engine and the files (Integration tier).
 
@@ -97,6 +98,16 @@ std::string ColumnTypes(const domain::TableSchema& schema) {
   return text;
 }
 
+std::string UpperCase(const std::string& text) {
+  std::string upper = text;
+  for (char& letter : upper) {
+    if (letter >= 'a' && letter <= 'z') {
+      letter = static_cast<char>(letter - 'a' + 'A');
+    }
+  }
+  return upper;
+}
+
 // Every file of the directory (not the lock) with its content.
 std::map<std::string, std::string> Snapshot(const std::filesystem::path& dir) {
   std::map<std::string, std::string> files;
@@ -145,6 +156,23 @@ TEST(test_import_infers_canonical_int_double_and_text) {
                rows[row][column]);
     }
   }
+}
+
+TEST(test_import_infers_subnormal_cells_as_double) {
+  const std::string tiny = domain::FormatValue(domain::Value(1e-310));
+  domain::ImportRequest forced = Request("t.csv");
+  forced.column_types = {{"v", domain::DataType::kDouble}};
+
+  Inferred inferred =
+      Infer(Request("t.csv"), Table({"id", "v"}, {{"1", tiny}, {"2", "1.5"}}));
+  Inferred converted = Infer(forced, Table({"id", "v"}, {{"1", tiny}}));
+
+  CHECK(inferred.plan.has_value());
+  if (inferred.plan) {
+    CHECK_EQ(ColumnTypes(inferred.plan->schema), std::string("INT,DOUBLE"));
+    CHECK_EQ(domain::FormatValue(inferred.plan->rows[0][1]), tiny);
+  }
+  CHECK(converted.plan.has_value());
 }
 
 TEST(test_import_primary_key_rules) {
@@ -215,6 +243,54 @@ TEST(test_import_validates_table_and_column_names) {
   CHECK(Contains(with_space.error, "invalid column name 'first name'"));
   CHECK(Contains(digit_first.error, "invalid column name '1a'"));
   CHECK(Contains(empty_name.error, "invalid column name ''"));
+}
+
+TEST(test_import_rejects_reserved_words_as_names) {
+  // The reserved words of docs/DesignDocument.md section 2.3.
+  const char* const reserved_words[] = {
+      "select", "from",  "where",  "join", "on",     "as",   "group",
+      "by",     "order", "asc",    "desc", "insert", "into", "values",
+      "update", "set",   "delete", "and",  "or",     "like", "limit",
+      "offset", "count", "sum",    "null"};
+  // Function names, DDL words and unsupported words are identifiers.
+  const char* const ordinary_words[] = {"min",    "max",   "avg", "lower",
+                                        "create", "table", "key", "default",
+                                        "not",    "in"};
+  domain::ImportRequest keyed = Request("t.csv");
+  keyed.primary_key = "id";
+
+  for (const char* word : reserved_words) {
+    const std::string name(word);
+    Inferred column = Infer(keyed, Table({"id", name}, {{"1", "a"}}));
+    domain::ImportRequest named = Request("t.csv");
+    named.table = UpperCase(name);
+    Inferred table = Infer(named, Table({"id", "v"}, {{"1", "a"}}));
+    Inferred derived =
+        Infer(Request(name + ".csv"), Table({"id", "v"}, {{"1", "a"}}));
+    auto parsed = adapter::ParseStatement("CREATE TABLE " + name +
+                                          " (id INT PRIMARY KEY)");
+
+    CHECK_EQ(column.error, "invalid column name '" + name +
+                               "' in the header; it is a reserved word");
+    CHECK_EQ(table.error, "invalid table name '" + UpperCase(name) +
+                              "'; it is a reserved word");
+    CHECK_EQ(derived.error, "cannot derive a table name from '" + name +
+                                "'; give one: .import <file> <table>");
+    // The parser refuses the same word, so the two lists agree.
+    CHECK(std::holds_alternative<adapter::ParseError>(parsed));
+  }
+  for (const char* word : ordinary_words) {
+    const std::string name(word);
+    Inferred column = Infer(keyed, Table({"id", name}, {{"1", "a"}}));
+    Inferred derived =
+        Infer(Request(name + ".csv"), Table({"id", "v"}, {{"1", "a"}}));
+    auto parsed = adapter::ParseStatement("CREATE TABLE " + name +
+                                          " (id INT PRIMARY KEY)");
+
+    CHECK(column.plan.has_value());
+    CHECK(derived.plan.has_value());
+    CHECK(!std::holds_alternative<adapter::ParseError>(parsed));
+  }
 }
 
 TEST(test_import_strict_rejects_bad_rows_and_skip_reports_them) {
@@ -320,6 +396,19 @@ TEST(test_import_duplicate_primary_key_is_an_error_even_when_skipping) {
     CHECK(Contains(message, "duplicate value '5'"));
     CHECK(Contains(message, "lines 3 and 7"));
   }
+}
+
+TEST(test_import_treats_negative_zero_as_a_repeated_key) {
+  domain::ImportRequest request = Request("t.csv");
+  request.primary_key = "k";
+
+  Inferred inferred =
+      Infer(request, Table({"k", "v"}, {{"0.0", "a"}, {"-0.0", "b"}}));
+
+  CHECK(!inferred.plan.has_value());
+  CHECK_EQ(inferred.error,
+           std::string("primary key column k has duplicate value '-0.0' at "
+                       "lines 2 and 3"));
 }
 
 TEST(test_import_handles_header_only_and_empty_input) {
@@ -443,6 +532,58 @@ TEST(test_service_import_failures_leave_the_database_unchanged) {
   }
   CHECK(Snapshot(db.path()) == before);
   CHECK_EQ(service->DescribeCatalog().size(), std::size_t{3});
+}
+
+TEST(test_service_import_refuses_an_existing_target_file) {
+  // users.csv lies in the database directory and is the source itself; a
+  // directory takes the place of posts.csv.
+  TempDir db;
+  const std::string users_text = "id,name\n1,a\n2,b\nx,bad\n";
+  WriteFile(db.path() / "users.csv", users_text);
+  std::filesystem::create_directory(db.path() / "posts.csv");
+  TempDir source_dir;
+  WriteFile(source_dir.path() / "posts.csv", "id,body\n1,x\n");
+  auto service = MakeLoadedService(db.path());
+  if (!service) {
+    return;
+  }
+  const std::map<std::string, std::string> before = Snapshot(db.path());
+  domain::ImportRequest itself = Request((db.path() / "users.csv").string());
+  itself.primary_key = "id";
+  itself.column_types = {{"id", domain::DataType::kInt}};
+  itself.should_skip_bad_rows = true;
+
+  domain::ExecutionResult source_in_place = service->ImportCsv(itself);
+  domain::ExecutionResult directory_in_place =
+      service->ImportCsv(Request((source_dir.path() / "posts.csv").string()));
+
+  const domain::ExecutionError* errors[] = {AsError(source_in_place),
+                                            AsError(directory_in_place)};
+  const char* messages[] = {
+      "users.csv already exists; use CREATE TABLE to adopt it",
+      "posts.csv already exists and is not a regular file"};
+  for (std::size_t i = 0; i < 2; ++i) {
+    CHECK(errors[i] != nullptr);
+    if (errors[i] == nullptr) {
+      continue;
+    }
+    CHECK_EQ(std::string(domain::ErrorKindName(errors[i]->kind)),
+             std::string("io"));
+    CHECK_EQ(errors[i]->message, std::string(messages[i]));
+  }
+  CHECK(Snapshot(db.path()) == before);
+  CHECK_EQ(ReadFile(db.path() / "users.csv"), users_text);
+  CHECK(service->DescribeCatalog().empty());
+
+  // The alternative the message names: adoption keeps the file as it is.
+  const domain::ExecutionResult create = ExecuteSql(
+      *service, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)");
+  const domain::CommandComplete* adopted = AsCommandComplete(create);
+  CHECK(adopted != nullptr);
+  if (adopted != nullptr) {
+    CHECK_EQ(adopted->tag, std::string("CREATE TABLE users (adopted 2 rows)"));
+  }
+  CHECK_EQ(ReadFile(db.path() / "users.csv"), users_text);
 }
 
 TEST(test_service_import_skip_bad_rows_reports_notes) {

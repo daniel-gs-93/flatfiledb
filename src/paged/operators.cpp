@@ -115,7 +115,7 @@ std::optional<ExecutionError> ReadAll(IOperator* child,
 // Lifecycle.
 // ----------------------------------------------------------------------------
 
-// Fresh, Streaming, Done (design document 2.2). Next is final so that no
+// Fresh, Streaming, Done (design document 2.13). Next is final so that no
 // operator can leave the lifecycle: a Done operator answers with the end of
 // rows without calling Produce, and therefore never asks its child for a row
 // again.

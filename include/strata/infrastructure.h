@@ -35,11 +35,14 @@ using InspectOutcome =
 // One table to be rewritten: its schema and every row it will contain. The
 // file keeps its first non-empty line as the header, unless
 // should_regenerate_header is set (ALTER TABLE ADD COLUMN), which writes the
-// header from the schema.
+// header from the schema. is_new_file (.import, and CREATE TABLE without an
+// adopted file) makes Commit refuse when anything exists at the file's path,
+// so a file that is not in the catalog is never replaced.
 struct TableWrite {
   domain::TableSchema schema;
   std::vector<domain::Row> rows;
   bool should_regenerate_header = false;
+  bool is_new_file = false;
 };
 
 // Everything one commit changes: catalog.csv (when set, with the complete list
@@ -59,12 +62,14 @@ class IFlatFileRepository {
 
   // Reads catalog.csv and every table it lists, serially or with one worker
   // thread per table (at most the hardware concurrency). The rules are those of
-  // docs/DesignDocument.md section 2.5; a file that cannot be read fails the
+  // docs/DesignDocument.md section 2.9; a file that cannot be read fails the
   // whole load and no partial result is returned.
   virtual LoadOutcome Load(bool is_parallel) = 0;
 
   // Reads the table's CSV file under the loading rules without registering
-  // anything; the header must match the schema.
+  // anything; the header must match the schema. A successful inspection
+  // records the file as Load does, so a CSV that CREATE TABLE adopts is
+  // checked for external changes like a loaded one.
   virtual InspectOutcome InspectTable(const domain::TableSchema& schema) = 0;
 
   // Replaces, creates and deletes the files of the commit set as one unit
@@ -95,8 +100,9 @@ class CsvRepository : public IFlatFileRepository {
       const std::vector<domain::Row>& rows) override;
 
  private:
-  // What a file looked like when it was loaded or last written by this
-  // repository (docs/DesignDocument.md section 2.6, external modification).
+  // What a file looked like when it was loaded, inspected or last written by
+  // this repository (docs/DesignDocument.md section 2.9, external
+  // modification).
   struct FileStamp {
     bool is_present = false;
     std::uintmax_t size = 0;

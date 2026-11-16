@@ -19,8 +19,8 @@
 #include "strata/paged/paged_engine.h"
 #include "test_support.h"
 
-// The database-level reader-writer lock of QueryService (design document 2.5,
-// ADR-0040; docs/PagedExecutionTestDocument.md). The unit tests run
+// The database-level reader-writer lock of QueryService (design document 2.14,
+// ADR-0040; docs/TestDocument.md). The unit tests run
 // QueryService over a probe engine that records which calls are inside it at
 // the same time; the integration test runs readers and one writer through
 // QueryService over a PagedEngine and over a FlatFileEngine.
@@ -715,7 +715,7 @@ TEST(test_query_service_lock_covers_bind_and_execute) {
 namespace {
 
 constexpr int kConcurrentReaders = 8;
-constexpr int kPoolFrames = 16;  // not fewer than the readers (design 2.1)
+constexpr int kPoolFrames = 16;  // not fewer than the readers (design 2.13)
 constexpr int kRowCount = 240;
 constexpr int kJoinedRowCount = 60;
 constexpr int kReaderIterations = 40;

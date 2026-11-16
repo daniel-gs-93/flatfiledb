@@ -108,6 +108,14 @@ std::string FormatValue(const Value& value) {
   return formatted;
 }
 
+std::string FormatKey(const Value& value) {
+  const auto* number = std::get_if<double>(&value);
+  if (number != nullptr && *number == 0.0) {
+    return FormatValue(Value(0.0));
+  }
+  return FormatValue(value);
+}
+
 std::optional<Value> CoerceValue(const Value& value, DataType target) {
   DataType source = TypeOf(value);
   if (source == target) {

@@ -5,7 +5,7 @@
 
 #include "strata/domain/value.h"
 
-// Hash keys for values (design document 2.3, "Hash key"). Pure: no I/O, no
+// Hash keys for values (design document 2.13, "Hash key"). Pure: no I/O, no
 // state. A key is a byte string used inside one process (hash tables of the
 // operators and of the mutation planner); it is never stored, so its byte
 // layout is not a contract. The flatfile executor has equivalent functions

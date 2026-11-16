@@ -19,7 +19,7 @@
 #include "test_support.h"
 
 // The query operators and the hash keys, over in-memory row streams
-// (docs/PagedExecutionTestDocument.md section 3.1). No page is read.
+// (docs/TestDocument.md section 3.1). No page is read.
 
 namespace {
 

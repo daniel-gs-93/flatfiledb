@@ -15,7 +15,7 @@
 #include "strata/paged/row_stream.h"
 #include "strata/paged/tuple_codec.h"
 
-// Resource-aware (design document 2.1): the engine decides which pure function
+// Resource-aware (design document 2.13): the engine decides which pure function
 // handles a plan node, hands it a reader over the Database, and writes the
 // dirty pages out after a write statement succeeded. Every function below
 // returns a value; a failure of a page call is mapped by ToExecutionError.
@@ -79,7 +79,7 @@ ExecutionResult RunQuery(const PlanNode& plan, const ITableReader& reader) {
 }
 
 // Writes every dirty page (no Sync). The statement is already applied in the
-// pool when this fails, and the message says so (design document 2.8).
+// pool when this fails, and the message says so (design document 2.15).
 std::optional<ExecutionError> WriteBack(Database& database) {
   Status status = database.buffer().WriteBackAll();
   if (!status.has_value()) {
@@ -146,7 +146,7 @@ std::optional<ExecutionError> CheckRowLengths(const TableSchema& schema,
   return std::nullopt;
 }
 
-// `.import` (design document 2.8): check every tuple length first, so an
+// `.import` (design document 2.7): check every tuple length first, so an
 // overlong row creates no table; then create the table and insert the rows.
 // When a write fails, InsertRows has removed the rows already written and the
 // table remains, empty; the message says so.

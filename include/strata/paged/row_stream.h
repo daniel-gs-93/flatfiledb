@@ -10,7 +10,7 @@
 #include "strata/domain/value.h"
 #include "strata/paged/paged_types.h"
 
-// The row layer's view of a table (design document 2.2): a row stream hands
+// The row layer's view of a table (design document 2.13): a row stream hands
 // out the rows of one table one at a time, each with its Rid, and a table
 // reader opens streams by table name. The interfaces belong to the paged
 // layer; HeapAccess implements them over TableHeap and tests implement them

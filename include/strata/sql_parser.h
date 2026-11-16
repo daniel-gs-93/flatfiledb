@@ -19,9 +19,9 @@ struct ParseError {
 
 using ParseResult = std::variant<domain::Statement, ParseError>;
 
-// Parses one SQL statement (SELECT, INSERT, UPDATE or DELETE, with an optional
-// trailing semicolon) following docs/DesignDocument.md section 2.3. Text
-// that starts with '.' is not SQL and yields a ParseError. Pure.
+// Parses one SQL statement (a query, a write or a DDL statement, with an
+// optional trailing semicolon) following docs/DesignDocument.md section 2.3.
+// Text that starts with '.' is not SQL and yields a ParseError. Pure.
 ParseResult ParseStatement(const std::string& text);
 
 // The number of bytes of the SQL white space character at text[position], or 0

@@ -12,8 +12,8 @@
 #include "strata/paged/row_stream.h"
 #include "strata/paged/table_heap.h"
 
-// The resource-aware half of paged execution (design document 2.1, 2.2, 2.4,
-// 2.7): the code that reads and writes pages on behalf of the pure row layer.
+// The resource-aware half of paged execution (design document
+// 2.13): the code that reads and writes pages on behalf of the pure row layer.
 // It implements IRowStream and ITableReader over TableHeap and Database,
 // applies a MutationPlan to the heaps with an undo from the before-images, and
 // maps the storage layer's PageError to the engine's ExecutionError.
@@ -26,7 +26,7 @@
 namespace strata::paged {
 
 // Which call produced a PageError. The same PageErrorCode means different
-// things at different call sites (design document 2.7).
+// things at different call sites (design document 2.13).
 enum class ErrorSite {
   // Database::Table: kNotFound is an unknown table. A kNotFound for a table
   // that the catalog has comes from its page chain; the callers map that one
@@ -44,7 +44,7 @@ struct ErrorContext {
   std::string table;
 };
 
-// Maps error to the ExecutionError of design document 2.7. Pure.
+// Maps error to the ExecutionError of design document 2.13. Pure.
 domain::ExecutionError ToExecutionError(const PageError& error,
                                         const ErrorContext& context);
 

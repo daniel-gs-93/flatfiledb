@@ -6,7 +6,7 @@
 #include "strata/paged/paged_types.h"
 
 // Byte operations on one 4096-byte page in the heap-data format (design
-// document 2.3, 2.5). Pure: the classes hold only a pointer to a buffer that
+// document 2.10, 2.11). Pure: the classes hold only a pointer to a buffer that
 // the caller owns and keeps alive; there is no I/O, lock or pin here.
 //
 // Page layout: a 32-byte common header, then the slot array growing upward
@@ -93,7 +93,8 @@ class SlottedPage {
   // there is one, else a new slot at the end. Compacts first when the
   // contiguous space is too small but contiguous space plus dead_bytes is
   // enough. kInvalidArgument: empty tuple. kTooLarge: longer than
-  // kMaxTupleSize. kNoSpace: does not fit; the page is unchanged.
+  // kMaxTupleSize. kNoSpace: does not fit; the page is unchanged. kCorrupt:
+  // compaction is needed and CheckStructure fails; the page is unchanged.
   PageResult<std::uint16_t> Insert(ByteView tuple);
 
   // Marks the slot dead and adds the tuple's length to dead_bytes; the tuple
@@ -104,14 +105,15 @@ class SlottedPage {
   // overwritten in place (the difference becomes dead_bytes); a longer one is
   // kept in the same page when it fits after releasing the old tuple (with
   // compaction if needed). kNoSpace: it does not fit; the page is unchanged.
-  // kNotFound: dead or out of range. kInvalidArgument and kTooLarge as for
-  // Insert.
+  // kCorrupt: compaction is needed and CheckStructure fails, checked before
+  // the old tuple is released; the page is unchanged. kNotFound: dead or out
+  // of range. kInvalidArgument and kTooLarge as for Insert.
   Status Update(std::uint16_t slot_id, ByteView tuple);
 
   // Moves the live tuples to the end of the page, sets dead_bytes to 0, and
   // removes the dead slots at the end of the slot array. Slot numbers of live
-  // tuples do not change. kCorrupt: a live slot lies outside the tuple area;
-  // the page is unchanged.
+  // tuples do not change. kCorrupt: CheckStructure fails; the page is
+  // unchanged.
   Status Compact();
 
  private:

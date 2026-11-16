@@ -805,6 +805,20 @@ TEST(test_parser_double_literal_out_of_range_returns_parse_error) {
   CHECK(Parses("SELECT 1" + std::string(10, '0') + ".0 FROM t"));
 }
 
+TEST(test_parser_double_literal_reads_subnormal_values) {
+  const double smallest = std::numeric_limits<double>::denorm_min();
+  const std::string text = domain::FormatValue(domain::Value(smallest));
+  domain::ExprPtr literal = ParseExpressionText(text);
+
+  const domain::Value* value = LiteralValue(literal.get());
+  CHECK(value != nullptr && std::holds_alternative<double>(*value));
+  if (value != nullptr && std::holds_alternative<double>(*value)) {
+    CHECK_EQ(std::get<double>(*value), smallest);
+  }
+  // A literal below the smallest subnormal would round to 0.
+  CHECK(!Parses("SELECT 0." + std::string(400, '0') + "1 FROM t"));
+}
+
 // ---- DDL ---------------------------------------------------------------
 
 // The only column of `CREATE TABLE t (<definition>)`, or an empty definition

@@ -15,7 +15,7 @@ namespace strata::application {
 // Executes one statement: binds it against the engine's catalog, then hands
 // the plan to the engine. Owns the engine. Imports only the domain.
 //
-// Concurrency (docs/PagedExecutionDesignDocument.md 2.5). One database-level
+// Concurrency (docs/DesignDocument.md section 2.14). One database-level
 // std::shared_mutex, above the engine, serializes statements and prevents a
 // reader from seeing a half-applied write (data race), two writers from
 // interleaving their read-modify-write steps (lost update), and a DDL
@@ -50,7 +50,7 @@ class QueryService {
   std::vector<domain::TableSchema> DescribeCatalog() const;
 
   // Imports an external CSV file as a new table (docs/DesignDocument.md
-  // sections 2.7 and 3.8): reads it through the CSV source, infers the table,
+  // sections 2.7 and 3.5): reads it through the CSV source, infers the table,
   // and has the engine create and write it in one step. Returns a
   // CommandComplete whose tag is "IMPORT <table> (imported <n> rows[, skipped
   // <m>])" and whose notes describe the skipped rows, or an ExecutionError.

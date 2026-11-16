@@ -67,7 +67,7 @@ Status InitializeNewDatabase(BufferManager& buffer) {
   return buffer.FlushAll();
 }
 
-// Checks page 0 of an existing file in the order of design document 2.9 and
+// Checks page 0 of an existing file in the order of design document 2.15 and
 // returns the first pages of the system tables.
 PageResult<FileHeader> ValidateExistingFile(IPageStore& store) {
   const PageId page_count = store.PageCount();

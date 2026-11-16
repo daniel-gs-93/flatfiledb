@@ -17,7 +17,7 @@
 #include "strata/paged/table_heap.h"
 
 // The schemas of the user tables, stored in two system tables inside the same
-// database file (design document 2.8, ADR-0032): sys_tables (table id 1) and
+// database file (design document 2.6, ADR-0032): sys_tables (table id 1) and
 // sys_columns (table id 2). The catalog reads them once into an in-memory
 // cache, so FindTable is O(1) plus a copy of the schema.
 //
@@ -39,9 +39,10 @@ class Catalog : public domain::ICatalog {
   Catalog(BufferManager& buffer, PageId sys_tables_first_page,
           PageId sys_columns_first_page);
 
-  // Reads and validates both system tables and the file header's
-  // next_table_id, and replaces the cache. kCorrupt names the table and
-  // column; see design document 2.8 for the checks.
+  // Reads and validates both system tables, including the target of every
+  // foreign key, and the file header's next_table_id, and replaces the cache.
+  // kCorrupt names the table and column; see design document 2.6 for the
+  // checks.
   Status Load();
 
   // Adds a table: validates schema, writes the table's first page and its rows
@@ -49,7 +50,7 @@ class Catalog : public domain::ICatalog {
   // There is no transaction: when a step fails the rows already written are
   // deleted (best effort) and the first error is returned; the new table's
   // first page stays allocated. kAlreadyExists: the name is taken (compared
-  // case-insensitively). kInvalidArgument: any other rule of 2.8 is violated.
+  // case-insensitively). kInvalidArgument: any other rule of 2.6 is violated.
   PageResult<domain::TableSchema> CreateTable(
       const domain::TableSchema& schema);
 

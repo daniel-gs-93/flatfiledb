@@ -43,7 +43,7 @@ struct OpenedDatabase {
   // flush the current database before reopening the same directory.
   paged::PagedEngine* paged_engine = nullptr;
   // The `note:` lines to print after the `loaded` line, one per element, when
-  // the directory also holds the other engine's data (design document 3.4).
+  // the directory also holds the other engine's data (design document 3.6).
   std::vector<std::string> notes = {};
 };
 
@@ -51,7 +51,7 @@ struct OpenedDatabase {
 // it does not exist and its parent does (one level), locks it, builds the CSV
 // repository, the CSV source for `.import` and the flat-file engine, loads the
 // tables, and wraps them in a QueryService. Returns the opened database, or the
-// reason it cannot be opened (docs/DesignDocument.md section 3.5).
+// reason it cannot be opened (docs/DesignDocument.md section 3.1).
 //
 // `current` is the database the caller has open, or null. Opening the directory
 // that `current` already holds reuses its lock: a second flock on the same file
@@ -66,7 +66,7 @@ std::variant<OpenedDatabase, std::string> OpenFlatFileDatabase(
 
 // As OpenFlatFileDatabase, over the paged engine, with the default storage
 // options (256 frames, Least Recently Used replacement); see
-// docs/PagedExecutionDesignDocument.md sections 2.8 and 3.3. The directory is
+// docs/DesignDocument.md sections 2.14 and 3.1. The directory is
 // always locked, because the engine writes paged.db: a directory in which the
 // lock file cannot be created for lack of permission is refused with
 // "directory is not writable". There is no load phase, so no parallel flag.

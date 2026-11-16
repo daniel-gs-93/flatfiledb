@@ -21,8 +21,8 @@
 #include "test_support.h"
 
 // The flat-file engine and the paged engine run the same statements, and the
-// results are compared under design document 2.6 (ADR-0044); see
-// docs/PagedExecutionTestDocument.md.
+// results are compared under design document 2.8 (ADR-0044); see
+// docs/TestDocument.md.
 
 namespace strata::testing {
 
@@ -156,7 +156,7 @@ Row KeyedRow(std::int64_t key, const std::string& label) {
 }
 
 // A comparator that reports nothing would make every equivalence test pass, so
-// each rule of 2.6 is shown to be detected, and each allowed difference shown
+// each rule of 2.8 is shown to be detected, and each allowed difference shown
 // to be accepted.
 void CheckComparatorFollowsTheRules() {
   const std::vector<std::size_t> unordered;
@@ -625,7 +625,7 @@ void RunFixedCorpus(ReplacementPolicyKind policy) {
     }
   }
 
-  // The corpus reaches every kind of outcome of 2.6 and the constraint rules.
+  // The corpus reaches every kind of outcome of 2.8 and the constraint rules.
   CHECK(outcomes.selects_with_rows >= 50);
   CHECK(outcomes.selects_without_rows >= 3);
   CHECK(outcomes.ordered_limit_selects >= 6);
@@ -950,7 +950,7 @@ void CheckParallelOption() {
   CHECK(!AnyLineStartsWith(paged, "error"));
 }
 
-// What reaches the file when a write statement returns (design document 2.8):
+// What reaches the file when a write statement returns (design document 2.15):
 // both engines write it out at once, paged without a sync. The storage layer
 // states the file is complete after Close, so the file is read again after
 // Close too.

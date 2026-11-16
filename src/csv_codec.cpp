@@ -373,6 +373,10 @@ std::string FormatCsvField(const std::string& field) {
 }
 
 std::string SerializeRow(const domain::Row& row) {
+  // A lone empty field would make a blank line, which the loaders skip.
+  if (row.size() == 1 && domain::FormatValue(row[0]).empty()) {
+    return "\"\"";
+  }
   std::string line;
   for (std::size_t i = 0; i < row.size(); ++i) {
     if (i > 0) {

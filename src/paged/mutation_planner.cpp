@@ -19,7 +19,7 @@
 #include "strata/paged/row_keys.h"
 #include "strata/paged/tuple_codec.h"
 
-// Pure logic (design document 2.4): every function here reads schemas from an
+// Pure logic (design document 2.13): every function here reads schemas from an
 // ICatalog and rows from an ITableReader and returns a value. It touches no
 // page, pin or lock. Ownership: a function that takes a std::vector or a Row by
 // value or by rvalue reference owns it afterwards; a pointer parameter is
@@ -90,7 +90,7 @@ ExecutionError RowTooLongError(const TableSchema& schema) {
                                 schema.name);
 }
 
-// The tuple length check (check 1 of the paged engine, design document 2.4):
+// The tuple length check (check 1 of the paged engine, design document 2.5):
 // the row must encode within kMaxTupleSize bytes. TupleCodec::Encode computes
 // the length; the bytes are discarded.
 std::optional<ExecutionError> CheckRowLength(const TableSchema& schema,
@@ -185,8 +185,8 @@ class KeySets {
 
 // Adds every row of a scan to a KeySets. When max_column is set, also tracks
 // the largest value of that INT column, and at least 0, which is the start
-// value of an auto-increment column (design document 2.4). Borrows sets for the
-// scan.
+// value of an auto-increment column (design document 2.3). Borrows sets for
+// the scan.
 class KeyCollector : public RowVisitor {
  public:
   KeyCollector(KeySets* sets, std::optional<std::size_t> max_column)
@@ -356,7 +356,7 @@ std::optional<ExecutionError> CheckInsertForeignKeys(
 }
 
 // Rows are processed one at a time in statement order. For each row: the
-// auto-increment value, then the checks of design document 2.4 in order (tuple
+// auto-increment value, then the checks of design document 2.5 in order (tuple
 // length, primary key, UNIQUE columns, foreign keys); a row that passes joins
 // the key sets so that later rows compare against it. The first violation is
 // returned. insert.rows is copied; the node is not modified.
@@ -700,9 +700,9 @@ std::optional<ExecutionError> CheckStagedLengths(
   return std::nullopt;
 }
 
-// The order of the checks is the order of design document 2.4: WHERE on every
-// row (first pass), the assignments (second pass), then, on the rows whose
-// value changed, tuple length, uniqueness, foreign keys, and finally the
+// The order of the checks is the order of design document 2.13 and 2.5: WHERE
+// on every row (first pass), the assignments (second pass), then, on the rows
+// whose value changed, tuple length, uniqueness, foreign keys, and finally the
 // cascade with the tuple length of the rewritten child rows.
 PlanMutationResult PlanUpdate(const domain::UpdateNode& update,
                               const domain::ICatalog& catalog,

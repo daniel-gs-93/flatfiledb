@@ -18,7 +18,7 @@ struct LockOutcome {
 
 // An exclusive flock on `.strata.lock` in a database directory, held until
 // the last owner of the object is destroyed (docs/DesignDocument.md section
-// 2.6, ADR-0015). The lock file is never renamed or removed, so the lock
+// 2.14, ADR-0015). The lock file is never renamed or removed, so the lock
 // survives the staged commits that replace the other files. The kernel releases
 // the lock when the process ends.
 class DirectoryLock {

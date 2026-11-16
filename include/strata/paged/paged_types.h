@@ -11,7 +11,7 @@
 #include <variant>
 
 // Shared numbers, positions and error types of the paged engine (design
-// document 2.2, 2.3). Pure: no I/O, no locks.
+// document 2.2, 2.10). Pure: no I/O, no locks.
 
 namespace strata::paged {
 
@@ -30,7 +30,7 @@ inline constexpr std::size_t kMaxTupleSize =
 inline constexpr PageId kInvalidPageId = 0xFFFFFFFFu;
 
 // Byte positions of the fixed-width little-endian fields (design document
-// 2.3). Every page starts with the common header; page 0 continues with the
+// 2.10). Every page starts with the common header; page 0 continues with the
 // file header.
 namespace layout {
 inline constexpr std::size_t kChecksum = 0;

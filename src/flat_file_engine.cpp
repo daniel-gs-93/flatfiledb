@@ -138,7 +138,9 @@ std::vector<domain::TableSchema> CatalogAfter(const TableStore& store,
 }
 
 // A table the change creates without a CSV, or rewrites, is written with a
-// header from its schema; an adopted CSV stays as it is.
+// header from its schema; an adopted CSV stays as it is. A created file must
+// not exist yet (CREATE TABLE and .import), so a CSV that is not in the
+// catalog is never replaced.
 CommitSet BuildCommitSet(const TableStore& store, const SchemaChange& change) {
   CommitSet set;
   set.catalog = CatalogAfter(store, change);
@@ -146,7 +148,7 @@ CommitSet BuildCommitSet(const TableStore& store, const SchemaChange& change) {
     case SchemaChangeKind::kCreate:
       if (!change.is_adopted) {
         set.writes.push_back(
-            TableWrite{change.data->schema, change.data->rows, true});
+            TableWrite{change.data->schema, change.data->rows, true, true});
       }
       break;
     case SchemaChangeKind::kAddColumn:
@@ -186,7 +188,10 @@ domain::ExecutionResult ApplySchemaChange(IFlatFileRepository& repository,
                                           TableStore& store,
                                           const domain::PlanNode& plan) {
   std::optional<std::vector<domain::Row>> existing_rows;
-  if (const auto* create = std::get_if<domain::CreateTableNode>(&plan.node)) {
+  const auto* create = std::get_if<domain::CreateTableNode>(&plan.node);
+  // A registered table is refused by PlanSchemaChange. Inspecting its file
+  // first would replace the record taken at load and hide an external change.
+  if (create != nullptr && store.Find(create->schema.name) == nullptr) {
     InspectOutcome inspected = repository.InspectTable(create->schema);
     if (auto* error = std::get_if<std::string>(&inspected)) {
       return domain::ExecutionError{domain::ErrorKind::kIo, std::move(*error)};

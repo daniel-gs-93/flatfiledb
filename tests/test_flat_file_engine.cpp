@@ -653,6 +653,38 @@ TEST(test_engine_insert_text_with_line_break_returns_unsupported) {
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
+TEST(test_engine_single_empty_text_column_survives_reopen) {
+  // Arrange
+  TempDir dir;
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  ExpectComplete(
+      ExecuteSql(*service, "CREATE TABLE tags (name TEXT PRIMARY KEY)"),
+      "CREATE TABLE tags");
+
+  // Act: an append, then a rewrite of the table
+  ExpectAffected(ExecuteSql(*service, "INSERT INTO tags VALUES (''), ('x')"),
+                 2);
+  const std::string appended = ReadFile(dir.path() / "tags.csv");
+  auto after_append = MakeLoadedService(dir.path());
+  ExpectAffected(ExecuteSql(*service, "DELETE FROM tags WHERE name = 'x'"), 1);
+  const std::string rewritten = ReadFile(dir.path() / "tags.csv");
+  auto after_rewrite = MakeLoadedService(dir.path());
+  if (!after_append || !after_rewrite) {
+    return;
+  }
+
+  // Assert: the empty string is quoted, so the line is not blank
+  CHECK_EQ(appended, std::string("name\n\"\"\nx\n"));
+  CHECK_EQ(rewritten, std::string("name\n\"\"\n"));
+  CHECK_EQ(CountRows(*after_append, "tags"), std::string("2"));
+  CHECK_EQ(CountRows(*after_rewrite, "tags"), std::string("1"));
+  CHECK_EQ(Join(QueryLines(*after_rewrite, "SELECT LENGTH(name) FROM tags")),
+           std::string("0\n"));
+}
+
 TEST(test_engine_int_values_beyond_32_bits_are_persisted) {
   // Arrange
   TempDir dir;
@@ -1441,6 +1473,46 @@ TEST(test_engine_add_column_fills_default_and_persists) {
   CHECK(
       ReadFile(dir.path() / "catalog.csv").find("users,3,age,INT,0,0,0,1,7") !=
       std::string::npos);
+}
+
+TEST(test_engine_rejects_text_default_with_line_break) {
+  // Arrange
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  const std::string files_before =
+      ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv");
+
+  // Act
+  ExecutionResult newline =
+      ExecuteSql(*service,
+                 "CREATE TABLE notes (id INT PRIMARY KEY, body TEXT DEFAULT "
+                 "'a\nb')");
+  ExecutionResult carriage_return =
+      ExecuteSql(*service,
+                 "CREATE TABLE notes (id INT PRIMARY KEY, body TEXT DEFAULT "
+                 "'a\rb')");
+  ExecutionResult added = ExecuteSql(
+      *service, "ALTER TABLE users ADD COLUMN bio TEXT DEFAULT 'a\nb'");
+  auto engine = LoadedEngine(dir.path());
+  if (!engine) {
+    return;
+  }
+
+  // Assert: catalog.csv would no longer load, so nothing is written
+  ExpectErrorMessage(newline, ErrorKind::kUnsupported,
+                     "flatfile engine cannot store a line break in notes.body");
+  ExpectErrorMessage(carriage_return, ErrorKind::kUnsupported,
+                     "flatfile engine cannot store a line break in notes.body");
+  ExpectErrorMessage(added, ErrorKind::kUnsupported,
+                     "flatfile engine cannot store a line break in users.bio");
+  CHECK_EQ(ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv"),
+           files_before);
+  CHECK(!std::filesystem::exists(dir.path() / "notes.csv"));
+  CHECK_EQ(TableNameList(*engine), std::string("users\nposts\nengagements\n"));
 }
 
 TEST(test_engine_drop_table_removes_file_and_catalog_entry) {
@@ -2279,6 +2351,59 @@ TEST(test_engine_consecutive_writes_do_not_trip_the_change_check) {
                  "INSERT INTO users (id, username, location) VALUES (7, "
                  "'gina', 'W')"),
       1);
+}
+
+TEST(test_engine_detects_external_change_to_adopted_csv) {
+  // Arrange
+  TempDir dir;
+  const std::filesystem::path notes_path = dir.path() / "notes.csv";
+  WriteFile(notes_path, "id,body\n1,a\n");
+  auto service = MakeLoadedService(dir.path());
+  if (!service) {
+    return;
+  }
+  ExpectComplete(
+      ExecuteSql(*service,
+                 "CREATE TABLE notes (id INT PRIMARY KEY, body TEXT)"),
+      "CREATE TABLE notes (adopted 1 rows)");
+  const std::string edited = ReadFile(notes_path) + "2,external\n";
+  WriteFile(notes_path, edited);
+
+  // Act
+  ExecutionResult insert =
+      ExecuteSql(*service, "INSERT INTO notes VALUES (3, 'c')");
+  ExecutionResult update =
+      ExecuteSql(*service, "UPDATE notes SET body = 'z' WHERE id = 1");
+
+  // Assert: the adopted file is checked like a loaded one
+  const std::string changed_message =
+      "notes.csv changed on disk since it was loaded; run .open again";
+  ExpectErrorMessage(insert, ErrorKind::kIo, changed_message);
+  ExpectErrorMessage(update, ErrorKind::kIo, changed_message);
+  CHECK_EQ(ReadFile(notes_path), edited);
+  CHECK_EQ(CountRows(*service, "notes"), std::string("1"));
+
+  // A CREATE TABLE node for a registered table, which the Binder would have
+  // refused, does not replace the record taken at load.
+  TempDir fixture;
+  WriteFixtureA(fixture.path());
+  auto engine = LoadedEngine(fixture.path());
+  if (!engine) {
+    return;
+  }
+  const std::filesystem::path users_path = fixture.path() / "users.csv";
+  WriteFile(users_path, ReadFile(users_path) + "9,external,Nowhere\n");
+  domain::PlanNode create_users{domain::CreateTableNode{UsersSchema()}};
+  ExecutionResult again = engine->Execute(create_users);
+  domain::PlanPtr update_plan = MustBind(
+      "UPDATE users SET location = 'X' WHERE id = 1", engine->Catalog());
+  if (!update_plan) {
+    return;
+  }
+  ExpectErrorMessage(again, ErrorKind::kBind, "table users already exists");
+  ExpectErrorMessage(
+      engine->Execute(*update_plan), ErrorKind::kIo,
+      "users.csv changed on disk since it was loaded; run .open again");
 }
 
 }  // namespace strata::testing

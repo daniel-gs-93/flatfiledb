@@ -10,12 +10,12 @@
 #include "strata/domain/value.h"
 #include "strata/paged/row_stream.h"
 
-// Pull-based query operators (design document 2.2, 2.3). Pure: an operator
+// Pull-based query operators (design document 2.13). Pure: an operator
 // reads rows only from its child operator or, at a leaf, from an IRowStream,
 // and evaluates expressions with domain::Evaluate. It touches no page, pin or
 // lock.
 //
-// Lifecycle of every operator (the state diagram of design document 2.2):
+// Lifecycle of every operator (the state diagram of design document 2.13):
 //   Fresh: no row has been requested from the child yet. A blocking operator
 //     (Sort, Aggregate, the right side of a join) reads its child to the end
 //     only on the first Next, so building the tree reads no row.

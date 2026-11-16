@@ -28,7 +28,7 @@
 #include "test_support.h"
 
 // HeapAccess and PagedEngine over a Database on a MemoryPageStore, and for one
-// test over real files (docs/PagedExecutionTestDocument.md).
+// test over real files (docs/TestDocument.md).
 
 namespace strata::testing {
 
@@ -799,7 +799,7 @@ TEST(test_paged_engine_rejected_statement_changes_no_page) {
                                       std::string(4100, 'x') + "')",
                                   ErrorKind::kUnsupported);
 
-  // The messages are those of design document 2.4.
+  // The messages are those of design document 2.5.
   PagedEngine& engine = *fixture.engine;
   ExpectErrorMessage(Run(engine, "INSERT INTO users VALUES (1, 'other', 'x')"),
                      ErrorKind::kConstraintViolation,
@@ -1463,7 +1463,7 @@ TEST(test_paged_engine_storage_errors_map_to_io) {
 namespace {
 
 // ----------------------------------------------------------------------------
-// A chain that points past the end of the file (design document 2.7, 2.8).
+// A chain that points past the end of the file (design document 2.13, 2.15).
 // ----------------------------------------------------------------------------
 
 // A copy of the store of `loaded` in which the first page of `table` names a
@@ -1484,29 +1484,29 @@ std::unique_ptr<MemoryPageStore> WithChainPastTheEnd(StoreEngine& loaded,
   return bytes;
 }
 
-// The error is a storage failure of a table the catalog has: kIo with the
-// "internal error: " row of design document 2.7, never "unknown table".
-void ExpectInternalError(const ExecutionError& error,
-                         const std::string& label) {
+// The error is damage to a table the catalog has: kIo with "corrupt: " from
+// the error mapping of design document 2.13, never "unknown table".
+void ExpectCorruptChain(const ExecutionError& error, const std::string& label) {
   CHECK_EQ(label + " " + domain::ErrorKindName(error.kind),
            label + " " + domain::ErrorKindName(ErrorKind::kIo));
-  CHECK(error.message.starts_with("internal error: "));
+  CHECK(error.message.starts_with("corrupt: "));
+  CHECK(Contains(error.message, "leads past the end of the file"));
   CHECK(!Contains(error.message, "unknown table"));
 }
 
-void ExpectInternalError(const ExecutionResult& result,
-                         const std::string& label) {
+void ExpectCorruptChain(const ExecutionResult& result,
+                        const std::string& label) {
   const ExecutionError* error = ExpectError(result, ErrorKind::kIo);
   if (error != nullptr) {
-    ExpectInternalError(*error, label);
+    ExpectCorruptChain(*error, label);
   }
 }
 
-void ExpectInternalError(const std::optional<ExecutionError>& error,
-                         const std::string& label) {
+void ExpectCorruptChain(const std::optional<ExecutionError>& error,
+                        const std::string& label) {
   CHECK(error.has_value());
   if (error.has_value()) {
-    ExpectInternalError(*error, label);
+    ExpectCorruptChain(*error, label);
   }
 }
 
@@ -1538,36 +1538,36 @@ TEST(test_paged_engine_truncated_chain_is_not_an_unknown_table) {
   // The three call sites of Database::Table, for a table that the catalog has
   // but whose chain cannot be walked: a scan (a query and the reader), a
   // write (a statement, a change set and a row insert), and the row counts.
-  ExpectInternalError(Run(engine, "SELECT * FROM alpha"), "SELECT");
+  ExpectCorruptChain(Run(engine, "SELECT * FROM alpha"), "SELECT");
   paged::ScanResult scanned = reader.Scan("alpha");
   const auto* scan_error = std::get_if<ExecutionError>(&scanned);
   CHECK(scan_error != nullptr);
   if (scan_error != nullptr) {
-    ExpectInternalError(*scan_error, "Scan");
+    ExpectCorruptChain(*scan_error, "Scan");
   }
   paged::ScanResult scanned_upper = reader.Scan("ALPHA");
   const auto* upper_error = std::get_if<ExecutionError>(&scanned_upper);
   CHECK(upper_error != nullptr);
   if (upper_error != nullptr) {
-    ExpectInternalError(*upper_error, "ALPHA");
+    ExpectCorruptChain(*upper_error, "ALPHA");
   }
 
-  ExpectInternalError(Run(engine, "INSERT INTO alpha VALUES (1000, 'x')"),
-                      "INSERT");
-  ExpectInternalError(Run(engine, "DELETE FROM alpha WHERE id = 1"), "DELETE");
+  ExpectCorruptChain(Run(engine, "INSERT INTO alpha VALUES (1000, 'x')"),
+                     "INSERT");
+  ExpectCorruptChain(Run(engine, "DELETE FROM alpha WHERE id = 1"), "DELETE");
   paged::TableChange change;
   change.table = "alpha";
   change.inserts.push_back(TextRow(1000, 1));
-  ExpectInternalError(paged::ApplyChangeSet(database, PlanOf({change})),
-                      "ApplyChangeSet");
-  ExpectInternalError(paged::InsertRows(database, "alpha", {TextRow(1000, 1)}),
-                      "InsertRows");
+  ExpectCorruptChain(paged::ApplyChangeSet(database, PlanOf({change})),
+                     "ApplyChangeSet");
+  ExpectCorruptChain(paged::InsertRows(database, "alpha", {TextRow(1000, 1)}),
+                     "InsertRows");
 
   const paged::RowCountResult counted = engine.RowCounts();
   const auto* count_error = std::get_if<ExecutionError>(&counted);
   CHECK(count_error != nullptr);
   if (count_error != nullptr) {
-    ExpectInternalError(*count_error, "RowCounts");
+    ExpectCorruptChain(*count_error, "RowCounts");
   }
   ExpectNoPins(engine);
 

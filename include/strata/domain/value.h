@@ -96,6 +96,10 @@ bool ValuesEqual(const Value& lhs, const Value& rhs);
 // Precondition: a DOUBLE value is finite.
 std::string FormatValue(const Value& value);
 
+// FormatValue with -0.0 written as 0.0: two values of one type get the same
+// key exactly when ValuesEqual holds. Precondition as FormatValue.
+std::string FormatKey(const Value& value);
+
 // Converts value to the target type. Only INT to DOUBLE changes the value;
 // returns std::nullopt for every other mismatch.
 std::optional<Value> CoerceValue(const Value& value, DataType target);

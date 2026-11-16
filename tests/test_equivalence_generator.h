@@ -10,7 +10,7 @@
 #include "strata/domain/value.h"
 #include "test_equivalence_support.h"
 
-// The statements of the equivalence tests (docs/PagedExecutionTestDocument.md):
+// The statements of the equivalence tests (docs/TestDocument.md):
 // the schema and data they start from, and the random statement generator.
 
 namespace strata::testing {
@@ -25,7 +25,7 @@ const std::vector<std::string>& EquivalenceSetupStatements();
 // the tables of EquivalenceSetupStatements. The mixing probabilities are fixed
 // in the implementation; a seed fixes the whole stream.
 //
-// The generator stays inside what design document 2.6 makes comparable:
+// The generator stays inside what design document 2.8 makes comparable:
 //   - a LIMIT or OFFSET only follows an ORDER BY that ends with the primary key
 //     of every table of the FROM clause (or with every group key), so the cut
 //     is deterministic, and LIMIT 0 is used only by a statement that cannot

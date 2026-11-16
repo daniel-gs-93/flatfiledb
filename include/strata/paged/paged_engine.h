@@ -13,7 +13,7 @@
 #include "strata/domain/value.h"
 #include "strata/paged/database.h"
 
-// The second implementation of domain::IEngine (design document 2.1, 2.2): it
+// The second implementation of domain::IEngine (design document 2.13): it
 // runs the plans the Binder produces on the paged storage layer. Resource-
 // aware; it dispatches on the plan node and leaves the logic to the pure row
 // layer (operators, mutation planner) and the page access to heap_access.h.
@@ -29,7 +29,7 @@
 // same time and modifies no member; every other call, and Execute of any other
 // node, needs the exclusive lock.
 //
-// Durability (design document 2.8). After a write node (INSERT, UPDATE,
+// Durability (design document 2.15). After a write node (INSERT, UPDATE,
 // DELETE, CREATE TABLE, import) was applied, Execute calls
 // BufferManager::WriteBackAll before it returns, so a completed statement is
 // in the file. A query and a failed statement never call it.

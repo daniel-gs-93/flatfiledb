@@ -17,7 +17,7 @@
 
 // The paged engine's storage layer as one object: the database file, the
 // buffer pool in front of it, the catalog, and the table heaps (design
-// document 2.1, 3.3). Resource-aware. A Database owns the IPageStore,
+// document 2.1, 3.1). Resource-aware. A Database owns the IPageStore,
 // BufferManager, Catalog and TableHeaps through unique_ptr; it can be moved
 // (the references between the members point at heap objects whose addresses do
 // not change) but not copied.
@@ -38,7 +38,7 @@ class Database {
   // Opens directory/paged.db, creating it (with the file header and the two
   // system tables) when it does not exist or is empty. kIo: the directory is
   // missing or not a directory, or the file cannot be opened. kCorrupt: the
-  // file fails the checks of design document 2.9.
+  // file fails the checks of design document 2.15.
   static PageResult<Database> Open(const std::filesystem::path& directory,
                                    const DatabaseOptions& options);
 

@@ -13,6 +13,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -229,7 +230,7 @@ void ApplyHeaderDamage(std::vector<std::uint8_t>& bytes, HeaderDamage damage) {
   const std::size_t page_count = bytes.size() / kPageBytes;
   switch (damage) {
     case HeaderDamage::kAppendByte:
-      bytes.push_back(0);
+      bytes.push_back(1);  // a zero byte would be an interrupted extension
       return;
     case HeaderDamage::kTruncateToTwoPages:
       bytes.resize(2 * kPageBytes);
@@ -399,6 +400,70 @@ TEST(test_paged_database_isolates_corrupt_table_pages) {
   CHECK_ERROR(Database::Open(directory.path(), options), kCorrupt);
 }
 
+namespace {
+
+// The next_page_id field of page page_id in the file bytes.
+PageId NextPageOf(const std::vector<std::uint8_t>& bytes, PageId page_id) {
+  return ReadLe32(bytes.data() + page_id * kPageBytes +
+                  strata::paged::layout::kNextPageId);
+}
+
+}  // namespace
+
+TEST(test_paged_database_reports_a_cut_page_chain_as_corrupt) {
+  TempDir directory;
+  {
+    auto database = OpenDatabase(directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    // The first table of a new file starts at page 3; 100 rows of 218 bytes
+    // need several pages.
+    CreateAndFill(*database, "a_table", 100, 200);
+    CHECK_OK(database->Close());
+  }
+  const PageId second_page = NextPageOf(BytesOfFile(FilePathIn(directory)), 3);
+  CHECK(second_page != strata::paged::kInvalidPageId);
+  // The first page still names the second one, which the file no longer has.
+  std::error_code error;
+  std::filesystem::resize_file(FilePathIn(directory), second_page * kPageBytes,
+                               error);
+  CHECK(!error);
+  {
+    auto database = OpenDatabase(directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    auto cut = database->Table("a_table");
+    CHECK_ERROR(cut, kCorrupt);
+    CHECK_MESSAGE_CONTAINS(cut, "page " + std::to_string(second_page));
+  }
+
+  // The same cut in the chain of sys_columns keeps the database from opening.
+  TempDir system_directory;
+  {
+    auto database = OpenDatabase(system_directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    for (int index = 0; index < 40; ++index) {
+      CHECK_OK(
+          database->CreateTable(PeopleSchema("t" + std::to_string(index))));
+    }
+    CHECK_OK(database->Close());
+  }
+  const PageId next_of_columns =
+      NextPageOf(BytesOfFile(FilePathIn(system_directory)), 2);
+  CHECK(next_of_columns != strata::paged::kInvalidPageId);
+  std::filesystem::resize_file(FilePathIn(system_directory),
+                               next_of_columns * kPageBytes, error);
+  CHECK(!error);
+  DatabaseOptions options;
+  auto reopened = Database::Open(system_directory.path(), options);
+  CHECK_ERROR(reopened, kCorrupt);
+  CHECK_MESSAGE_CONTAINS(reopened, "sys_columns");
+}
+
 TEST(test_paged_database_accepts_trailing_unformatted_page) {
   TempDir directory;
   {
@@ -424,6 +489,51 @@ TEST(test_paged_database_accepts_trailing_unformatted_page) {
     return;
   }
   CHECK_EQ(RowsOf(*database, "alpha").size(), static_cast<std::size_t>(100));
+}
+
+TEST(test_paged_database_ignores_a_partial_zero_page_at_the_end) {
+  // What an extension cut off by SIGXFSZ leaves: part of a page of zeros.
+  TempDir directory;
+  {
+    auto database = OpenDatabase(directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    CHECK_OK(database->Close());
+  }
+  std::vector<std::uint8_t> bytes = BytesOfFile(FilePathIn(directory));
+  bytes.resize(bytes.size() + 1024, 0);
+  WriteBytes(FilePathIn(directory), bytes);
+  {
+    auto database = OpenDatabase(directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    CreateAndFill(*database, "alpha", 100);
+    CHECK_OK(database->Close());
+  }
+  CHECK_EQ(std::filesystem::file_size(FilePathIn(directory)) % kPageBytes,
+           std::uintmax_t{0});
+  {
+    auto database = OpenDatabase(directory.path());
+    if (database == nullptr) {
+      return;
+    }
+    CHECK_EQ(RowsOf(*database, "alpha").size(), static_cast<std::size_t>(100));
+  }
+
+  // A file that holds nothing but such zeros opens as a new database.
+  TempDir fresh;
+  WriteBytes(FilePathIn(fresh), std::vector<std::uint8_t>(100, 0));
+  {
+    auto database = OpenDatabase(fresh.path());
+    if (database == nullptr) {
+      return;
+    }
+    CHECK_OK(database->Close());
+  }
+  CHECK_EQ(std::filesystem::file_size(FilePathIn(fresh)),
+           std::uintmax_t{3 * kPageBytes});
 }
 
 TEST(test_paged_database_reports_directory_problems) {

@@ -1,9 +1,11 @@
 // Integration tests of CsvRepository (docs/TestDocument.md section 3.2) against
 // database directories in a temporary location.
 
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -118,6 +120,37 @@ std::string ListDirectory(const std::filesystem::path& dir) {
 
 constexpr const char* kFixtureAListing =
     "catalog.csv,engagements.csv,posts.csv,users.csv";
+
+// Lowers the file size limit of the process and ignores SIGXFSZ, so a write
+// past the limit fails with EFBIG instead of ending the process. The
+// destructor restores both.
+class FileSizeLimit {
+ public:
+  explicit FileSizeLimit(rlim_t bytes)
+      : previous_handler_(std::signal(SIGXFSZ, SIG_IGN)) {
+    if (getrlimit(RLIMIT_FSIZE, &saved_) != 0) {
+      return;
+    }
+    rlimit lowered = saved_;
+    lowered.rlim_cur = bytes;
+    is_set_ = setrlimit(RLIMIT_FSIZE, &lowered) == 0;
+  }
+  FileSizeLimit(const FileSizeLimit&) = delete;
+  FileSizeLimit& operator=(const FileSizeLimit&) = delete;
+  ~FileSizeLimit() {
+    if (is_set_) {
+      setrlimit(RLIMIT_FSIZE, &saved_);
+    }
+    std::signal(SIGXFSZ, previous_handler_);
+  }
+
+  bool is_set() const { return is_set_; }
+
+ private:
+  void (*previous_handler_)(int);
+  rlimit saved_ = {};
+  bool is_set_ = false;
+};
 
 std::size_t CountLines(const std::string& text) {
   std::size_t line_count =
@@ -434,6 +467,36 @@ TEST(test_csv_append_rows_adds_newline_when_missing) {
       "id,username,location\r\n1,alice,Paris\r\n5,eve,Rome\r\n");
 }
 
+TEST(test_csv_writes_skip_a_blank_crlf_line_before_the_header) {
+  // A rewrite keeps the header that follows the blank line, with its ending.
+  TempDir rewritten;
+  WriteFile(rewritten.path() / "users.csv",
+            "\r\nid,username,location\r\n1,alice,Paris\r\n");
+  auto rewrite_repository = MakeCsvRepository(rewritten.path());
+  std::optional<std::string> rewrite_failure =
+      CommitWrites(*rewrite_repository,
+                   {TableWrite{UsersSchema(), {UserRow(1, "alice", "Lyon")}}});
+  CHECK_EQ(DescribeOutcome(rewrite_failure), kSuccess);
+  CHECK_EQ(ReadFile(rewritten.path() / "users.csv"),
+           "id,username,location\r\n1,alice,Lyon\r\n");
+
+  // An append takes the ending of the header line, not of the blank line.
+  ExpectAppendOutcome("\r\nid,username,location\n1,alice,Paris\n",
+                      UserRow(5, "eve", "Rome"),
+                      "\r\nid,username,location\n1,alice,Paris\n5,eve,Rome\n");
+
+  // A file with only a blank CRLF line has no header, so the append writes
+  // one.
+  TempDir blank;
+  WriteFile(blank.path() / "users.csv", "\r\n");
+  auto blank_repository = MakeCsvRepository(blank.path());
+  std::optional<std::string> append_failure =
+      blank_repository->AppendRows(UsersSchema(), {UserRow(5, "eve", "Rome")});
+  CHECK_EQ(DescribeOutcome(append_failure), kSuccess);
+  CHECK_EQ(ReadFile(blank.path() / "users.csv"),
+           "\r\nid,username,location\n5,eve,Rome\n");
+}
+
 TEST(test_csv_commit_staging_failure_leaves_all_files_unchanged) {
   TempDir dir;
   WriteFixtureA(dir.path());
@@ -516,6 +579,36 @@ TEST(test_csv_commit_refuses_leftover_orig) {
   CHECK_EQ(ListDirectory(dir.path()),
            "catalog.csv,engagements.csv,engagements.csv.orig,posts.csv,"
            "users.csv");
+}
+
+TEST(test_csv_append_and_load_refuse_leftover_orig) {
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto repository = MakeCsvRepository(dir.path());
+  MustLoad(*repository);
+  WriteFile(dir.path() / "users.csv.orig", "stale\n");
+  const std::string users_before = ReadFile(dir.path() / "users.csv");
+
+  std::optional<std::string> appended =
+      repository->AppendRows(UsersSchema(), {UserRow(5, "eve", "Rome")});
+
+  CHECK_EQ(DescribeOutcome(appended), std::string("leftover users.csv.orig"));
+  CHECK_EQ(ReadFile(dir.path() / "users.csv"), users_before);
+  auto reloaded = MakeCsvRepository(dir.path());
+  CHECK_EQ(LoadFailure(*reloaded, false),
+           std::string("leftover users.csv.orig"));
+
+  // A swap of catalog.csv cut between its two renames leaves only the .orig;
+  // the load names it instead of finding no tables.
+  TempDir swapped;
+  WriteFixtureA(swapped.path());
+  std::error_code error;
+  std::filesystem::rename(swapped.path() / "catalog.csv",
+                          swapped.path() / "catalog.csv.orig", error);
+  CHECK(!error);
+  auto swapped_repository = MakeCsvRepository(swapped.path());
+  CHECK_EQ(LoadFailure(*swapped_repository, true),
+           std::string("leftover catalog.csv.orig"));
 }
 
 TEST(test_csv_load_strips_carriage_returns) {
@@ -615,6 +708,44 @@ TEST(test_csv_commit_refuses_directory_at_csv_path) {
   CHECK_EQ(ReadFile(dir.path() / "posts.csv" / "inner.txt"), "keep\n");
   CHECK_EQ(ReadFile(dir.path() / "users.csv"), users_before);
   CHECK_EQ(ListDirectory(dir.path()), kFixtureAListing);
+}
+
+TEST(test_csv_commit_refuses_a_new_file_that_exists) {
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  const std::filesystem::path notes_path = dir.path() / "notes.csv";
+  WriteFile(notes_path, "id,body\n1,keep\n");
+  const std::string catalog_before = ReadFile(dir.path() / "catalog.csv");
+  auto repository = MakeCsvRepository(dir.path());
+  CommitSet set;
+  set.catalog = std::vector<domain::TableSchema>{
+      UsersSchema(), PostsSchema(), EngagementsSchema(), NotesSchema()};
+  set.writes = {TableWrite{NotesSchema(), {}, true, true}};
+  const std::string exists_message =
+      "notes.csv already exists; use CREATE TABLE to adopt it";
+
+  std::optional<std::string> regular_file = repository->Commit(set);
+  const std::string notes_after_refusal = ReadFile(notes_path);
+  const std::string catalog_after_refusal =
+      ReadFile(dir.path() / "catalog.csv");
+  std::error_code error;
+  std::filesystem::remove(notes_path, error);
+  std::filesystem::create_directory(notes_path, error);
+  CHECK(!error);
+  std::optional<std::string> directory = repository->Commit(set);
+  const bool is_still_directory = std::filesystem::is_directory(notes_path);
+  std::filesystem::remove(notes_path, error);
+  std::optional<std::string> missing = repository->Commit(set);
+
+  CHECK_EQ(DescribeOutcome(regular_file), exists_message);
+  CHECK_EQ(notes_after_refusal, "id,body\n1,keep\n");
+  CHECK_EQ(catalog_after_refusal, catalog_before);
+  CHECK_EQ(DescribeOutcome(directory),
+           "notes.csv already exists and is not a regular file");
+  CHECK(is_still_directory);
+  CHECK_EQ(DescribeOutcome(missing), kSuccess);
+  CHECK_EQ(ReadFile(notes_path), "id,body\n");
+  CHECK(ReadFile(dir.path() / "catalog.csv") != catalog_before);
 }
 
 TEST(test_csv_commit_refuses_symlink) {
@@ -751,7 +882,7 @@ TEST(test_csv_load_ignores_files_not_in_catalog) {
   TempDir extra_dir;
   WriteFixtureA(extra_dir.path());
   WriteFile(extra_dir.path() / "extra.csv", "a,b\n1,2\n");
-  WriteFile(extra_dir.path() / "users.csv.orig", "stale\n");
+  WriteFile(extra_dir.path() / "extra.csv.orig", "stale\n");
   WriteFile(extra_dir.path() / ".strata.lock", "");
   WriteFile(extra_dir.path() / "notes.txt", "hello\n");
   auto plain = MakeCsvRepository(plain_dir.path());
@@ -775,6 +906,23 @@ TEST(test_csv_load_keeps_file_order_and_last_duplicate) {
   std::vector<LoadedTable> tables = MustLoad(*repository);
 
   CHECK_EQ(DescribeTable(tables, "users"), "1,a,x\n3,d,y\n2,b,x\n");
+}
+
+TEST(test_csv_load_treats_negative_zero_as_a_repeated_key) {
+  TempDir dir;
+  const domain::TableSchema schema{"m",
+                                   {Column("k", domain::DataType::kDouble),
+                                    Column("v", domain::DataType::kText)},
+                                   0,
+                                   {}};
+  WriteFile(dir.path() / "catalog.csv",
+            infrastructure::SerializeCatalog({schema}));
+  WriteFile(dir.path() / "m.csv", "k,v\n0.0,a\n-0.0,b\n1.5,c\n");
+  auto repository = MakeCsvRepository(dir.path());
+
+  std::vector<LoadedTable> tables = MustLoad(*repository);
+
+  CHECK_EQ(DescribeTable(tables, "m"), "-0.0,b\n1.5,c\n");
 }
 
 TEST(test_csv_load_reads_quoted_fields) {
@@ -1026,6 +1174,31 @@ TEST(test_csv_append_rows_writes_every_row_in_one_call) {
   CHECK_EQ(DescribeOutcome(none_repository->AppendRows(UsersSchema(), {})),
            kSuccess);
   CHECK(!std::filesystem::exists(none.path() / "users.csv"));
+}
+
+TEST(test_csv_append_truncated_back_updates_the_record) {
+  TempDir dir;
+  WriteFixtureA(dir.path());
+  auto repository = MakeCsvRepository(dir.path());
+  MustLoad(*repository);
+  const std::string users_before = ReadFile(dir.path() / "users.csv");
+
+  std::optional<std::string> appended;
+  {
+    FileSizeLimit limit(users_before.size() + 64);
+    CHECK(limit.is_set());
+    appended = repository->AppendRows(
+        UsersSchema(), {UserRow(5, "eve", std::string(8192, 'x'))});
+  }
+
+  CHECK_EQ(DescribeOutcome(appended),
+           std::string("could not append to users.csv"));
+  CHECK_EQ(ReadFile(dir.path() / "users.csv"), users_before);
+  // The file holds the loaded content again, so the next write is not
+  // refused as an external change.
+  std::optional<std::string> committed = CommitWrites(
+      *repository, {TableWrite{UsersSchema(), {UserRow(1, "alice", "Lyon")}}});
+  CHECK_EQ(DescribeOutcome(committed), kSuccess);
 }
 
 TEST(test_csv_load_reports_rejected_line_numbers) {

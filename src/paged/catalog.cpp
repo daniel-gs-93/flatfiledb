@@ -8,6 +8,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include "strata/paged/byte_codec.h"
+#include "strata/paged/tuple_codec.h"
 
 namespace strata::paged {
 
@@ -65,6 +67,42 @@ bool IsValidIdentifier(const std::string& name) {
 
 PageError Corrupt(const std::string& detail) {
   return MakeError(PageErrorCode::kCorrupt, "catalog: " + detail);
+}
+
+// Why a foreign key of schema does not fit its target, or no value. target is
+// the schema that ref_table names, or null when there is none. The planner
+// reads the target column by position, so each of these would make it index
+// past the end of a row or compare values of different types.
+std::optional<std::string> ForeignKeyProblem(
+    const TableSchema& schema, const domain::ForeignKey& foreign_key,
+    const TableSchema* target) {
+  if (domain::ToLower(foreign_key.ref_table) == domain::ToLower(schema.name)) {
+    return std::string("foreign key references its own table");
+  }
+  if (target == nullptr) {
+    return "foreign key target table " + foreign_key.ref_table +
+           " does not exist";
+  }
+  if (foreign_key.ref_column_index >= target->columns.size()) {
+    return "foreign key target column " +
+           std::to_string(foreign_key.ref_column_index) +
+           " is not a column of " + target->name;
+  }
+  const domain::ColumnDef& referenced =
+      target->columns[foreign_key.ref_column_index];
+  const std::string target_name = target->name + "." + referenced.name;
+  if (referenced.type != schema.columns[foreign_key.column_index].type) {
+    return "foreign key target " + target_name + " has a different type";
+  }
+  const bool is_unique =
+      foreign_key.ref_column_index == target->primary_key_index ||
+      std::ranges::find(target->unique_indexes, foreign_key.ref_column_index) !=
+          target->unique_indexes.end();
+  if (!is_unique) {
+    return "foreign key target " + target_name +
+           " is neither the primary key nor unique";
+  }
+  return std::nullopt;
 }
 
 PageError Invalid(const std::string& detail) {
@@ -174,7 +212,7 @@ Row ColumnsRow(std::uint32_t table_id, std::size_t position,
              IntValue(ref_column)};
 }
 
-// Rules of design document 2.8 for a schema given to CreateTable.
+// Rules of design document 2.6 for a schema given to CreateTable.
 Status ValidateSchema(const TableSchema& schema) {
   if (!IsValidIdentifier(schema.name)) {
     return Invalid("table name '" + schema.name +
@@ -229,6 +267,30 @@ Status ValidateSchema(const TableSchema& schema) {
                      "the table, a table name and a column position");
     }
     previous = key.column_index;
+  }
+  return std::nullopt;
+}
+
+// kInvalidArgument when the sys_tables row of the schema, or one of its
+// sys_columns rows, cannot be stored as one tuple (a long name or TEXT
+// DEFAULT). Encoding is pure, so CreateTable runs it before it allocates the
+// table's first page.
+Status CheckCatalogRowsFit(const TableSchema& schema) {
+  PageResult<std::vector<std::uint8_t>> table_row = TupleCodec::Encode(
+      Catalog::SysTablesSchema(), TablesRow(0, schema.name, 0, 0, -1));
+  if (!table_row.ok()) {
+    return Invalid(
+        "table " + schema.name +
+        " cannot be stored in the catalog: " + table_row.error().message);
+  }
+  for (std::size_t position = 0; position < schema.columns.size(); ++position) {
+    PageResult<std::vector<std::uint8_t>> column_row = TupleCodec::Encode(
+        Catalog::SysColumnsSchema(), ColumnsRow(0, position, schema));
+    if (!column_row.ok()) {
+      return Invalid("column " + schema.columns[position].name + " of table " +
+                     schema.name + " cannot be stored in the catalog: " +
+                     column_row.error().message);
+    }
   }
   return std::nullopt;
 }
@@ -435,6 +497,23 @@ Status Catalog::Load() {
     entries.push_back(Entry{table_id, std::move(schema),
                             static_cast<PageId>(table.first_page)});
   }
+  // A foreign key target is checked once every table is known. The lookup by
+  // lowercase name is O(1) on average.
+  for (const Entry& entry : entries) {
+    for (const domain::ForeignKey& foreign_key : entry.schema.foreign_keys) {
+      auto target =
+          position_of_name.find(domain::ToLower(foreign_key.ref_table));
+      const TableSchema* target_schema = target == position_of_name.end()
+                                             ? nullptr
+                                             : &entries[target->second].schema;
+      if (std::optional<std::string> problem =
+              ForeignKeyProblem(entry.schema, foreign_key, target_schema)) {
+        return Corrupt("table " + entry.schema.name + ", column position " +
+                       std::to_string(foreign_key.column_index) + ": " +
+                       *problem);
+      }
+    }
+  }
   if (header_next_table_id <= highest_table_id || header_next_table_id < 3) {
     return Corrupt("the file header's next_table_id " +
                    std::to_string(header_next_table_id) +
@@ -521,6 +600,9 @@ PageResult<TableSchema> Catalog::CreateTable(const TableSchema& schema) {
   if (FindTable(schema.name).has_value()) {
     return MakeError(PageErrorCode::kAlreadyExists,
                      "table " + schema.name + " already exists");
+  }
+  if (Status status = CheckCatalogRowsFit(schema)) {
+    return *status;
   }
   const std::uint32_t table_id = next_table_id_;
   PageResult<PageId> first_page = TableHeap::Create(buffer_, table_id);

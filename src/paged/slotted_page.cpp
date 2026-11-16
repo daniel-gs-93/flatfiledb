@@ -377,9 +377,14 @@ Status SlottedPage::Update(std::uint16_t slot_id, ByteView tuple) {
               static_cast<std::uint16_t>(tuple_start));
     return std::nullopt;
   }
-  // The new tuple fits only after compaction. Compaction moves bytes, so the
-  // new tuple is staged first; the slot is released for the compaction and
-  // keeps its number because dead slots at the end are not removed here.
+  // The new tuple fits only after compaction. The structure is checked before
+  // the slot is released, so a corrupt page keeps the old row. Compaction
+  // moves bytes, so the new tuple is staged first; the slot is released for
+  // the compaction and keeps its number because dead slots at the end are not
+  // removed here.
+  if (Status status = view().CheckStructure()) {
+    return status;
+  }
   const std::vector<std::uint8_t> staged(tuple.data, tuple.data + tuple.size);
   WriteLe16(page_ + layout::kDeadBytes,
             static_cast<std::uint16_t>(DeadBytesOf(page_) + old_length));
@@ -399,7 +404,16 @@ Status SlottedPage::Compact() {
   return CompactKeepingSlots(/*is_trimming_dead_slots=*/true);
 }
 
+// A page read from the file passes its CRC even when its header and slots were
+// written inconsistently. Moving tuples by lengths that do not add up would
+// write outside the tuple area, so the whole structure is checked before any
+// byte moves. With live tuples inside [free_end, kPageSize), not overlapping,
+// the packed tuples start at or above free_end, which is at or above
+// free_start.
 Status SlottedPage::CompactKeepingSlots(bool is_trimming_dead_slots) {
+  if (Status status = view().CheckStructure()) {
+    return status;
+  }
   const std::size_t slot_count = SlotCountOf(page_);
   std::vector<LiveSlot> live_slots;
   for (std::size_t slot_id = 0; slot_id < slot_count; ++slot_id) {
@@ -407,10 +421,6 @@ Status SlottedPage::CompactKeepingSlots(bool is_trimming_dead_slots) {
     const std::uint16_t length = SlotLengthOf(page_, slot_id);
     if (IsDeadSlot(offset, length)) {
       continue;
-    }
-    if (!IsLiveSlotInBounds(page_, offset, length)) {
-      return Corrupt(page_, "slot " + std::to_string(slot_id) +
-                                " lies outside the tuple area");
     }
     live_slots.push_back(
         LiveSlot{static_cast<std::uint16_t>(slot_id), offset, length});

@@ -27,7 +27,7 @@
 #endif
 
 // The real data volume of data/ and the sample database of sample_my_db/ on
-// both engines (docs/PagedExecutionTestDocument.md). Every file the tests write
+// both engines (docs/TestDocument.md). Every file the tests write
 // is in a temporary directory; data/ and sample_my_db/ are only read.
 
 namespace strata::testing {
@@ -521,7 +521,7 @@ TEST(test_environment_timing_of_both_engines) {
   }
 
   // LIMIT 10 without ORDER BY stops early on paged. Which ten rows come back
-  // is undefined (2.6), so only the row count and the columns are compared.
+  // is undefined (2.8), so only the row count and the columns are compared.
   const std::string unordered = "SELECT id, username FROM users LIMIT 10";
   const std::vector<std::string> unordered_sql = {unordered};
   for (QueryService* service :

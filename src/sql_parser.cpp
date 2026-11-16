@@ -2,17 +2,18 @@
 
 #include <algorithm>
 #include <cassert>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <limits>
-#include <locale>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -439,15 +440,16 @@ std::optional<domain::Value> ConvertIntLiteral(const std::string& digits,
   return domain::Value(-static_cast<int64_t>(magnitude));
 }
 
-// A stream imbued with the classic locale keeps the result independent of the
-// process locale. Overflow to infinity and underflow set the fail bit.
+// std::from_chars ignores the locale and reads a subnormal value; a value
+// beyond the largest double or below the smallest subnormal is
+// result_out_of_range.
 std::optional<domain::Value> ConvertDoubleLiteral(const std::string& text,
                                                   bool is_negative) {
-  std::istringstream stream(text);
-  stream.imbue(std::locale::classic());
+  const char* end = text.data() + text.size();
   double value = 0.0;
-  stream >> value;
-  if (stream.fail() || !std::isfinite(value)) {
+  const std::from_chars_result result =
+      std::from_chars(text.data(), end, value);
+  if (result.ec != std::errc() || result.ptr != end || !std::isfinite(value)) {
     return std::nullopt;
   }
   return domain::Value(is_negative ? -value : value);

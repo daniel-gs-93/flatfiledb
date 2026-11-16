@@ -57,9 +57,8 @@ void WriteFixtureD(const std::filesystem::path& dir);
 std::unique_ptr<infrastructure::CsvRepository> MakeCsvRepository(
     const std::filesystem::path& dir);
 
-// The schemas of the `data/` example in docs/DesignDocument.md section 2.2
-// (users.username is UNIQUE), plus the test-only table measures(id INT, score
-// DOUBLE).
+// The schemas of the catalog fixture of docs/TestDocument.md (users.username
+// is UNIQUE), plus the test-only table measures(id INT, score DOUBLE).
 domain::TableSchema UsersSchema();
 domain::TableSchema PostsSchema();
 domain::TableSchema EngagementsSchema();

@@ -4,7 +4,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -17,6 +19,38 @@ std::string ErrnoText() { return std::strerror(errno); }
 
 off_t OffsetOf(PageId page_id) {
   return static_cast<off_t>(page_id) * static_cast<off_t>(kPageSize);
+}
+
+// Whether the length bytes at offset (fewer than kPageSize) are all zero. kIo
+// when they cannot be read.
+PageResult<bool> IsZeroTail(int file_descriptor, off_t offset,
+                            std::size_t length,
+                            const std::filesystem::path& path) {
+  std::array<std::uint8_t, kPageSize> bytes{};
+  std::size_t done = 0;
+  while (done < length) {
+    const ssize_t count =
+        ::pread(file_descriptor, bytes.data() + done, length - done,
+                offset + static_cast<off_t>(done));
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return MakeError(PageErrorCode::kIo,
+                       "cannot read " + path.string() + ": " + ErrnoText());
+    }
+    if (count == 0) {
+      return MakeError(PageErrorCode::kIo, "cannot read " + path.string() +
+                                               ": unexpected end of file");
+    }
+    done += static_cast<std::size_t>(count);
+  }
+  for (std::size_t i = 0; i < length; ++i) {
+    if (bytes[i] != 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -59,11 +93,25 @@ PageResult<FilePageStore> FilePageStore::Open(const std::filesystem::path& path,
                      "cannot inspect " + path.string() + ": " + reason);
   }
   const auto file_size = static_cast<std::uint64_t>(file_status.st_size);
-  if (file_size % kPageSize != 0) {
-    ::close(file_descriptor);
-    return MakeError(PageErrorCode::kCorrupt,
-                     path.string() + ": size " + std::to_string(file_size) +
-                         " is not a multiple of " + std::to_string(kPageSize));
+  // AllocatePage writes a page of zeros, so an extension stopped partway (by
+  // SIGXFSZ at the file size limit, or a kill) leaves only zero bytes after
+  // the last whole page. They are ignored, and the next allocation overwrites
+  // them. Any other partial page is damage.
+  const std::size_t partial_bytes = file_size % kPageSize;
+  if (partial_bytes != 0) {
+    PageResult<bool> is_zero = IsZeroTail(
+        file_descriptor, static_cast<off_t>(file_size - partial_bytes),
+        partial_bytes, path);
+    if (!is_zero.ok() || !is_zero.value()) {
+      ::close(file_descriptor);
+      if (!is_zero.ok()) {
+        return is_zero.error();
+      }
+      return MakeError(PageErrorCode::kCorrupt, path.string() + ": size " +
+                                                    std::to_string(file_size) +
+                                                    " is not a multiple of " +
+                                                    std::to_string(kPageSize));
+    }
   }
   if (file_size / kPageSize >= kInvalidPageId) {
     ::close(file_descriptor);

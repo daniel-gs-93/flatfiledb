@@ -36,6 +36,26 @@ bool IsIdentifier(const std::string& name) {
   return true;
 }
 
+// The reserved words of docs/DesignDocument.md section 2.3 in lower case. The
+// parser refuses them as names, so a table or column named like one could
+// not be used in a statement. The list has a fixed size, so the scan per name
+// is bounded.
+constexpr const char* kReservedWords[] = {
+    "select", "from",  "where",  "join", "on",     "as",   "group",
+    "by",     "order", "asc",    "desc", "insert", "into", "values",
+    "update", "set",   "delete", "and",  "or",     "like", "limit",
+    "offset", "count", "sum",    "null"};
+
+bool IsReservedWord(const std::string& name) {
+  const std::string lowered = ToLower(name);
+  for (const char* word : kReservedWords) {
+    if (lowered == word) {
+      return true;
+    }
+  }
+  return false;
+}
+
 const char* TypeName(DataType type) {
   switch (type) {
     case DataType::kInt:
@@ -148,6 +168,10 @@ std::variant<std::vector<std::string>, ExecutionError> ReadHeader(
                        "' in the header; names must match "
                        "[A-Za-z_][A-Za-z0-9_]*");
     }
+    if (IsReservedWord(names[i])) {
+      return BindError("invalid column name '" + names[i] +
+                       "' in the header; it is a reserved word");
+    }
     for (std::size_t earlier = 0; earlier < i; ++earlier) {
       if (ToLower(names[earlier]) == ToLower(names[i])) {
         return BindError("column '" + names[i] +
@@ -161,12 +185,17 @@ std::variant<std::vector<std::string>, ExecutionError> ReadHeader(
 std::optional<ExecutionError> CheckTableName(const std::string& name,
                                              bool is_derived,
                                              const ICatalog& catalog) {
-  if (!IsIdentifier(name)) {
+  const bool is_reserved = IsReservedWord(name);
+  if (!IsIdentifier(name) || (is_derived && is_reserved)) {
     if (is_derived) {
       return BindError("cannot derive a table name from '" + name +
                        "'; give one: .import <file> <table>");
     }
     return BindError("invalid table name '" + name + "'");
+  }
+  if (is_reserved) {
+    return BindError("invalid table name '" + name +
+                     "'; it is a reserved word");
   }
   if (ToLower(name) == "catalog") {
     return BindError("table name catalog is reserved");
@@ -275,20 +304,19 @@ std::variant<ImportPlan, ExecutionError> InferImport(
   // Pass 3: typed rows and the check that the key is unique.
   ImportPlan plan;
   plan.rows.reserve(good.size());
-  std::map<std::string, std::size_t> key_lines;  // FormatValue to line
+  std::map<std::string, std::size_t> key_lines;  // FormatKey to line
   for (const CsvLine* line : good) {
     Row row;
     row.reserve(names.size());
     for (std::size_t column = 0; column < names.size(); ++column) {
       row.push_back(*ConvertCell((*line->fields)[column], types[column]));
     }
-    const std::string key_text = FormatValue(row[key_index]);
-    auto inserted = key_lines.emplace(key_text, line->number);
+    auto inserted = key_lines.emplace(FormatKey(row[key_index]), line->number);
     if (!inserted.second) {
       return BindError("primary key column " + names[key_index] +
-                       " has duplicate value '" + key_text + "' at lines " +
-                       std::to_string(inserted.first->second) + " and " +
-                       std::to_string(line->number));
+                       " has duplicate value '" + FormatValue(row[key_index]) +
+                       "' at lines " + std::to_string(inserted.first->second) +
+                       " and " + std::to_string(line->number));
     }
     plan.rows.push_back(std::move(row));
   }

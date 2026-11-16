@@ -357,6 +357,51 @@ TEST(test_paged_slotted_page_detects_corruption) {
   CHECK_OK(SlottedPage::VerifyHeader(zeros.data(), 123));
 }
 
+TEST(test_paged_slotted_page_refuses_to_compact_an_inconsistent_page) {
+  // Overlapping live tuples: slot 1 points at the tuple of slot 0.
+  {
+    Page page = FormattedPage();
+    SlottedPage slotted(page.data());
+    MustInsert(slotted, Filled(1000, 'a'));
+    MustInsert(slotted, Filled(1000, 'b'));
+    MustInsert(slotted, Filled(1000, 'c'));
+    SetSlotOf(page, 1, SlotOffsetOf(page, 0), 1000);
+    const Page before = page;
+
+    CHECK_ERROR(slotted.CheckStructure(), kCorrupt);
+    CHECK_ERROR(slotted.Compact(), kCorrupt);
+    CHECK(page == before);
+  }
+
+  // Four tuples of 1000 bytes leave 48 contiguous bytes, and dead_bytes
+  // claims 2000 more that the page does not have.
+  Page inflated = FormattedPage();
+  {
+    SlottedPage slotted(inflated.data());
+    MustInsert(slotted, Filled(1000, 'a'));
+    MustInsert(slotted, Filled(1000, 'b'));
+    MustInsert(slotted, Filled(1000, 'c'));
+    MustInsert(slotted, Filled(1000, 'd'));
+  }
+  WriteLe16(inflated.data() + strata::paged::layout::kDeadBytes, 2000);
+  {
+    Page page = inflated;
+    SlottedPage slotted(page.data());
+
+    CHECK_ERROR(slotted.Insert(ViewOf(Filled(500, 'e'))), kCorrupt);
+    CHECK(page == inflated);
+  }
+  {
+    Page page = inflated;
+    SlottedPage slotted(page.data());
+
+    // Grows slot 0, which needs compaction: the old row stays.
+    CHECK_ERROR(slotted.Update(0, ViewOf(Filled(1050, 'f'))), kCorrupt);
+    CHECK(page == inflated);
+    CHECK_EQ(TupleAt(slotted, 0), Filled(1000, 'a'));
+  }
+}
+
 TEST(test_paged_checksum_detects_every_single_byte_change) {
   Page page = SealedSamplePage();
   CHECK_OK(SlottedPage::VerifyHeader(page.data(), 9));

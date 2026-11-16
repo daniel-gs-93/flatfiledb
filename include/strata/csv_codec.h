@@ -24,7 +24,8 @@ std::optional<std::vector<std::string>> ParseCsvRecord(const std::string& line);
 std::string FormatCsvField(const std::string& field);
 
 // The row as one CSV line without a line ending; each value is written with
-// FormatValue and then FormatCsvField.
+// FormatValue and then FormatCsvField. A row whose only value is empty is
+// written as "" so that the line is not blank.
 std::string SerializeRow(const domain::Row& row);
 
 // The fields as a row of the schema's column types. std::nullopt when the field
@@ -43,11 +44,11 @@ bool HeaderMatches(const std::vector<std::string>& fields,
                    const domain::TableSchema& schema);
 
 // The text of catalog.csv for the schemas in the given order (the format of
-// docs/DesignDocument.md section 2.2), lines ending in "\n".
+// docs/DesignDocument.md section 2.6), lines ending in "\n".
 std::string SerializeCatalog(const std::vector<domain::TableSchema>& schemas);
 
 // The schemas of catalog.csv, or the description of the first problem. Checks
-// everything docs/DesignDocument.md section 2.2 lists.
+// everything docs/DesignDocument.md section 2.6 lists.
 std::variant<std::vector<domain::TableSchema>, std::string> ParseCatalog(
     const std::string& text);
 

@@ -33,7 +33,7 @@ constexpr const char* kNoteOfFlatFileCatalog =
     "flatfile opens it";
 
 // A database directory that exists after the checks of docs/DesignDocument.md
-// section 3.5.
+// section 3.1.
 struct ResolvedDirectory {
   std::string path;  // normalized
   bool is_created;   // this call created it
@@ -82,7 +82,7 @@ bool HasFile(const std::string& directory, const char* name) {
 }
 
 // The description of a failure of the storage layer, as a statement reports
-// it: "corrupt: ..." for a file that fails its checks (design document 2.7).
+// it: "corrupt: ..." for a file that fails its checks (design document 2.13).
 std::string DescribePageError(const paged::PageError& error) {
   return paged::ToExecutionError(
              error, paged::ErrorContext{paged::ErrorSite::kRowAccess, ""})
@@ -101,8 +101,12 @@ std::variant<OpenedDatabase, std::string> OpenFlatFileDatabase(
   }
   const auto& [path, is_created] = std::get<ResolvedDirectory>(resolved);
 
+  // A held lock of `current` is reused: a second flock from this process would
+  // be refused. An empty one (the directory was not writable at that open) is
+  // not, so the lock is taken once the directory is writable.
   std::shared_ptr<void> lock;
-  if (current != nullptr && current->directory == path) {
+  if (current != nullptr && current->directory == path &&
+      current->lock != nullptr) {
     lock = current->lock;
   } else {
     infrastructure::LockOutcome outcome =

@@ -154,6 +154,22 @@ TEST(test_csv_format_field_quotes_only_when_needed) {
   CHECK_EQ(infrastructure::FormatCsvField(" lead"), std::string(" lead"));
 }
 
+TEST(test_csv_serialize_row_quotes_a_lone_empty_field) {
+  const domain::Row lone_empty = {domain::Value(std::string())};
+  const domain::Row lone_text = {domain::Value(std::string("x"))};
+  const domain::Row two_empty = {domain::Value(std::string()),
+                                 domain::Value(std::string())};
+  const domain::Row trailing_empty = {domain::Value(std::int64_t{1}),
+                                      domain::Value(std::string())};
+
+  // Only a row whose single field is empty would make a blank line.
+  CHECK_EQ(infrastructure::SerializeRow(lone_empty), std::string("\"\""));
+  CHECK_EQ(infrastructure::SerializeRow(lone_text), std::string("x"));
+  CHECK_EQ(infrastructure::SerializeRow(two_empty), std::string(","));
+  CHECK_EQ(infrastructure::SerializeRow(trailing_empty), std::string("1,"));
+  CHECK_EQ(MustParseRecord("\"\""), Fields({""}));
+}
+
 TEST(test_csv_field_round_trip_preserves_text_values) {
   const char* const values[] = {"",   "plain", "a,b",    "say \"hi\"",
                                 "\"", ",",     "a\"\"b", " lead "};

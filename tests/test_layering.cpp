@@ -187,7 +187,7 @@ const char* const kPagedComposer = "bootstrap.cpp";
 
 // The byte layer of the paged engine: pure functions on bytes. It may include
 // the domain, the shared types and each other, but nothing that does I/O,
-// locks or pins (docs/PagedEngineDesignDocument.md 2.1).
+// locks or pins (docs/DesignDocument.md section 2.1).
 bool IsPagedByteLayerFile(const std::string& path) {
   const char* const names[] = {"tuple_codec", "slotted_page", "crc32c"};
   for (const char* name : names) {
@@ -240,7 +240,7 @@ int CheckPagedRules(const std::filesystem::path& root) {
       }
       if (!is_paged) {
         // The composition root builds the paged engine; bootstrap.h only
-        // forward-declares it (docs/PagedExecutionDesignDocument.md 2.1).
+        // forward-declares it (docs/DesignDocument.md section 2.1).
         if (StartsWith(header, "strata/paged/") && path != kPagedComposer) {
           ::strata::testing::ReportFailure(__FILE__, __LINE__,
                                            path + " includes " + header);

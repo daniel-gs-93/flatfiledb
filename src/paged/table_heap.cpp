@@ -110,6 +110,14 @@ PageResult<TableHeap> TableHeap::Open(BufferManager& buffer,
     }
     PageResult<PageGuard> fetched =
         buffer.FetchPage(current, LatchMode::kShared);
+    // The store returns kNotFound for a page past the end of the file; a
+    // chain that leads there belongs to a file that was cut short.
+    if (!fetched.ok() && fetched.error().code == PageErrorCode::kNotFound) {
+      return MakeError(
+          PageErrorCode::kCorrupt,
+          "the page chain of table " + heap.schema_.name +
+              " leads past the end of the file: " + fetched.error().message);
+    }
     if (!fetched.ok()) {
       return fetched.error();
     }

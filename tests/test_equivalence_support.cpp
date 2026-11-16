@@ -178,7 +178,7 @@ std::optional<std::string> CompareTieRun(const std::vector<Row>& flatfile,
 }
 
 // With ORDER BY: the sequences of sort keys are the same, and the rows that
-// share a key are the same multiset (2.6).
+// share a key are the same multiset (2.8).
 std::optional<std::string> CompareOrderedRows(
     const std::vector<Row>& flatfile, const std::vector<Row>& paged,
     const std::vector<std::size_t>& sort_columns) {
@@ -320,7 +320,7 @@ bool SplitsTie(const std::vector<Row>& rows,
   return HasSameSortKey(rows[position - 1], rows[position], sort_columns);
 }
 
-// 2.6: LIMIT and OFFSET are compared only when the sort key decides which rows
+// 2.8: LIMIT and OFFSET are compared only when the sort key decides which rows
 // are cut. all_rows is the result of the statement without LIMIT and OFFSET.
 bool IsCutDeterministic(const std::vector<Row>& all_rows,
                         const std::vector<std::size_t>& sort_columns,
@@ -597,7 +597,7 @@ std::optional<std::string> EquivalenceRunner::Run(const std::string& sql) {
     if (order.sort_columns.empty()) {
       return Describe(sql,
                       "LIMIT or OFFSET without ORDER BY: which rows are cut "
-                      "is undefined (2.6), so the statement is not "
+                      "is undefined (2.8), so the statement is not "
                       "comparable");
     }
     // The statement without LIMIT and OFFSET shows where the cut falls.
@@ -613,7 +613,7 @@ std::optional<std::string> EquivalenceRunner::Run(const std::string& sql) {
         !IsCutDeterministic(all->rows, order.sort_columns, *select)) {
       return Describe(sql,
                       "LIMIT or OFFSET cuts between rows with the same sort "
-                      "key (2.6), so the statement is not comparable");
+                      "key (2.8), so the statement is not comparable");
     }
   }
 

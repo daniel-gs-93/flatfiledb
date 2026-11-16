@@ -1,5 +1,7 @@
 #include "strata/infrastructure.h"
 
+#include <pthread.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -8,6 +10,7 @@
 #include <fstream>
 #include <ios>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -106,14 +109,14 @@ std::string ReservedTableNameMessage() {
   return std::string("reserved table name ") + kReservedTableName;
 }
 
-// The rows kept when several rows hold the same primary key: the last one, in
-// its own position.
+// The rows kept when several rows hold the same primary key (0.0 and -0.0 are
+// the same key): the last one, in its own position.
 std::vector<domain::Row> KeepLastOfDuplicateKeys(std::vector<domain::Row> rows,
                                                  std::size_t key_index) {
   std::unordered_map<std::string, std::size_t> last_position;
   last_position.reserve(rows.size());
   for (std::size_t i = 0; i < rows.size(); ++i) {
-    last_position[domain::FormatValue(rows[i][key_index])] = i;
+    last_position[domain::FormatKey(rows[i][key_index])] = i;
   }
   if (last_position.size() == rows.size()) {
     return rows;
@@ -121,7 +124,7 @@ std::vector<domain::Row> KeepLastOfDuplicateKeys(std::vector<domain::Row> rows,
   std::vector<domain::Row> kept;
   kept.reserve(last_position.size());
   for (std::size_t i = 0; i < rows.size(); ++i) {
-    if (last_position[domain::FormatValue(rows[i][key_index])] == i) {
+    if (last_position[domain::FormatKey(rows[i][key_index])] == i) {
       kept.push_back(std::move(rows[i]));
     }
   }
@@ -149,6 +152,22 @@ bool TryClassifyPath(const std::string& path, PathKind& kind) {
              ? PathKind::kRegularFile
              : PathKind::kOther;
   return true;
+}
+
+// "leftover <file name>.orig" when an interrupted commit left the backup of
+// path behind, unreadable when the backup's path cannot be inspected, and
+// std::nullopt when there is none.
+std::optional<std::string> FindLeftoverOrig(const std::string& path,
+                                            const std::string& file_name,
+                                            const std::string& unreadable) {
+  PathKind kind = PathKind::kOther;
+  if (!TryClassifyPath(path + ".orig", kind)) {
+    return unreadable;
+  }
+  if (kind != PathKind::kMissing) {
+    return "leftover " + file_name + ".orig";
+  }
+  return std::nullopt;
 }
 
 // A directory opens successfully as a stream and then reads as empty, so the
@@ -283,25 +302,88 @@ void RunTableJobs(std::vector<TableJob>* jobs,
   }
 }
 
+// The jobs and the job counter, passed to a worker thread as one pointer. The
+// caller owns both and keeps them alive until every worker is joined.
+struct TableJobQueue {
+  std::vector<TableJob>* jobs = nullptr;
+  std::atomic<std::size_t>* next_job = nullptr;
+};
+
+// pthread_create entry point for RunTableJobs.
+void* RunTableJobsThread(void* argument) {
+  auto* queue = static_cast<TableJobQueue*>(argument);
+  RunTableJobs(queue->jobs, queue->next_job);
+  return nullptr;
+}
+
+// Owns the worker threads it starts and joins each one exactly once, in Join
+// or on destruction. pthread_create is used instead of std::thread because it
+// reports a thread it cannot start with an error code, while std::thread can
+// report it only by throwing.
+class WorkerThreads {
+ public:
+  explicit WorkerThreads(std::size_t capacity) { threads_.reserve(capacity); }
+  WorkerThreads(const WorkerThreads&) = delete;
+  WorkerThreads& operator=(const WorkerThreads&) = delete;
+  ~WorkerThreads() { Join(); }
+
+  // Starts one thread running RunTableJobsThread(queue). Returns false when
+  // the reserved capacity is used up or the thread cannot be started. Checking
+  // the capacity first means push_back never allocates, so a started thread is
+  // always recorded and joined.
+  bool Start(TableJobQueue* queue) {
+    if (threads_.size() == threads_.capacity()) {
+      return false;
+    }
+    pthread_t thread;
+    if (pthread_create(&thread, nullptr, RunTableJobsThread, queue) != 0) {
+      return false;
+    }
+    threads_.push_back(thread);
+    return true;
+  }
+
+  // Waits for every started thread. The join makes the results a worker wrote
+  // visible to the calling thread.
+  void Join() {
+    for (pthread_t thread : threads_) {
+      pthread_join(thread, nullptr);
+    }
+    threads_.clear();
+  }
+
+  std::size_t StartedCount() const { return threads_.size(); }
+
+ private:
+  std::vector<pthread_t> threads_;
+};
+
+// A worker that cannot be started stops the starting of further workers, and
+// the calling thread takes the jobs left over, so the result does not depend
+// on how many workers started.
 void RunJobsInParallel(std::vector<TableJob>& jobs) {
   std::size_t hardware = std::thread::hardware_concurrency();
   std::size_t worker_count =
       std::min(jobs.size(), std::max<std::size_t>(hardware, 1));
   std::atomic<std::size_t> next_job{0};
-  std::vector<std::thread> workers;
-  workers.reserve(worker_count);
+  TableJobQueue queue{&jobs, &next_job};
+  WorkerThreads workers(worker_count);
   for (std::size_t i = 0; i < worker_count; ++i) {
-    workers.emplace_back(RunTableJobs, &jobs, &next_job);
+    if (!workers.Start(&queue)) {
+      break;
+    }
   }
-  for (std::thread& worker : workers) {
-    worker.join();
+  if (workers.StartedCount() < worker_count) {
+    RunTableJobs(&jobs, &next_job);
   }
+  workers.Join();
 }
 
 // Reads the header line and line ending of an existing file. A file with no
 // non-empty line yields the schema default; an unreadable file yields
-// std::nullopt. The header is the first non-empty line, as the loaders see it,
-// so a rewritten file reloads with the same rows.
+// std::nullopt. The header is the first line that is not empty once a trailing
+// '\r' is removed, as the loaders see it, so a rewritten file reloads with the
+// same rows.
 std::optional<FileFormat> ReadFileFormat(const std::string& path,
                                          const domain::TableSchema& schema) {
   std::ifstream file(path, std::ios::binary);
@@ -311,7 +393,7 @@ std::optional<FileFormat> ReadFileFormat(const std::string& path,
 
   std::string line;
   while (std::getline(file, line)) {
-    if (!line.empty()) {
+    if (!StripTrailingCarriageReturn(line).empty()) {
       return FormatFromHeaderLine(line);
     }
   }
@@ -475,8 +557,12 @@ std::variant<std::vector<StagedFile>, std::string> BuildStagedFiles(
   return staged;
 }
 
-// Refuses a leftover .orig, a target that is not a regular file and a
-// read-only target, and records which targets exist.
+bool IsNewFile(const StagedFile& file) {
+  return file.write != nullptr && file.write->is_new_file;
+}
+
+// Refuses a leftover .orig, an existing target of a new file, a target that is
+// not a regular file and a read-only target, and records which targets exist.
 std::optional<std::string> InspectTargets(std::vector<StagedFile>& staged) {
   for (auto& file : staged) {
     PathKind orig_kind = PathKind::kOther;
@@ -489,6 +575,14 @@ std::optional<std::string> InspectTargets(std::vector<StagedFile>& staged) {
     PathKind kind = PathKind::kOther;
     if (!TryClassifyPath(file.path, kind)) {
       return CouldNotWrite(file);
+    }
+    // CREATE TABLE can adopt only a regular file, so only then is it named.
+    if (IsNewFile(file) && kind == PathKind::kRegularFile) {
+      return file.display_name +
+             " already exists; use CREATE TABLE to adopt it";
+    }
+    if (IsNewFile(file) && kind == PathKind::kOther) {
+      return file.display_name + " already exists and is not a regular file";
     }
     if (kind == PathKind::kOther) {
       return NotRegularFile(file.display_name);
@@ -659,7 +753,19 @@ bool TryRollBackAppend(const std::string& path, bool is_present,
 CsvRepository::CsvRepository(std::string directory)
     : directory_(std::move(directory)) {}
 
+// A leftover .orig of catalog.csv or of a table means an interrupted commit,
+// which can leave a mix of old and new files, so the load fails. Each stamp
+// is taken before its file is read, so a change made while reading is caught
+// by the next write.
 LoadOutcome CsvRepository::Load(bool is_parallel) {
+  const std::string catalog_path = directory_ + "/" + kCatalogFileName;
+  if (auto leftover = FindLeftoverOrig(
+          catalog_path, kCatalogFileName,
+          std::string("cannot read ") + kCatalogFileName + ".orig")) {
+    return *leftover;
+  }
+  std::map<std::string, FileStamp> stamps = {
+      {kCatalogFileName, StampOf(kCatalogFileName)}};
   auto catalog = ReadCatalog(directory_);
   if (auto* error = std::get_if<std::string>(&catalog)) {
     return *error;
@@ -672,6 +778,12 @@ LoadOutcome CsvRepository::Load(bool is_parallel) {
     jobs[i].schema = &schemas[i];
     jobs[i].file_name = TableFileName(schemas[i].name);
     jobs[i].path = directory_ + "/" + jobs[i].file_name;
+    if (auto leftover =
+            FindLeftoverOrig(jobs[i].path, jobs[i].file_name,
+                             "cannot read " + jobs[i].file_name + ".orig")) {
+      return *leftover;
+    }
+    stamps[jobs[i].file_name] = StampOf(jobs[i].file_name);
   }
   if (is_parallel && jobs.size() > 1) {
     RunJobsInParallel(jobs);
@@ -692,11 +804,9 @@ LoadOutcome CsvRepository::Load(bool is_parallel) {
     tables.push_back(LoadedTable{*job.schema, std::move(file_rows.rows),
                                  std::move(file_rows.rejected_lines)});
   }
-  std::vector<std::string> file_names = {kCatalogFileName};
-  for (const TableJob& job : jobs) {
-    file_names.push_back(job.file_name);
+  for (const auto& [file_name, stamp] : stamps) {
+    stamps_[file_name] = stamp;
   }
-  RecordStamps(file_names);
   return tables;
 }
 
@@ -706,11 +816,15 @@ InspectOutcome CsvRepository::InspectTable(const domain::TableSchema& schema) {
   }
   const std::string file_name = TableFileName(schema.name);
   const std::string path = directory_ + "/" + file_name;
+  // Taken before the read, so a change made while reading is caught by the
+  // next write. Recorded only for an outcome the engine can act on.
+  const FileStamp stamp = StampOf(file_name);
   PathKind kind = PathKind::kOther;
   if (!TryClassifyPath(path, kind)) {
     return "cannot read " + file_name;
   }
   if (kind == PathKind::kMissing) {
+    stamps_[file_name] = stamp;
     return InspectOutcome(std::optional<std::vector<domain::Row>>());
   }
   if (kind == PathKind::kOther) {
@@ -722,6 +836,7 @@ InspectOutcome CsvRepository::InspectTable(const domain::TableSchema& schema) {
   if (auto* error = std::get_if<std::string>(&rows)) {
     return *error;
   }
+  stamps_[file_name] = stamp;
   return InspectOutcome(std::optional<std::vector<domain::Row>>(
       std::move(std::get<TableFileRows>(rows).rows)));
 }
@@ -774,17 +889,25 @@ std::optional<std::string> CsvRepository::Commit(const CommitSet& set) {
   }
   std::vector<StagedFile>& staged = std::get<std::vector<StagedFile>>(built);
 
-  std::vector<std::string> file_names;
+  // A new file is checked for existence by InspectTargets instead of against
+  // a record, which can predate the removal that made room for it.
+  std::vector<std::string> file_names;      // every file the commit changes
+  std::vector<std::string> recorded_files;  // those compared with a record
   if (set.catalog) {
     file_names.push_back(kCatalogFileName);
+    recorded_files.push_back(kCatalogFileName);
   }
   for (const TableWrite& write : set.writes) {
     file_names.push_back(TableFileName(write.schema.name));
+    if (!write.is_new_file) {
+      recorded_files.push_back(file_names.back());
+    }
   }
   for (const std::string& name : set.drops) {
     file_names.push_back(TableFileName(name));
+    recorded_files.push_back(file_names.back());
   }
-  if (auto failure = FindChangedFile(file_names)) {
+  if (auto failure = FindChangedFile(recorded_files)) {
     return failure;
   }
   if (auto failure = InspectTargets(staged)) {
@@ -815,6 +938,9 @@ std::optional<std::string> CsvRepository::AppendRows(
   if (auto changed = FindChangedFile({file_name})) {
     return changed;
   }
+  if (auto leftover = FindLeftoverOrig(path, file_name, failure)) {
+    return leftover;
+  }
 
   PathKind kind = PathKind::kOther;
   if (!TryClassifyPath(path, kind)) {
@@ -844,6 +970,9 @@ std::optional<std::string> CsvRepository::AppendRows(
     return failure + (is_present ? "; truncating back failed"
                                  : "; removing the new file failed");
   }
+  // The file holds its content from before the call again, but its
+  // modification time changed; the old record would refuse the next write.
+  RecordStamps({file_name});
   return failure;
 }
 

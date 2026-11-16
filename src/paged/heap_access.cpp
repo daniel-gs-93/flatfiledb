@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 
-// Resource-aware (design document 2.1): this file is where the row layer meets
+// Resource-aware (design document 2.13): this file is where the row layer meets
 // the pages. Error mapping is pure; the stream and the reader hold a pointer
 // to a TableHeap or a reference to a Database; ApplyChangeSet writes pages.
 
@@ -36,7 +36,7 @@ ExecutionError InternalError(const PageError& error) {
 }
 
 // ----------------------------------------------------------------------------
-// The undo log of ApplyChangeSet (design document 2.4).
+// The undo log of ApplyChangeSet (design document 2.13).
 // ----------------------------------------------------------------------------
 
 enum class UndoKind { kInserted, kDeleted, kUpdated };
@@ -62,10 +62,10 @@ ExecutionError RowAccessError(const PageError& error, const TableHeap& heap) {
 }
 
 // The error of a failed Database::Table. A kNotFound is an unknown table only
-// when the catalog has no such table. For a table the catalog has, it comes
-// from a page of the chain (a next_page_id past the end of the file), which is
-// a storage failure and follows the "internal error: " row of design document
-// 2.7. Catalog::FindTable is safe to call from several threads.
+// when the catalog has no such table. TableHeap::Open reports a chain that
+// leads past the end of the file as kCorrupt, so a kNotFound for a table the
+// catalog has is not expected and is an internal error (design document 2.13,
+// error mapping). Catalog::FindTable is safe to call from several threads.
 ExecutionError OpenTableError(Database& database, const PageError& error,
                               const std::string& table) {
   if (error.code == PageErrorCode::kNotFound &&

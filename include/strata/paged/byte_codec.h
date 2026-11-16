@@ -5,7 +5,7 @@
 
 // Fixed-width little-endian integers, written and read one byte at a time so
 // the file does not depend on the host byte order or on struct padding
-// (design document 2.3). Pure. The caller guarantees that the pointer has at
+// (design document 2.10). Pure. The caller guarantees that the pointer has at
 // least as many bytes as the integer is wide.
 
 namespace strata::paged {

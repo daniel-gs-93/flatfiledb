@@ -18,7 +18,7 @@
 
 // The mutation planner (constraint checks, cascades and the change set of
 // INSERT, UPDATE and DELETE), over in-memory row streams
-// (docs/PagedExecutionTestDocument.md section 3.1). No page is read or written.
+// (docs/TestDocument.md section 3.1). No page is read or written.
 
 namespace {
 

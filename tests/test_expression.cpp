@@ -9,6 +9,7 @@
 
 #include "strata/domain/expression.h"
 #include "strata/domain/scalar_functions.h"
+#include "strata/domain/value.h"
 #include "test_harness.h"
 
 namespace {
@@ -512,6 +513,24 @@ TEST(test_expression_cast_conversions) {
   CHECK(IsText(Apply(Fn::kCast, kText, {Text("x")}).value, "x"));
   CHECK(IsInt(Apply(Fn::kCast, kInt, {Int(3)}).value, 3));
   CHECK(IsDouble(Apply(Fn::kCast, kDouble, {Real(1.5)}).value, 1.5));
+}
+
+TEST(test_expression_cast_reads_subnormal_doubles) {
+  using Fn = domain::ScalarFn;
+  const domain::ExprType kDouble = domain::ExprType::kDouble;
+  const double smallest = std::numeric_limits<double>::denorm_min();
+  const double tiny = 1e-310;
+
+  // A subnormal DOUBLE prints in fixed notation and reads back unchanged.
+  for (double value : {smallest, tiny, -tiny}) {
+    const std::string text = domain::FormatValue(domain::Value(value));
+    CHECK(IsDouble(Apply(Fn::kCast, kDouble, {Text(text)}).value, value));
+  }
+  // Below the smallest subnormal the value would round to 0, so it is refused
+  // as an overflow is.
+  const std::string vanishing = "0." + std::string(400, '0') + "1";
+  CHECK(FailedWith(Apply(Fn::kCast, kDouble, {Text(vanishing)}),
+                   "cannot cast '" + vanishing + "' to DOUBLE"));
 }
 
 TEST(test_aggregate_accumulator_avg_min_max) {

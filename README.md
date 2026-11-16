@@ -1,6 +1,6 @@
 # Strata
 
-Strata is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that later engines will be compared with.
+Strata is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that the second engine, paged, is compared with.
 
 In the flatfile engine a directory is a database. `catalog.csv` records the table definitions, and each table is a Comma-Separated Values (CSV) file. Writes go back to the CSV immediately, and a write that spans several files either completes or changes nothing.
 
@@ -8,13 +8,9 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 
 | Document | Contents |
 |---|---|
-| [`docs/DesignDocument.md`](docs/DesignDocument.md) | Architecture, SQL rules, flows and interfaces |
+| [`docs/DesignDocument.md`](docs/DesignDocument.md) | Architecture, SQL rules, flows and interfaces, for the front end and both engines |
 | [`docs/DecisionRecord.md`](docs/DecisionRecord.md) | The rationale, cost and rejected alternatives of each design decision, written as Architecture Decision Records (`ADR-NNNN`) |
-| [`docs/TestDocument.md`](docs/TestDocument.md) | Test matrix |
-| [`docs/PagedEngineDesignDocument.md`](docs/PagedEngineDesignDocument.md) | Storage layer design of the paged engine (the second storage engine, organized in pages) |
-| [`docs/PagedEngineTestDocument.md`](docs/PagedEngineTestDocument.md) | Test matrix of the paged engine |
-| [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) | Execution layer design of the paged engine: operators, constraint checks, the database-level lock, the `.engine` command, equivalence rules of the two engines |
-| [`docs/PagedExecutionTestDocument.md`](docs/PagedExecutionTestDocument.md) | Test matrix of the paged execution layer |
+| [`docs/TestDocument.md`](docs/TestDocument.md) | Test matrix of the whole system |
 
 ## Directory Structure
 
@@ -22,7 +18,7 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 strata/
 ├── include/strata/
 │   ├── domain/            # values, syntax tree, plan, Binder, expression evaluation, scalar functions, import inference, engine port
-│   ├── paged/             # storage layer of the paged engine: page format, buffer pool, table heap, catalog, Database
+│   ├── paged/             # the paged engine: page format, buffer pool, table heap, catalog, operators, writes
 │   ├── application.h      # QueryService: run one statement, import a CSV
 │   ├── bootstrap.h        # acquire the directory lock, assemble the engine and QueryService, shared by every entry point
 │   ├── sql_parser.h       # SQL parser
@@ -65,15 +61,15 @@ On a terminal the prompt is `strata> `, which changes to `   ...> ` inside an un
 | `.tables` | Lists one table per line |
 | `.schema [<table>]` | Prints `CREATE TABLE` statements that can be run again |
 | `.clear` | Clears the screen; prints nothing unless standard input is a terminal |
-| `.cancel` | Abandons an unfinished statement; does nothing inside a string literal |
+| `.cancel` | Abandons an unfinished statement; inside a string literal the line is read as part of the string |
 | `.help` | Prints the command list |
 | `.quit`, `.exit` | Exits with status 0 |
 
-A command takes the whole line and only counts as one when no statement is unfinished. Without the leading `.`, as in `open mydb`, the CLI prints `error: commands start with '.'; did you mean .open` and discards the line. A statement ending in a full-width `；` (U+FF1B) is discarded too, with an error that asks for an American Standard Code for Information Interchange (ASCII) semicolon: `error: full-width ';' (U+FF1B) found; use ASCII ';'`.
+A command takes the whole line and only counts as one when no statement is unfinished. Without the leading `.`, as in `open mydb`, the CLI prints `error: commands start with '.'; did you mean .open` and discards the line. A line that contains a full-width `；` (U+FF1B) outside a string or comment is discarded too, while the earlier lines of an unfinished statement are kept, with an error that asks for an American Standard Code for Information Interchange (ASCII) semicolon: `error: full-width ';' (U+FF1B) found; use ASCII ';'`.
 
 ### Sample Database `sample_my_db`
 
-`sample_my_db/` is a small course enrollment database that ships with the repository. It has four tables: `instructors` (6 rows), `students` (30), `courses` (12) and `enrollments` (144). Each `enrollments` row references a student and a course, and each course references an instructor. `.schema` lists the columns. There is no NULL, so a `score` of 0 means no grade yet, and course capacity and duplicate enrollments are not checked. Every table has an `id`, so a join writes `courses.id`. The other column names are unique across the four tables and can be written bare.
+`sample_my_db/` is a small course enrollment database that ships with the repository. It has four tables: `instructors` (6 rows), `students` (30), `courses` (12) and `enrollments` (144). Each `enrollments` row references a student and a course, and each course references an instructor. `.schema` lists the columns. There is no NULL, so a `score` of 0 means no grade yet, and course capacity and duplicate enrollments are not checked. Every table has an `id`, so a join writes `courses.id`. Apart from `id`, only `name` (instructors, students) and `dept` (instructors, courses) repeat, so the other columns can be written bare.
 
 A read-only query can open the database directly (opening only creates `.strata.lock`, which `.gitignore` excludes):
 
@@ -307,7 +303,7 @@ order_no	customer	amount
 1005	Eve	3.25
 ```
 
-The import writes `<table>.csv` and `catalog.csv` in one staged commit, so a failure changes neither. At most 10 skipped rows are listed, then `... and <k> more skipped`.
+The import writes `<table>.csv` and `catalog.csv` in one staged commit, so a failure changes neither. On the flatfile engine it does not replace an existing file: when `<table>.csv` is already in the database directory, it stops with `error: io: <table>.csv already exists; use CREATE TABLE to adopt it`. Table and column names cannot be reserved words such as `order` or `select`. At most 10 skipped rows are listed, then `... and <k> more skipped`.
 
 ### Attaching an Existing CSV
 
@@ -419,17 +415,17 @@ DELETE FROM users WHERE id = 5805;
 error: constraint violation: users.id=5805 is referenced by posts.username
 ```
 
-Design Document 2.3 to 2.6 and 3.6 cover syntax, semantics, referential integrity and the error format.
+Design Document 2.3 to 2.6, 3.6 and 3.7 cover syntax, semantics, constraints, DDL and the output and error format.
 
 ## Engines
 
-Strata has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. [`docs/PagedExecutionDesignDocument.md`](docs/PagedExecutionDesignDocument.md) describes how `paged` runs statements.
+Strata has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. Sections 2.10 to 2.13 of [`docs/DesignDocument.md`](docs/DesignDocument.md) describe how `paged` stores tables and runs statements.
 
 `.engine` shows the engine of the session, and `.engine paged` or `.engine flatfile` selects one. The choice lasts for one session and is not saved, so every start begins with `flatfile`. `.open` uses the selected engine. When a database is already open, naming the other engine reopens the same directory with it; if that fails, the database and the engine stay as they were.
 
 The two engines keep separate data in the same directory: `catalog.csv` and one CSV file per table for `flatfile`, and `paged.db` for `paged`. A directory can hold both, and neither engine reads the other's data. When a directory has the other engine's data and none of its own, `.open` adds a `note:` line that says so.
 
-Queries, writes and constraints behave the same on both engines, apart from a few known differences that Section 2.6 of the [paged execution design](docs/PagedExecutionDesignDocument.md) lists. `paged` supports `CREATE TABLE` and `.import`, but not yet `ALTER TABLE ADD COLUMN` or `DROP TABLE`.
+Queries, writes and constraints behave the same on both engines, apart from a few known differences that Section 2.8 of the [design document](docs/DesignDocument.md) lists. `paged` supports `CREATE TABLE` and `.import`, but not `ALTER TABLE ADD COLUMN` or `DROP TABLE`.
 
 A session with `paged`, in a temporary directory:
 
@@ -469,7 +465,7 @@ COUNT(*)
 
 - There is no NULL. `NOT NULL` is accepted but has no effect, and the length in `VARCHAR(n)` is not checked.
 - Constraints are column-level: a primary key or foreign key covers one column, and there are no table-level constraints and no `DROP COLUMN`.
-- A TEXT value cannot contain a newline. Commas and double quotes are stored with CSV quoting.
+- A TEXT value or a TEXT `DEFAULT` cannot contain a newline. Commas and double quotes are stored with CSV quoting.
 - A row that cannot be parsed at load (wrong column count, malformed number, unpaired quotes) is not loaded, and the next `UPDATE`, `DELETE` or `ALTER TABLE` rewrite of the table drops it from the file. `INSERT` only appends a row and leaves those lines in place.
 - Load does not check `UNIQUE` and foreign keys, which apply to later statements only.
 - Only one process can open a database directory at a time (`.strata.lock`, `flock`), but the lock does not stop a text editor. If a file's size or modification time changes outside the CLI after loading, a write statement prints `error: io: <file name> changed on disk since it was loaded; run .open again` and writes no file. An edit that leaves both unchanged goes unnoticed.

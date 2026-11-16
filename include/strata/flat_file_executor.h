@@ -76,7 +76,7 @@ MutationOutcome PlanMutation(const domain::PlanNode& plan,
 // existing_rows is, for a CreateTableNode, the rows of the table's CSV when
 // that file exists (parsed but not de-duplicated); they must satisfy the
 // declared primary key, UNIQUE columns and foreign keys, or the result is a
-// kConstraintViolation (docs/DesignDocument.md section 2.5).
+// kConstraintViolation (docs/DesignDocument.md section 2.6).
 SchemaChangeOutcome PlanSchemaChange(
     const domain::PlanNode& plan, const TableStore& store,
     const std::optional<std::vector<domain::Row>>& existing_rows);

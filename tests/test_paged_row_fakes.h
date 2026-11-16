@@ -17,7 +17,7 @@
 #include "strata/paged/row_stream.h"
 
 // In-memory fakes of the row layer's interfaces, shared by the operator tests
-// (docs/PagedExecutionTestDocument.md) and the mutation planner tests. Nothing
+// (docs/TestDocument.md) and the mutation planner tests. Nothing
 // here touches a page.
 //
 // How to use them:

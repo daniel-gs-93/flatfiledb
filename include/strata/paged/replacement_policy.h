@@ -9,7 +9,7 @@
 
 #include "strata/paged/paged_types.h"
 
-// Which frame the buffer pool gives up when it is full (design document 2.7).
+// Which frame the buffer pool gives up when it is full (design document 2.12).
 // Pure data structures: no I/O and no locks. BufferManager calls every
 // operation while it holds the pool mutex, so an implementation is used by
 // one thread at a time.

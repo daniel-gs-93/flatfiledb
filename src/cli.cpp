@@ -13,8 +13,9 @@ constexpr const char* kUsage = "usage: strata_cli [<directory> [--parallel]]\n";
 }  // namespace
 
 // `strata_cli [<directory> [--parallel]]`: reads commands and statements
-// from stdin (docs/DesignDocument.md section 3.6). A directory is opened first,
-// as `.open` would. Wrong arguments print the usage to stderr and exit with 2.
+// from stdin (docs/DesignDocument.md section 3.6). A directory is opened
+// first, as `.open` would. Wrong arguments print the usage to stderr and exit
+// with 2.
 int main(int argc, char** argv) {
   std::optional<strata::cli::InitialOpen> initial_open;
   if (argc > 3 || (argc >= 2 && std::string(argv[1]).starts_with("--")) ||

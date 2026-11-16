@@ -15,8 +15,8 @@
 #include "strata/paged/paged_engine.h"
 #include "strata/paged/paged_types.h"
 
-// The cross-engine comparison of docs/PagedExecutionDesignDocument.md section
-// 2.6 (ADR-0044), shared by the integration tests and the environment tests.
+// The cross-engine comparison of docs/DesignDocument.md section
+// 2.8 (ADR-0044), shared by the integration tests and the environment tests.
 // Two QueryServices, one over a flat-file engine and one over a paged engine,
 // run the same statement; the runner then compares the two results and the
 // content of every table. Every function returns the description of the first
@@ -29,7 +29,7 @@ namespace strata::testing {
 // ----------------------------------------------------------------------------
 
 // The description of the first difference between the results the two engines
-// returned for one statement, or no value when they are equivalent under 2.6:
+// returned for one statement, or no value when they are equivalent under 2.8:
 // the same result kind; for a ResultSet the same columns and either the same
 // multiset of rows (sort_columns empty) or the same sequence of sort keys with
 // the rows of equal keys compared as a multiset; the same AffectedRows count,
@@ -95,7 +95,7 @@ class EquivalenceRunner {
   EquivalenceRunner(application::QueryService& flatfile,
                     application::QueryService& paged, std::string label);
 
-  // Parses sql, executes it on both services, and compares the results (2.6).
+  // Parses sql, executes it on both services, and compares the results (2.8).
   // After any statement other than a SELECT it also compares the two catalogs
   // and the content of every table, and checks that a rejected statement
   // changed no table of either engine. A SELECT with LIMIT or OFFSET must have

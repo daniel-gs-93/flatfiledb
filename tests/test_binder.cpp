@@ -432,9 +432,9 @@ TEST(test_binder_update_primary_key_returns_unsupported) {
 }
 
 //
-// The row says the assignment's BoundExpr is kDouble; the Binder contract keeps
-// the INT-typed expression and the engine converts it, so this test checks
-// kInt for the value and kDouble for the target column.
+// The Binder keeps the INT-typed expression of an assignment and the engine
+// converts it, so this test checks kInt for the value and kDouble for the
+// target column.
 TEST(test_binder_update_assignment_rules) {
   EXPECT_BIND_ERROR("UPDATE users SET location = 5");
   EXPECT_BIND_ERROR("UPDATE users SET location = 'a', location = 'b'");

@@ -1028,7 +1028,7 @@ bool IsAssigned(const domain::UpdateNode& update, std::size_t column_index) {
   return false;
 }
 
-// Check 5 for every foreign-key column whose value the update changed, in
+// Check 4 for every foreign-key column whose value the update changed, in
 // declaration order.
 std::optional<ExecutionError> CheckChangedForeignKeys(
     const TableStore& store, const TableData& target,
@@ -1310,6 +1310,16 @@ SchemaChangeOutcome PlanCreate(
   const TableSchema& schema = create.schema;
   if (store.Find(schema.name) != nullptr) {
     return TableExistsError(schema.name);
+  }
+  // catalog.csv stores each DEFAULT in one field and is read line by line.
+  for (std::size_t i = 0; i < schema.columns.size(); ++i) {
+    const std::optional<Value>& default_value = schema.columns[i].default_value;
+    if (!default_value) {
+      continue;
+    }
+    if (auto error = CheckTextStorable(schema, i, *default_value)) {
+      return std::move(*error);
+    }
   }
   std::vector<Row> rows;
   std::string tag = "CREATE TABLE " + schema.name;

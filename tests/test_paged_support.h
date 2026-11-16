@@ -13,7 +13,7 @@
 #include "strata/paged/slotted_page.h"
 #include "test_harness.h"
 
-// Helpers shared by the paged-layer tests (docs/PagedEngineTestDocument.md).
+// Helpers shared by the paged-layer tests (docs/TestDocument.md).
 
 namespace strata::paged {
 

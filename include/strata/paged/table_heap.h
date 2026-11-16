@@ -13,7 +13,7 @@
 #include "strata/paged/paged_types.h"
 #include "strata/paged/slotted_page.h"
 
-// One table as a chain of heap-data pages (design document 2.5): the rows are
+// One table as a chain of heap-data pages (design document 2.11): the rows are
 // stored as tuples in slotted pages, with no order. A row is addressed by its
 // Rid. Resource-aware: every page is reached through a BufferManager and held
 // by a PageGuard.
@@ -71,8 +71,8 @@ class TableHeap {
 
   // Opens an existing table: walks the whole chain, checks every page, and
   // rebuilds the free-space map and the tail. kCorrupt: a page is not a heap
-  // page of this table, or the chain has a cycle. buffer must outlive the
-  // TableHeap.
+  // page of this table, the chain has a cycle, or it leads past the end of
+  // the file. buffer must outlive the TableHeap.
   static PageResult<TableHeap> Open(BufferManager& buffer,
                                     domain::TableSchema schema,
                                     std::uint32_t table_id, PageId first_page);
