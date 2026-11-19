@@ -29,6 +29,7 @@ strata/
 │                          # flatfile engine: CSV repository, executor, codec, external CSV reading, directory lock
 ├── src/                   # the matching implementations; cli.cpp contains only main
 ├── tests/                 # test harness and the tests of each module
+│   └── differential/      # Python harness that compares Strata with SQLite
 ├── docs/                  # design document, decision record and test matrix
 ├── sample_my_db/          # sample database: course enrollment system (4 tables, including catalog.csv)
 └── data/                  # sample data (not in the repository)
@@ -425,7 +426,7 @@ Strata has two engines. `flatfile` is the default, and most of this README descr
 
 The two engines keep separate data in the same directory: `catalog.csv` and one CSV file per table for `flatfile`, and `paged.db` for `paged`. A directory can hold both, and neither engine reads the other's data. When a directory has the other engine's data and none of its own, `.open` adds a `note:` line that says so.
 
-Queries, writes and constraints behave the same on both engines, apart from a few known differences that Section 2.8 of the [design document](docs/DesignDocument.md) lists. `paged` supports `CREATE TABLE` and `.import`, but not `ALTER TABLE ADD COLUMN` or `DROP TABLE`.
+Queries, writes and constraints behave the same on both engines, apart from a few known differences that Section 2.8 of the [design document](docs/DesignDocument.md) lists. `paged` supports every statement that `flatfile` does, and `.import` too.
 
 A session with `paged`, in a temporary directory:
 
@@ -461,6 +462,25 @@ COUNT(*)
 2
 ```
 
+`ALTER TABLE ... ADD COLUMN` copies the rows into a new set of pages and switches to it, and `DROP TABLE` puts the pages of the table on a free list that later tables reuse. The file does not get smaller.
+
+```bash
+printf '%s\n' '.engine paged' '.open demo' \
+  'ALTER TABLE users ADD COLUMN age INT DEFAULT 0;' \
+  'SELECT id, username, age FROM users ORDER BY id;' \
+  'DROP TABLE users;' | "$CLI"
+```
+
+```text
+engine paged
+loaded users=2
+OK ALTER TABLE users
+id	username	age
+1	ann	0
+2	bob	0
+OK DROP TABLE users
+```
+
 ## Limitations of the flatfile Engine
 
 - There is no NULL. `NOT NULL` is accepted but has no effect, and the length in `VARCHAR(n)` is not checked.
@@ -482,6 +502,15 @@ Run all tests, or only those whose name contains a string:
 ```
 
 The tests use a small harness in the repository, so no framework is needed. Without `data/`, the `Environment` tests that read it are skipped, and the tests that use `sample_my_db/` do not depend on it.
+
+A second check compares Strata with SQLite. A Python script runs the statements of `tests/differential/corpus.sql` on the `sqlite3` module and on both engines of `strata_cli`, one process per statement, so each statement reads the database that the one before it wrote. Python 3.10 or later is enough, with no extra package. A statement that is known to differ from SQLite is marked in the corpus, and the script fails when a marked statement stops differing as well as when an unmarked one starts.
+
+```bash
+python3 -I tests/differential/differential.py --cli build/strata_cli
+STRATA_CLI_PATH="$PWD/build/strata_cli" python3 -I -m unittest discover -s tests/differential -p 'test_*.py'
+```
+
+The unit tests of the comparison run without the variable `STRATA_CLI_PATH`, and the two tests that run the whole corpus are skipped unless it names `strata_cli`.
 
 ## Acknowledgement
 

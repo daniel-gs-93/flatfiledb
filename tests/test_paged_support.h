@@ -6,9 +6,11 @@
 #include <initializer_list>
 #include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "strata/domain/value.h"
+#include "strata/paged/buffer_manager.h"
 #include "strata/paged/paged_types.h"
 #include "strata/paged/slotted_page.h"
 #include "test_harness.h"
@@ -126,6 +128,33 @@ inline std::string ToString(paged::ByteView view) {
 // A tuple of `size` bytes, all equal to `fill`.
 inline std::string Filled(std::size_t size, char fill) {
   return std::string(size, fill);
+}
+
+// Adds page 0 as an empty file header (free_list_head 0) and pages 1 and 2 as
+// empty system pages to a pool over a store that has no pages yet, so that
+// a PageAllocator over the pool works without a Database and the first user
+// page is page 3, as in a Database.
+inline paged::Status AddFileHeaderPage(paged::BufferManager& buffer) {
+  {
+    paged::PageResult<paged::PageGuard> created = buffer.NewPage();
+    if (!created.ok()) {
+      return created.error();
+    }
+    paged::PageGuard guard = std::move(created).value();
+    guard.mutable_data()[paged::layout::kPageTypeField] =
+        static_cast<std::uint8_t>(paged::PageType::kFileHeader);
+    guard.MarkDirty();
+  }
+  for (std::uint32_t table_id : {1u, 2u}) {
+    paged::PageResult<paged::PageGuard> created = buffer.NewPage();
+    if (!created.ok()) {
+      return created.error();
+    }
+    paged::PageGuard guard = std::move(created).value();
+    paged::SlottedPage::Format(guard.mutable_data(), guard.page_id(), table_id);
+    guard.MarkDirty();
+  }
+  return std::nullopt;
 }
 
 // A formatted heap-data page that has not been sealed.

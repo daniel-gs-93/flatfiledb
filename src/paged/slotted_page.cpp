@@ -223,6 +223,15 @@ void SlottedPage::Format(std::uint8_t* page, PageId page_id,
   WriteLe64(page + layout::kLsn, 0);
 }
 
+void SlottedPage::FormatFree(std::uint8_t* page, PageId page_id,
+                             PageId next_page_id) {
+  std::memset(page, 0, kPageSize);
+  WriteLe32(page + layout::kPageIdField, page_id);
+  page[layout::kPageTypeField] = static_cast<std::uint8_t>(PageType::kFree);
+  WriteLe16(page + layout::kFreeEnd, static_cast<std::uint16_t>(kPageSize));
+  WriteLe32(page + layout::kNextPageId, next_page_id);
+}
+
 void SlottedPage::SealChecksum(std::uint8_t* page) {
   WriteLe32(page + layout::kChecksum, Crc32c(page + layout::kPageIdField,
                                              kPageSize - layout::kPageIdField));
@@ -250,12 +259,13 @@ Status SlottedPage::VerifyHeader(const std::uint8_t* page,
         prefix + "header page_id is " + std::to_string(header_page_id));
   }
   const std::uint8_t page_type = page[layout::kPageTypeField];
-  if (page_type > static_cast<std::uint8_t>(PageType::kHeapData)) {
+  if (page_type > static_cast<std::uint8_t>(PageType::kFree)) {
     return MakeError(PageErrorCode::kCorrupt, prefix + "page_type " +
                                                   std::to_string(page_type) +
-                                                  " is not 0, 1 or 2");
+                                                  " is not 0, 1, 2 or 3");
   }
-  if (page_type == static_cast<std::uint8_t>(PageType::kHeapData)) {
+  if (page_type == static_cast<std::uint8_t>(PageType::kHeapData) ||
+      page_type == static_cast<std::uint8_t>(PageType::kFree)) {
     const std::size_t free_start = FreeStartOf(page);
     const std::size_t tuple_start = FreeEndOf(page);
     if (free_start > tuple_start || tuple_start > kPageSize) {

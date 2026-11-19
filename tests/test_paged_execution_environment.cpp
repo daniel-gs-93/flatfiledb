@@ -320,6 +320,17 @@ const std::vector<std::string>& SampleStatements() {
       "DELETE FROM course_notes WHERE course_code = 'NEW101'",
       "DELETE FROM courses WHERE code = 'NEW101'",
       "SELECT id, code, instructor_id FROM courses ORDER BY id",
+      // ALTER TABLE and DROP TABLE: the table the test added, and a table
+      // that others reference.
+      "ALTER TABLE course_notes ADD COLUMN pinned INT DEFAULT 0",
+      "ALTER TABLE course_notes ADD COLUMN author TEXT DEFAULT 'staff'",
+      "UPDATE course_notes SET pinned = 1 WHERE note = 'a'",
+      "SELECT course_code, note, pinned, author FROM course_notes ORDER BY id",
+      "ALTER TABLE courses ADD COLUMN room TEXT DEFAULT 'TBA'",
+      "SELECT code, room FROM courses ORDER BY id LIMIT 3",
+      "DROP TABLE courses",
+      "DROP TABLE course_notes",
+      "SELECT * FROM course_notes",
   };
   return statements;
 }

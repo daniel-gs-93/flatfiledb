@@ -75,17 +75,19 @@ Status HeapScan::LoadPage(PageId page_id) {
   return std::nullopt;
 }
 
-TableHeap::TableHeap(BufferManager& buffer, domain::TableSchema schema,
-                     std::uint32_t table_id, PageId first_page)
+TableHeap::TableHeap(BufferManager& buffer, PageAllocator& allocator,
+                     domain::TableSchema schema, std::uint32_t table_id,
+                     PageId first_page)
     : buffer_(buffer),
+      allocator_(allocator),
       schema_(std::move(schema)),
       table_id_(table_id),
       first_page_(first_page),
       tail_page_(first_page) {}
 
-PageResult<PageId> TableHeap::Create(BufferManager& buffer,
+PageResult<PageId> TableHeap::Create(PageAllocator& allocator,
                                      std::uint32_t table_id) {
-  PageResult<PageGuard> created = buffer.NewPage();
+  PageResult<PageGuard> created = allocator.Allocate();
   if (!created.ok()) {
     return created.error();
   }
@@ -96,10 +98,11 @@ PageResult<PageId> TableHeap::Create(BufferManager& buffer,
 }
 
 PageResult<TableHeap> TableHeap::Open(BufferManager& buffer,
+                                      PageAllocator& allocator,
                                       domain::TableSchema schema,
                                       std::uint32_t table_id,
                                       PageId first_page) {
-  TableHeap heap(buffer, std::move(schema), table_id, first_page);
+  TableHeap heap(buffer, allocator, std::move(schema), table_id, first_page);
   std::unordered_set<PageId> visited;
   PageId current = first_page;
   while (current != kInvalidPageId) {
@@ -183,7 +186,7 @@ PageResult<Rid> TableHeap::InsertIntoNewPage(ByteView tuple) {
     return tail_fetched.error();
   }
   PageGuard tail_guard = std::move(tail_fetched).value();
-  PageResult<PageGuard> created = buffer_.NewPage();
+  PageResult<PageGuard> created = allocator_.Allocate();
   if (!created.ok()) {
     return created.error();
   }

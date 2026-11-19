@@ -9,6 +9,7 @@
 
 #include "strata/paged/byte_codec.h"
 #include "strata/paged/slotted_page.h"
+#include "strata/paged/tuple_codec.h"
 
 namespace strata::paged {
 
@@ -134,13 +135,79 @@ PageResult<FileHeader> ValidateExistingFile(IPageStore& store) {
   return result;
 }
 
+// True when every row of heap still encodes as one tuple of `extended` with
+// the default appended. Writes no page.
+Status CheckRowsFit(const TableHeap& heap, const domain::TableSchema& extended,
+                    const domain::Value& default_value) {
+  HeapScan scan = heap.Scan();
+  while (true) {
+    PageResult<std::optional<ScanItem>> next = scan.Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    if (!next.value().has_value()) {
+      return std::nullopt;
+    }
+    domain::Row row = std::move(next.value()->row);
+    row.push_back(default_value);
+    PageResult<std::vector<std::uint8_t>> encoded =
+        TupleCodec::Encode(extended, row);
+    if (!encoded.ok()) {
+      return encoded.error();
+    }
+  }
+}
+
+// Inserts every row of source, with the default appended, into target.
+Status CopyRowsWithDefault(const TableHeap& source, TableHeap* target,
+                           const domain::Value& default_value) {
+  HeapScan scan = source.Scan();
+  while (true) {
+    PageResult<std::optional<ScanItem>> next = scan.Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    if (!next.value().has_value()) {
+      return std::nullopt;
+    }
+    domain::Row row = std::move(next.value()->row);
+    row.push_back(default_value);
+    PageResult<Rid> inserted = target->Insert(row);
+    if (!inserted.ok()) {
+      return inserted.error();
+    }
+  }
+}
+
+// The error of a step that failed before the catalog was switched: the new
+// chain goes back to the free list, and a failure of that is added to the
+// message.
+PageError DiscardNewChain(PageAllocator& allocator, PageId first_page,
+                          PageError error) {
+  if (Status released = allocator.Release(first_page)) {
+    error.message +=
+        "; releasing the new pages also failed: " + released->message;
+  }
+  return error;
+}
+
+// The error of a failed release after the statement was applied.
+PageError NotReclaimed(const PageError& error) {
+  return PageError{PageErrorCode::kIo,
+                   error.message +
+                       "; statement was applied but its pages were not "
+                       "reclaimed"};
+}
+
 }  // namespace
 
 Database::Database(std::unique_ptr<IPageStore> store,
                    std::unique_ptr<BufferManager> buffer,
+                   std::unique_ptr<PageAllocator> allocator,
                    std::unique_ptr<Catalog> catalog)
     : store_(std::move(store)),
       buffer_(std::move(buffer)),
+      allocator_(std::move(allocator)),
       catalog_(std::move(catalog)) {}
 
 Database::~Database() {
@@ -190,16 +257,30 @@ PageResult<Database> Database::OpenWithStore(std::unique_ptr<IPageStore> store,
     }
     header = validated.value();
   }
-  auto catalog = std::make_unique<Catalog>(
-      *buffer, header.sys_tables_first_page, header.sys_columns_first_page);
+  auto allocator = std::make_unique<PageAllocator>(*buffer);
+  auto catalog = std::make_unique<Catalog>(*buffer, *allocator,
+                                           header.sys_tables_first_page,
+                                           header.sys_columns_first_page);
   if (Status status = catalog->Load()) {
     return *status;
   }
-  return Database(std::move(store), std::move(buffer), std::move(catalog));
+  PageResult<std::vector<PageId>> free_pages = allocator->FreePages();
+  if (!free_pages.ok()) {
+    if (free_pages.error().code == PageErrorCode::kCorrupt) {
+      return Corrupt(free_pages.error().message);
+    }
+    return free_pages.error();
+  }
+  return Database(std::move(store), std::move(buffer), std::move(allocator),
+                  std::move(catalog));
 }
 
 PageResult<TableHeap*> Database::Table(const std::string& name) {
   std::lock_guard<std::mutex> tables_lock(*tables_mutex_);
+  return TableLocked(name);
+}
+
+PageResult<TableHeap*> Database::TableLocked(const std::string& name) {
   if (is_closed_) {
     return MakeError(PageErrorCode::kClosed, "the database is closed");
   }
@@ -215,7 +296,7 @@ PageResult<TableHeap*> Database::Table(const std::string& name) {
     return MakeError(PageErrorCode::kNotFound, "no table named " + name);
   }
   PageResult<TableHeap> opened =
-      TableHeap::Open(*buffer_, *schema, *table_id, *first_page);
+      TableHeap::Open(*buffer_, *allocator_, *schema, *table_id, *first_page);
   if (!opened.ok()) {
     return opened.error();
   }
@@ -234,6 +315,75 @@ PageResult<domain::TableSchema> Database::CreateTable(
     }
   }
   return catalog_->CreateTable(schema);
+}
+
+PageResult<domain::TableSchema> Database::AddColumn(
+    const std::string& table, const domain::ColumnDef& column) {
+  std::lock_guard<std::mutex> tables_lock(*tables_mutex_);
+  if (is_closed_) {
+    return MakeError(PageErrorCode::kClosed, "the database is closed");
+  }
+  PageResult<TableHeap*> opened = TableLocked(table);
+  if (!opened.ok()) {
+    return opened.error();
+  }
+  PageResult<domain::TableSchema> extended =
+      catalog_->CheckAddColumn(table, column);
+  if (!extended.ok()) {
+    return extended.error();
+  }
+  TableHeap* const old_heap = opened.value();
+  const domain::Value& default_value = *column.default_value;
+  if (Status status =
+          CheckRowsFit(*old_heap, extended.value(), default_value)) {
+    return *status;
+  }
+  const std::uint32_t table_id = old_heap->table_id();
+  PageResult<PageId> created = TableHeap::Create(*allocator_, table_id);
+  if (!created.ok()) {
+    return created.error();
+  }
+  const PageId new_first_page = created.value();
+  PageResult<TableHeap> reopened = TableHeap::Open(
+      *buffer_, *allocator_, extended.value(), table_id, new_first_page);
+  if (!reopened.ok()) {
+    return DiscardNewChain(*allocator_, new_first_page, reopened.error());
+  }
+  auto new_heap = std::make_unique<TableHeap>(std::move(reopened).value());
+  if (Status status =
+          CopyRowsWithDefault(*old_heap, new_heap.get(), default_value)) {
+    return DiscardNewChain(*allocator_, new_first_page, *status);
+  }
+  if (Status status =
+          catalog_->CommitAddColumn(table, column, new_first_page)) {
+    return DiscardNewChain(*allocator_, new_first_page, *status);
+  }
+  const PageId old_first_page = old_heap->first_page();
+  tables_[domain::ToLower(table)] = std::move(new_heap);
+  if (Status status = allocator_->Release(old_first_page)) {
+    return NotReclaimed(*status);
+  }
+  return extended;
+}
+
+Status Database::DropTable(const std::string& table) {
+  std::lock_guard<std::mutex> tables_lock(*tables_mutex_);
+  if (is_closed_) {
+    return MakeError(PageErrorCode::kClosed, "the database is closed");
+  }
+  PageResult<TableHeap*> opened = TableLocked(table);
+  if (!opened.ok()) {
+    return opened.error();
+  }
+  const PageId first_page = opened.value()->first_page();
+  if (Status status = catalog_->DropTable(table)) {
+    return status;
+  }
+  tables_.erase(domain::ToLower(table));
+  if (Status status = allocator_->Release(first_page)) {
+    return NotReclaimed(*status);
+  }
+  return std::nullopt;
 }
 
 Status Database::Close() {

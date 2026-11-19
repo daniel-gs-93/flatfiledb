@@ -13,6 +13,7 @@
 #include "strata/paged/page_store.h"
 #include "strata/paged/table_heap.h"
 #include "test_harness.h"
+#include "test_paged_ddl_support.h"
 #include "test_paged_support.h"
 
 // Catalog over a Database on a MemoryPageStore.
@@ -123,7 +124,7 @@ bool SchemasEqual(const TableSchema& left, const TableSchema& right) {
 // sys_columns, whose first pages are 1 and 2 in a new database).
 std::size_t SystemRowCount(Database& database, std::uint32_t table_id) {
   auto heap = TableHeap::Open(
-      database.buffer(),
+      database.buffer(), database.allocator(),
       table_id == 1 ? Catalog::SysTablesSchema() : Catalog::SysColumnsSchema(),
       table_id, table_id);
   CHECK_OK(heap);
@@ -170,7 +171,7 @@ TEST(test_paged_catalog_round_trips_schemas) {
   auto created = database.CreateTable(schema);
   CHECK_OK(created);
 
-  Catalog fresh(database.buffer(), 1, 2);
+  Catalog fresh(database.buffer(), database.allocator(), 1, 2);
   CHECK_OK(fresh.Load());
   auto found = fresh.FindTable("t");  // names are case-insensitive
   CHECK(found.has_value());
@@ -292,7 +293,7 @@ TEST(test_paged_catalog_create_table_undoes_partial_rows) {
   CHECK_ERROR(database.CreateTable(second), kIo);
   CHECK_EQ(SystemRowCount(database, 1), tables_before);
   CHECK_EQ(SystemRowCount(database, 2), columns_before);
-  Catalog fresh(database.buffer(), 1, 2);
+  Catalog fresh(database.buffer(), database.allocator(), 1, 2);
   CHECK_OK(fresh.Load());
   CHECK(fresh.FindTable("wide_b") == std::nullopt);
   CHECK(fresh.FindTable("wide_a").has_value());
@@ -386,10 +387,10 @@ std::string LoadAfterDamage(SystemDamage damage) {
   target.unique_indexes = {3};
   CHECK_OK(database.CreateTable(target));  // table_id 4
 
-  auto tables =
-      TableHeap::Open(database.buffer(), Catalog::SysTablesSchema(), 1, 1);
-  auto columns =
-      TableHeap::Open(database.buffer(), Catalog::SysColumnsSchema(), 2, 2);
+  auto tables = TableHeap::Open(database.buffer(), database.allocator(),
+                                Catalog::SysTablesSchema(), 1, 1);
+  auto columns = TableHeap::Open(database.buffer(), database.allocator(),
+                                 Catalog::SysColumnsSchema(), 2, 2);
   CHECK_OK(tables);
   CHECK_OK(columns);
   if (!tables.ok() || !columns.ok()) {
@@ -502,7 +503,7 @@ std::string LoadAfterDamage(SystemDamage damage) {
       break;
     }
   }
-  Catalog fresh(database.buffer(), 1, 2);
+  Catalog fresh(database.buffer(), database.allocator(), 1, 2);
   const strata::paged::Status loaded = fresh.Load();
   return loaded.has_value()
              ? std::string(strata::testing::ErrorCodeName(loaded->code)) +
@@ -543,4 +544,169 @@ TEST(test_paged_catalog_load_rejects_inconsistent_system_tables) {
   CHECK(
       LoadAfterDamage(SystemDamage::kNextTableIdTooLow).find("next_table_id") !=
       std::string::npos);
+}
+
+TEST(test_paged_catalog_adds_columns_and_reloads_them) {
+  OpenedDatabase env = OpenMemoryDatabase();
+  if (env.database == nullptr) {
+    return;
+  }
+  Database& database = *env.database;
+  Catalog& catalog = database.catalog();
+  TableSchema schema;
+  schema.name = "T";
+  schema.columns = {{"id", DataType::kInt}, {"code", DataType::kText}};
+  schema.primary_key_index = 0;
+  schema.unique_indexes = {1};
+  CHECK_OK(database.CreateTable(schema));  // table_id 3
+
+  const ColumnDef int_column{"a", DataType::kInt, Value(std::int64_t{7})};
+  const ColumnDef double_column{"b", DataType::kDouble, Value(1.5)};
+  const ColumnDef text_column{"c", DataType::kText, Value(std::string("x"))};
+  PageId last_first_page = 0;
+  for (const ColumnDef& column : {int_column, double_column, text_column}) {
+    auto extended = catalog.CheckAddColumn("t", column);
+    CHECK_OK(extended);
+    auto new_first = TableHeap::Create(database.allocator(), 3);
+    CHECK_OK(new_first);
+    if (!extended.ok() || !new_first.ok()) {
+      return;
+    }
+    CHECK_OK(catalog.CommitAddColumn("T", column, new_first.value()));
+    last_first_page = new_first.value();
+    const auto found = catalog.FindTable("t");
+    CHECK(found.has_value());
+    if (found.has_value()) {
+      CHECK(SchemasEqual(*found, extended.value()));
+    }
+  }
+  const auto altered = catalog.FindTable("T");
+  CHECK(altered.has_value());
+  if (altered.has_value()) {
+    CHECK_EQ(altered->columns.size(), std::size_t{5});
+    CHECK_EQ(altered->columns[2].name, std::string("a"));
+    CHECK_EQ(altered->columns[4].name, std::string("c"));
+    CHECK(altered->primary_key_index == 0);
+    CHECK(altered->unique_indexes == std::vector<std::size_t>{1});
+    CHECK(altered->columns[3].default_value == std::optional<Value>(1.5));
+  }
+  CHECK(catalog.FirstPage("t") == std::optional<PageId>(last_first_page));
+  CHECK(catalog.TableId("t") == std::optional<std::uint32_t>(3));
+
+  Catalog fresh(database.buffer(), database.allocator(), 1, 2);
+  CHECK_OK(fresh.Load());
+  const auto reloaded = fresh.FindTable("t");
+  CHECK(reloaded.has_value());
+  if (reloaded.has_value() && altered.has_value()) {
+    CHECK(SchemasEqual(*reloaded, *altered));
+  }
+  CHECK(fresh.FirstPage("t") == std::optional<PageId>(last_first_page));
+
+  CHECK_ERROR(catalog.CheckAddColumn(
+                  "t", ColumnDef{"A", DataType::kInt, Value(std::int64_t{0})}),
+              kAlreadyExists);
+  CHECK_ERROR(catalog.CheckAddColumn("nosuch", int_column), kNotFound);
+  CHECK_ERROR(catalog.CheckAddColumn(
+                  "t", ColumnDef{"d", DataType::kInt, Value(std::string("x"))}),
+              kInvalidArgument);
+  CHECK_ERROR(
+      catalog.CheckAddColumn("t", ColumnDef{"e", DataType::kInt, std::nullopt}),
+      kInvalidArgument);
+}
+
+TEST(test_paged_catalog_add_column_failure_leaves_the_old_schema) {
+  // A closed database with one table, read back through a cold pool.
+  std::unique_ptr<MemoryPageStore> base;
+  PageId table_page = 0;
+  {
+    OpenedDatabase env = OpenMemoryDatabase();
+    if (env.database == nullptr) {
+      return;
+    }
+    CHECK_OK(env.database->CreateTable(BasicSchema("T")));
+    table_page = *env.database->catalog().FirstPage("T");
+    CHECK_OK(env.database->Close());
+    base = strata::testing::CopyOfStore(*env.store);
+  }
+  const ColumnDef column{"extra", DataType::kInt, Value(std::int64_t{1})};
+  bool has_succeeded = false;
+  for (int nth_call = 1; nth_call < 100 && !has_succeeded; ++nth_call) {
+    auto opened = strata::testing::OpenCopy(*base, 4);
+    if (opened.database == nullptr) {
+      return;
+    }
+    Database& database = *opened.database;
+    const std::optional<TableSchema> before = database.catalog().FindTable("T");
+    opened.store->InjectFailure(Operation::kRead, nth_call);
+    const auto status =
+        database.catalog().CommitAddColumn("T", column, table_page);
+    opened.store->ClearInjectedFailures();
+    if (!status.has_value()) {
+      has_succeeded = true;
+      continue;
+    }
+    CHECK_ERROR(status, kIo);
+    const std::optional<TableSchema> after = database.catalog().FindTable("T");
+    CHECK(before.has_value() && after.has_value());
+    if (before.has_value() && after.has_value()) {
+      CHECK(SchemasEqual(*before, *after));
+    }
+    // The pages hold the old schema, unless the undo itself failed.
+    CHECK_OK(database.buffer().FlushAll());
+    Catalog fresh(database.buffer(), database.allocator(), 1, 2);
+    const auto loaded = fresh.Load();
+    const bool is_undo_failure =
+        strata::testing::MessageOf(status).find(
+            "; undoing the rows also failed:") != std::string::npos;
+    if (!is_undo_failure) {
+      CHECK_OK(loaded);
+      const auto reloaded = fresh.FindTable("T");
+      CHECK(reloaded.has_value());
+      if (reloaded.has_value() && before.has_value()) {
+        CHECK(SchemasEqual(*reloaded, *before));
+      }
+    }
+  }
+  CHECK(has_succeeded);
+}
+
+TEST(test_paged_catalog_drops_a_table_and_never_reuses_its_id) {
+  OpenedDatabase env = OpenMemoryDatabase();
+  if (env.database == nullptr) {
+    return;
+  }
+  Database& database = *env.database;
+  Catalog& catalog = database.catalog();
+  CHECK_OK(database.CreateTable(BasicSchema("a")));  // 3
+  CHECK_OK(database.CreateTable(BasicSchema("b")));  // 4
+  CHECK_OK(database.CreateTable(BasicSchema("c")));  // 5
+  CHECK_OK(catalog.DropTable("B"));
+  CHECK(!catalog.FindTable("b").has_value());
+  CHECK_EQ(catalog.TableNames(), (std::vector<std::string>{"a", "c"}));
+
+  Catalog fresh(database.buffer(), database.allocator(), 1, 2);
+  CHECK_OK(fresh.Load());
+  CHECK(!fresh.FindTable("b").has_value());
+  CHECK_EQ(fresh.TableNames(), (std::vector<std::string>{"a", "c"}));
+
+  CHECK_OK(database.CreateTable(BasicSchema("d")));
+  CHECK(catalog.TableId("d") == std::optional<std::uint32_t>(6));
+  CHECK_ERROR(catalog.DropTable("b"), kNotFound);
+  CHECK_EQ(SystemRowCount(database, 1), std::size_t{3});
+
+  // A table that another table references stays, because a foreign key to a
+  // missing table would fail the next Load.
+  TableSchema kid = BasicSchema("kid");
+  kid.columns.push_back({"parent", DataType::kInt});
+  kid.foreign_keys = {ForeignKey{2, "a", 0}};
+  CHECK_OK(database.CreateTable(kid));
+  const auto refused = catalog.DropTable("A");
+  CHECK_ERROR(refused, kInvalidArgument);
+  CHECK_MESSAGE_CONTAINS(refused, "table a is referenced by kid.parent");
+  CHECK(catalog.FindTable("a").has_value());
+  CHECK_OK(catalog.DropTable("kid"));
+  CHECK_OK(catalog.DropTable("a"));
+  Catalog after(database.buffer(), database.allocator(), 1, 2);
+  CHECK_OK(after.Load());
+  CHECK_EQ(after.TableNames(), (std::vector<std::string>{"c", "d"}));
 }

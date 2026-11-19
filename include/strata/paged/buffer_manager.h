@@ -99,8 +99,10 @@ class BufferManager {
 
   // A pool of `frames` frames over store, with the given replacement policy.
   // store is not owned and must outlive the BufferManager. frames must be at
-  // least 4 (kInvalidArgument): a table heap append holds two latches, and the
-  // catalog pins another page. Frame memory is one block aligned to kPageSize.
+  // least 4 (kInvalidArgument): a table heap append holds three latches (the
+  // chain tail, the file header and the new page), and a fourth frame must be
+  // free or evictable to read the new page. Frame memory is one block aligned
+  // to kPageSize.
   static PageResult<std::unique_ptr<BufferManager>> Create(
       IPageStore& store, std::size_t frames, ReplacementPolicyKind policy);
 

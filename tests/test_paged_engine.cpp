@@ -403,6 +403,7 @@ TEST(test_heap_access_error_mapping) {
       "paged engine cannot store a row longer than 4060 bytes in Users";
   const ErrorSite open = ErrorSite::kOpenTable;
   const ErrorSite create = ErrorSite::kCreateTable;
+  const ErrorSite add_column = ErrorSite::kAddColumn;
   const ErrorSite access = ErrorSite::kRowAccess;
   const std::vector<MappingCase> cases = {
       {PageErrorCode::kIo, access, ErrorKind::kIo, "m"},
@@ -431,6 +432,12 @@ TEST(test_heap_access_error_mapping) {
       {PageErrorCode::kAlreadyExists, create, ErrorKind::kBind,
        "table Users already exists"},
       {PageErrorCode::kAlreadyExists, access, ErrorKind::kIo,
+       "internal error: m"},
+      {PageErrorCode::kInvalidArgument, add_column, ErrorKind::kUnsupported,
+       "m"},
+      {PageErrorCode::kNotFound, add_column, ErrorKind::kBind,
+       "unknown table: Users"},
+      {PageErrorCode::kAlreadyExists, add_column, ErrorKind::kIo,
        "internal error: m"},
   };
   for (const MappingCase& test_case : cases) {
@@ -1739,13 +1746,6 @@ TEST(test_paged_engine_ddl_scope) {
   const PageImages before_pages = PagesOf(*fixture.store);
   ExpectError(ExecuteSql(service, "CREATE TABLE sys_x (id INT PRIMARY KEY)"),
               ErrorKind::kUnsupported);
-  ExpectErrorMessage(
-      ExecuteSql(service, "ALTER TABLE parents ADD COLUMN extra INT DEFAULT 0"),
-      ErrorKind::kUnsupported,
-      "paged engine does not support ALTER TABLE ADD COLUMN");
-  ExpectErrorMessage(ExecuteSql(service, "DROP TABLE children"),
-                     ErrorKind::kUnsupported,
-                     "paged engine does not support DROP TABLE");
   CHECK(!fixture.engine->Flush().has_value());
   CHECK(PagesOf(*fixture.store) == before_pages);
   CHECK(!HasTable(service, "sys_x"));
@@ -2054,6 +2054,241 @@ TEST(test_paged_engine_statement_without_changes_does_not_write_back) {
   CHECK_EQ(TableLines(*fixture.store, "SELECT id FROM t ORDER BY id"),
            (std::vector<std::string>{"2", "3"}));
   ExpectNoPins(engine);
+}
+
+TEST(test_paged_engine_alter_table_add_column) {
+  ServiceFixture fixture = OpenService(16);
+  QueryService& service = *fixture.service;
+  ExpectComplete(
+      ExecuteSql(service, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT)"),
+      "CREATE TABLE t");
+  ExpectAffected(
+      ExecuteSql(service, "INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')"),
+      3);
+
+  ExpectComplete(
+      ExecuteSql(service, "ALTER TABLE t ADD COLUMN c INT DEFAULT 7"),
+      "ALTER TABLE t");
+  ExpectComplete(
+      ExecuteSql(service, "ALTER TABLE t ADD COLUMN d DOUBLE DEFAULT 1.5"),
+      "ALTER TABLE t");
+  ExpectComplete(
+      ExecuteSql(service, "ALTER TABLE t ADD COLUMN e TEXT DEFAULT 'x'"),
+      "ALTER TABLE t");
+  CHECK_EQ(ServiceQuery(service, "SELECT id, v, c, d, e FROM t ORDER BY id"),
+           (std::vector<std::string>{"1\ta\t7\t1.5\tx", "2\tb\t7\t1.5\tx",
+                                     "3\tc\t7\t1.5\tx"}));
+
+  // The new columns take part in statements like any other.
+  ExpectAffected(ExecuteSql(service, "INSERT INTO t (id, v) VALUES (4, 'd')"),
+                 1);
+  ExpectAffected(ExecuteSql(service, "UPDATE t SET c = 9 WHERE id = 1"), 1);
+  CHECK_EQ(ServiceQuery(service, "SELECT id, c, d, e FROM t ORDER BY id"),
+           (std::vector<std::string>{"1\t9\t1.5\tx", "2\t7\t1.5\tx",
+                                     "3\t7\t1.5\tx", "4\t7\t1.5\tx"}));
+  const std::vector<domain::TableSchema> schemas = service.DescribeCatalog();
+  CHECK_EQ(schemas.size(), std::size_t{1});
+  if (schemas.size() == 1) {
+    CHECK_EQ(schemas[0].columns.size(), std::size_t{5});
+    if (schemas[0].columns.size() == 5) {
+      CHECK(schemas[0].columns[2].default_value ==
+            std::optional<Value>(std::int64_t{7}));
+      CHECK(schemas[0].columns[3].default_value == std::optional<Value>(1.5));
+      CHECK(schemas[0].columns[4].default_value ==
+            std::optional<Value>(std::string("x")));
+    }
+  }
+
+  // A table with no row.
+  ExpectComplete(
+      ExecuteSql(service, "CREATE TABLE empty_t (id INT PRIMARY KEY)"),
+      "CREATE TABLE empty_t");
+  ExpectComplete(
+      ExecuteSql(service, "ALTER TABLE empty_t ADD COLUMN c INT DEFAULT 1"),
+      "ALTER TABLE empty_t");
+  CHECK(ServiceQuery(service, "SELECT id, c FROM empty_t").empty());
+  ExpectAffected(ExecuteSql(service, "INSERT INTO empty_t (id) VALUES (5)"), 1);
+  CHECK_EQ(ServiceQuery(service, "SELECT id, c FROM empty_t"),
+           std::vector<std::string>{"5\t1"});
+
+  // Errors: the Binder refuses these.
+  ExpectError(
+      ExecuteSql(service, "ALTER TABLE nosuch ADD COLUMN z INT DEFAULT 0"),
+      ErrorKind::kBind);
+  ExpectError(ExecuteSql(service, "ALTER TABLE t ADD COLUMN C INT DEFAULT 0"),
+              ErrorKind::kBind);
+  ExpectError(ExecuteSql(service, "ALTER TABLE t ADD COLUMN z INT"),
+              ErrorKind::kBind);
+
+  // Errors: the engine refuses these, and changes no page.
+  ExpectComplete(ExecuteSql(service,
+                            "CREATE TABLE big (id INT PRIMARY KEY, "
+                            "body TEXT)"),
+                 "CREATE TABLE big");
+  ExpectAffected(ExecuteSql(service, "INSERT INTO big VALUES (1, '" +
+                                         std::string(4043, 'x') + "')"),
+                 1);
+  CHECK(!fixture.engine->Flush().has_value());
+  const PageImages before = PagesOf(*fixture.store);
+  ExpectErrorMessage(
+      ExecuteSql(service, "ALTER TABLE big ADD COLUMN x INT DEFAULT 0"),
+      ErrorKind::kUnsupported,
+      "paged engine cannot store a row longer than 4060 bytes in big");
+  const ExecutionResult long_default =
+      ExecuteSql(service, "ALTER TABLE t ADD COLUMN y TEXT DEFAULT '" +
+                              std::string(4100, 'x') + "'");
+  const ExecutionError* long_error =
+      ExpectError(long_default, ErrorKind::kUnsupported);
+  if (long_error != nullptr) {
+    CHECK(long_error->message.starts_with(
+        "column y of table t cannot be stored in the catalog:"));
+  }
+  CHECK(!fixture.engine->Flush().has_value());
+  CHECK(PagesOf(*fixture.store) == before);
+  ExpectNoPins(*fixture.engine);
+}
+
+TEST(test_paged_engine_drop_table) {
+  ServiceFixture fixture = OpenService(16);
+  QueryService& service = *fixture.service;
+  ExpectComplete(ExecuteSql(service, "CREATE TABLE a (id INT PRIMARY KEY)"),
+                 "CREATE TABLE a");
+  ExpectComplete(
+      ExecuteSql(service,
+                 "CREATE TABLE b (id INT PRIMARY KEY, a_id INT REFERENCES "
+                 "a(id))"),
+      "CREATE TABLE b");
+  ExpectComplete(ExecuteSql(service, "CREATE TABLE lone (id INT PRIMARY KEY)"),
+                 "CREATE TABLE lone");
+  ExpectAffected(ExecuteSql(service, "INSERT INTO a VALUES (1), (2)"), 2);
+  ExpectAffected(ExecuteSql(service, "INSERT INTO b VALUES (10, 1)"), 1);
+  ExpectAffected(ExecuteSql(service, "INSERT INTO lone VALUES (5)"), 1);
+
+  ExpectComplete(ExecuteSql(service, "DROP TABLE lone"), "DROP TABLE lone");
+  CHECK(!HasTable(service, "lone"));
+
+  // A referenced table cannot be dropped, even before any row refers to it,
+  // and the refusal changes no page.
+  CHECK(!fixture.engine->Flush().has_value());
+  const PageImages before = PagesOf(*fixture.store);
+  ExpectErrorMessage(ExecuteSql(service, "DROP TABLE a"), ErrorKind::kBind,
+                     "table a is referenced by b.a_id");
+  CHECK(!fixture.engine->Flush().has_value());
+  CHECK(PagesOf(*fixture.store) == before);
+
+  ExpectComplete(ExecuteSql(service, "DROP TABLE b"), "DROP TABLE b");
+  ExpectError(ExecuteSql(service, "SELECT * FROM b"), ErrorKind::kBind);
+  ExpectComplete(ExecuteSql(service, "DROP TABLE a"), "DROP TABLE a");
+  CHECK(service.DescribeCatalog().empty());
+  ExpectError(ExecuteSql(service, "DROP TABLE a"), ErrorKind::kBind);
+
+  // A table created again under a dropped name has the new schema and no row.
+  ExpectComplete(
+      ExecuteSql(service, "CREATE TABLE b (id INT PRIMARY KEY, z TEXT)"),
+      "CREATE TABLE b");
+  CHECK(ServiceQuery(service, "SELECT * FROM b").empty());
+  ExpectAffected(ExecuteSql(service, "INSERT INTO b VALUES (1, 'z')"), 1);
+  CHECK_EQ(ServiceQuery(service, "SELECT id, z FROM b"),
+           std::vector<std::string>{"1\tz"});
+  ExpectNoPins(*fixture.engine);
+}
+
+namespace {
+
+// The rows of table t as text, from an engine opened over a copy of the store.
+std::vector<std::string> RowsFromCopy(const MemoryPageStore& store,
+                                      const std::string& sql) {
+  return TableLines(store, sql);
+}
+
+}  // namespace
+
+TEST(test_paged_engine_ddl_is_written_out_and_fails_cleanly) {
+  // After each statement a second engine over a copy of the store sees it.
+  {
+    StoreEngine fixture = NewEngine(16);
+    PagedEngine& engine = *fixture.engine;
+    ExpectComplete(Run(engine, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT)"),
+                   "CREATE TABLE t");
+    ExpectAffected(Run(engine, "INSERT INTO t VALUES (1, 'a'), (2, 'b')"), 2);
+    ExpectComplete(Run(engine, "ALTER TABLE t ADD COLUMN c INT DEFAULT 4"),
+                   "ALTER TABLE t");
+    CHECK_EQ(RowsFromCopy(*fixture.store, "SELECT id, c FROM t ORDER BY id"),
+             (std::vector<std::string>{"1\t4", "2\t4"}));
+    ExpectComplete(Run(engine, "DROP TABLE t"), "DROP TABLE t");
+    StoreEngine second = OpenSecondEngine(*fixture.store);
+    CHECK(second.engine != nullptr &&
+          !second.engine->Catalog().FindTable("t").has_value());
+  }
+
+  // A failure at each read, write and allocation: the table is the old one or
+  // the new one, and the message tells which.
+  std::unique_ptr<MemoryPageStore> base;
+  {
+    StoreEngine fixture = NewEngine(16);
+    PagedEngine& engine = *fixture.engine;
+    ExpectComplete(Run(engine, "CREATE TABLE t (id INT PRIMARY KEY, v TEXT)"),
+                   "CREATE TABLE t");
+    std::vector<Row> rows;
+    for (std::int64_t id = 1; id <= 40; ++id) {
+      rows.push_back(Row{Value(id), Value(std::string(2000, 'x'))});
+    }
+    ExpectAffected(RunInsert(engine, "t", std::move(rows)), 40);
+    CHECK(!engine.Close().has_value());
+    base = CopyOf(*fixture.store);
+  }
+  const char* const statements[] = {"ALTER TABLE t ADD COLUMN c INT DEFAULT 7",
+                                    "DROP TABLE t"};
+  const Operation operations[] = {Operation::kRead, Operation::kWrite,
+                                  Operation::kAllocate};
+  for (const char* statement : statements) {
+    const bool is_drop = std::string(statement).starts_with("DROP");
+    for (const Operation operation : operations) {
+      bool has_succeeded = false;
+      for (int nth_call = 1; nth_call < 600 && !has_succeeded; ++nth_call) {
+        StoreEngine fixture = OpenStoreEngine(CopyOf(*base), kMinimumFrames);
+        if (fixture.engine == nullptr) {
+          return;
+        }
+        PagedEngine& engine = *fixture.engine;
+        fixture.store->InjectFailure(operation, nth_call);
+        const ExecutionResult result = Run(engine, statement);
+        fixture.store->ClearInjectedFailures();
+        ExpectNoPins(engine);
+        bool is_applied = false;
+        if (const ExecutionError* error = AsError(result)) {
+          CHECK(error->kind == ErrorKind::kIo);
+          const bool is_saved_failure = error->message.ends_with(kSavedSuffix);
+          const bool is_not_reclaimed = Contains(
+              error->message,
+              "; statement was applied but its pages were not reclaimed");
+          is_applied = is_saved_failure || is_not_reclaimed;
+        } else {
+          has_succeeded = true;
+          is_applied = true;
+        }
+        const auto schema = engine.Catalog().FindTable("t");
+        if (is_drop) {
+          CHECK_EQ(schema.has_value(), !is_applied);
+        } else {
+          CHECK(schema.has_value());
+          if (schema.has_value()) {
+            CHECK_EQ(schema->columns.size(),
+                     is_applied ? std::size_t{3} : std::size_t{2});
+          }
+        }
+        if (!is_drop) {
+          CHECK_EQ(QueryText(engine, "SELECT COUNT(*) FROM t"),
+                   std::vector<std::string>{"40"});
+          if (is_applied) {
+            CHECK_EQ(QueryText(engine, "SELECT COUNT(*) FROM t WHERE c = 7"),
+                     std::vector<std::string>{"40"});
+          }
+        }
+      }
+      CHECK(has_succeeded);
+    }
+  }
 }
 
 }  // namespace strata::testing

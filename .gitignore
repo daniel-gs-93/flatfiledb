@@ -6,6 +6,9 @@ cmake-build-*/
 compile_commands.json
 .cache/
 
+# Python bytecode of the tests/differential harness
+__pycache__/
+
 # Editors
 .vscode/
 .idea/

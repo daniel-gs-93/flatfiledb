@@ -10,13 +10,15 @@
 
 #include "strata/domain/value.h"
 #include "strata/paged/buffer_manager.h"
+#include "strata/paged/page_allocator.h"
 #include "strata/paged/paged_types.h"
 #include "strata/paged/slotted_page.h"
 
 // One table as a chain of heap-data pages (design document 2.11): the rows are
 // stored as tuples in slotted pages, with no order. A row is addressed by its
 // Rid. Resource-aware: every page is reached through a BufferManager and held
-// by a PageGuard.
+// by a PageGuard. Every page of a chain, the first one included, comes from a
+// PageAllocator (ADR-0046).
 //
 // Concurrency contract: Insert, Update and Delete need the caller to ensure a
 // single writer at a time. Get and Scan may run with other readers and with
@@ -65,15 +67,17 @@ class HeapScan {
 class TableHeap {
  public:
   // Allocates and formats the first page of a new table and returns its page
-  // number. The first page never changes.
-  static PageResult<PageId> Create(BufferManager& buffer,
+  // number. The first page of a table is fixed in the catalog, except that
+  // ADD COLUMN writes a new chain and points the catalog at it.
+  static PageResult<PageId> Create(PageAllocator& allocator,
                                    std::uint32_t table_id);
 
   // Opens an existing table: walks the whole chain, checks every page, and
   // rebuilds the free-space map and the tail. kCorrupt: a page is not a heap
   // page of this table, the chain has a cycle, or it leads past the end of
-  // the file. buffer must outlive the TableHeap.
+  // the file. buffer and allocator must outlive the TableHeap.
   static PageResult<TableHeap> Open(BufferManager& buffer,
+                                    PageAllocator& allocator,
                                     domain::TableSchema schema,
                                     std::uint32_t table_id, PageId first_page);
 
@@ -106,8 +110,9 @@ class TableHeap {
  private:
   friend class HeapScan;
 
-  TableHeap(BufferManager& buffer, domain::TableSchema schema,
-            std::uint32_t table_id, PageId first_page);
+  TableHeap(BufferManager& buffer, PageAllocator& allocator,
+            domain::TableSchema schema, std::uint32_t table_id,
+            PageId first_page);
 
   // The page that holds a heap row of this table, or the error to return.
   Status CheckOwnership(SlottedPageView view, PageErrorCode code) const;
@@ -118,10 +123,12 @@ class TableHeap {
   void SetCapacity(PageId page_id, std::uint16_t capacity);
 
   // Appends a page after the tail, holding the tail's exclusive latch while
-  // the new page is linked in (tail first, new page second).
+  // the new page is linked in (tail, then the file header and the new page
+  // inside PageAllocator::Allocate).
   PageResult<Rid> InsertIntoNewPage(ByteView tuple);
 
   BufferManager& buffer_;
+  PageAllocator& allocator_;
   domain::TableSchema schema_;
   std::uint32_t table_id_;
   PageId first_page_;

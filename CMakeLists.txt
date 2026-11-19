@@ -35,6 +35,7 @@ add_library(strata_core STATIC
         src/paged/heap_access.cpp
         src/paged/mutation_planner.cpp
         src/paged/operators.cpp
+        src/paged/page_allocator.cpp
         src/paged/page_store.cpp
         src/paged/paged_engine.cpp
         src/paged/replacement_policy.cpp
@@ -73,9 +74,11 @@ add_executable(strata_tests
         tests/test_flat_file_engine.cpp
         tests/test_import.cpp
         tests/test_layering.cpp
+        tests/test_paged_allocator.cpp
         tests/test_paged_buffer.cpp
         tests/test_paged_catalog.cpp
         tests/test_paged_database.cpp
+        tests/test_paged_ddl.cpp
         tests/test_paged_engine.cpp
         tests/test_paged_environment.cpp
         tests/test_paged_execution_environment.cpp

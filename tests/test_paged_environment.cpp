@@ -14,6 +14,7 @@
 #include "strata/paged/database.h"
 #include "strata/paged/slotted_page.h"
 #include "test_harness.h"
+#include "test_paged_ddl_support.h"
 #include "test_paged_support.h"
 #include "test_support.h"
 
@@ -317,6 +318,71 @@ TEST(test_paged_environment_reuses_space_after_deletes) {
     CHECK_OK(fetched);
     if (fetched.ok()) {
       CHECK_OK(SlottedPageView(fetched.value().data()).CheckStructure());
+    }
+  }
+}
+
+TEST(test_paged_environment_alter_and_drop_reuse_pages) {
+  if (!HasData()) {
+    SKIP("data/ is missing");
+  }
+  const std::vector<CsvTable> tables = LoadAllCsv();
+  TempDir directory;
+  BuildDatabase(directory.path(), tables);
+  auto database = OpenDatabase(directory.path(), ReplacementPolicyKind::kLru);
+  if (database == nullptr) {
+    return;
+  }
+
+  // ADD COLUMN on the 10000-row posts table: every row gets the default.
+  CHECK_OK(database->AddColumn(
+      "posts", strata::domain::ColumnDef{"flag", strata::domain::DataType::kInt,
+                                         Value(std::int64_t{0})}));
+  std::vector<Row> posts_with_flag = tables[1].rows;
+  for (Row& row : posts_with_flag) {
+    row.push_back(Value(std::int64_t{0}));
+  }
+  CHECK(ScanSorted(*database, "posts") == posts_with_flag);
+  const strata::paged::PageId pages_after_alter =
+      database->buffer().PageCount();
+
+  // DROP TABLE and a new load of the same data reuse the freed pages.
+  CHECK_OK(database->DropTable("engagements"));
+  CHECK_OK(database->CreateTable(tables[2].schema));
+  auto heap = database->Table("engagements");
+  CHECK_OK(heap);
+  if (!heap.ok()) {
+    return;
+  }
+  for (const Row& row : tables[2].rows) {
+    CHECK_OK(heap.value()->Insert(row));
+  }
+  CHECK(database->buffer().PageCount() <= pages_after_alter + 2);
+  CHECK(strata::testing::EveryPageIsAccountedFor(*database));
+  CHECK(ScanSorted(*database, "users") == tables[0].rows);
+  CHECK(ScanSorted(*database, "engagements") == tables[2].rows);
+
+  CHECK_OK(database->Close());
+  database = OpenDatabase(directory.path(), ReplacementPolicyKind::kTwoQ);
+  if (database == nullptr) {
+    return;
+  }
+  CHECK(ScanSorted(*database, "posts") == posts_with_flag);
+  CHECK(ScanSorted(*database, "engagements") == tables[2].rows);
+  CHECK(strata::testing::EveryPageIsAccountedFor(*database));
+  for (const std::string& name : database->catalog().TableNames()) {
+    auto reopened = database->Table(name);
+    CHECK_OK(reopened);
+    if (!reopened.ok()) {
+      return;
+    }
+    for (const auto& entry : reopened.value()->FreeSpaceSnapshot()) {
+      auto fetched =
+          database->buffer().FetchPage(entry.page_id, LatchMode::kShared);
+      CHECK_OK(fetched);
+      if (fetched.ok()) {
+        CHECK_OK(SlottedPageView(fetched.value().data()).CheckStructure());
+      }
     }
   }
 }

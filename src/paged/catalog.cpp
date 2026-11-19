@@ -271,6 +271,19 @@ Status ValidateSchema(const TableSchema& schema) {
   return std::nullopt;
 }
 
+// kInvalidArgument when the sys_columns row of the column at position cannot
+// be stored as one tuple (a long name or TEXT DEFAULT).
+Status CheckColumnRowFits(const TableSchema& schema, std::size_t position) {
+  PageResult<std::vector<std::uint8_t>> column_row = TupleCodec::Encode(
+      Catalog::SysColumnsSchema(), ColumnsRow(0, position, schema));
+  if (!column_row.ok()) {
+    return Invalid(
+        "column " + schema.columns[position].name + " of table " + schema.name +
+        " cannot be stored in the catalog: " + column_row.error().message);
+  }
+  return std::nullopt;
+}
+
 // kInvalidArgument when the sys_tables row of the schema, or one of its
 // sys_columns rows, cannot be stored as one tuple (a long name or TEXT
 // DEFAULT). Encoding is pure, so CreateTable runs it before it allocates the
@@ -284,15 +297,30 @@ Status CheckCatalogRowsFit(const TableSchema& schema) {
         " cannot be stored in the catalog: " + table_row.error().message);
   }
   for (std::size_t position = 0; position < schema.columns.size(); ++position) {
-    PageResult<std::vector<std::uint8_t>> column_row = TupleCodec::Encode(
-        Catalog::SysColumnsSchema(), ColumnsRow(0, position, schema));
-    if (!column_row.ok()) {
-      return Invalid("column " + schema.columns[position].name + " of table " +
-                     schema.name + " cannot be stored in the catalog: " +
-                     column_row.error().message);
+    if (Status status = CheckColumnRowFits(schema, position)) {
+      return status;
     }
   }
   return std::nullopt;
+}
+
+// True when the value has the storage type of the column.
+bool HasColumnType(const Value& value, DataType type) {
+  return value.index() == static_cast<std::size_t>(type);
+}
+
+// Restores the rows a failed DROP TABLE had deleted; the text to add to the
+// original error when that fails too, else empty.
+std::string ReinsertRows(TableHeap& heap, const std::vector<Row>& rows) {
+  std::string failure;
+  for (const Row& row : rows) {
+    PageResult<Rid> inserted = heap.Insert(row);
+    if (!inserted.ok() && failure.empty()) {
+      failure = inserted.error().message;
+    }
+  }
+  return failure.empty() ? std::string()
+                         : "; undoing the rows also failed: " + failure;
 }
 
 }  // namespace
@@ -322,9 +350,10 @@ TableSchema Catalog::SysColumnsSchema() {
   return schema;
 }
 
-Catalog::Catalog(BufferManager& buffer, PageId sys_tables_first_page,
-                 PageId sys_columns_first_page)
+Catalog::Catalog(BufferManager& buffer, PageAllocator& allocator,
+                 PageId sys_tables_first_page, PageId sys_columns_first_page)
     : buffer_(buffer),
+      allocator_(allocator),
       sys_tables_first_page_(sys_tables_first_page),
       sys_columns_first_page_(sys_columns_first_page) {}
 
@@ -339,13 +368,15 @@ Status Catalog::Load() {
     header_next_table_id =
         ReadLe32(header.value().data() + layout::kNextTableId);
   }
-  PageResult<TableHeap> opened_tables = TableHeap::Open(
-      buffer_, SysTablesSchema(), kSysTablesId, sys_tables_first_page_);
+  PageResult<TableHeap> opened_tables =
+      TableHeap::Open(buffer_, allocator_, SysTablesSchema(), kSysTablesId,
+                      sys_tables_first_page_);
   if (!opened_tables.ok()) {
     return opened_tables.error();
   }
-  PageResult<TableHeap> opened_columns = TableHeap::Open(
-      buffer_, SysColumnsSchema(), kSysColumnsId, sys_columns_first_page_);
+  PageResult<TableHeap> opened_columns =
+      TableHeap::Open(buffer_, allocator_, SysColumnsSchema(), kSysColumnsId,
+                      sys_columns_first_page_);
   if (!opened_columns.ok()) {
     return opened_columns.error();
   }
@@ -589,7 +620,7 @@ std::string Catalog::UndoRows(const std::vector<Rid>& table_rows,
 }
 
 PageResult<TableSchema> Catalog::CreateTable(const TableSchema& schema) {
-  std::lock_guard<std::mutex> create_lock(create_mutex_);
+  std::lock_guard<std::mutex> ddl_lock(ddl_mutex_);
   if (sys_tables_ == nullptr) {
     return MakeError(PageErrorCode::kInvalidArgument,
                      "the catalog has not been loaded");
@@ -605,7 +636,7 @@ PageResult<TableSchema> Catalog::CreateTable(const TableSchema& schema) {
     return *status;
   }
   const std::uint32_t table_id = next_table_id_;
-  PageResult<PageId> first_page = TableHeap::Create(buffer_, table_id);
+  PageResult<PageId> first_page = TableHeap::Create(allocator_, table_id);
   if (!first_page.ok()) {
     return first_page.error();
   }
@@ -659,6 +690,168 @@ PageResult<TableSchema> Catalog::CreateTable(const TableSchema& schema) {
   entries_.push_back(Entry{table_id, schema, first_page.value()});
   next_table_id_ = table_id + 1;
   return schema;
+}
+
+PageResult<TableSchema> Catalog::CheckAddColumn(
+    const std::string& table, const domain::ColumnDef& column) const {
+  std::shared_lock<std::shared_mutex> cache_lock(cache_mutex_);
+  auto found = position_of_name_.find(domain::ToLower(table));
+  if (found == position_of_name_.end()) {
+    return MakeError(PageErrorCode::kNotFound, "no table named " + table);
+  }
+  TableSchema extended = entries_[found->second].schema;
+  const std::string lower_column = domain::ToLower(column.name);
+  for (const domain::ColumnDef& existing : extended.columns) {
+    if (domain::ToLower(existing.name) == lower_column) {
+      return MakeError(
+          PageErrorCode::kAlreadyExists,
+          "table " + extended.name + " already has the column " + column.name);
+    }
+  }
+  if (!column.default_value.has_value() ||
+      !HasColumnType(*column.default_value, column.type)) {
+    return Invalid("column " + column.name + " of table " + extended.name +
+                   " needs a DEFAULT of its own type");
+  }
+  extended.columns.push_back(column);
+  if (Status status =
+          CheckColumnRowFits(extended, extended.columns.size() - 1)) {
+    return *status;
+  }
+  return extended;
+}
+
+PageResult<Rid> Catalog::FindTablesRow(std::uint32_t table_id) const {
+  HeapScan scan = sys_tables_->Scan();
+  while (true) {
+    PageResult<std::optional<ScanItem>> next = scan.Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    if (!next.value().has_value()) {
+      return Corrupt("sys_tables has no row for table_id " +
+                     std::to_string(table_id));
+    }
+    if (IntAt(next.value()->row, 0) == static_cast<std::int64_t>(table_id)) {
+      return next.value()->rid;
+    }
+  }
+}
+
+Status Catalog::CommitAddColumn(const std::string& table,
+                                const domain::ColumnDef& column,
+                                PageId new_first_page) {
+  std::lock_guard<std::mutex> ddl_lock(ddl_mutex_);
+  if (sys_tables_ == nullptr) {
+    return MakeError(PageErrorCode::kInvalidArgument,
+                     "the catalog has not been loaded");
+  }
+  PageResult<TableSchema> extended = CheckAddColumn(table, column);
+  if (!extended.ok()) {
+    return extended.error();
+  }
+  // Only the thread that holds ddl_mutex_ changes the cache, so reading it
+  // here needs no lock.
+  const std::size_t entry_index = position_of_name_.at(domain::ToLower(table));
+  const Entry& entry = entries_[entry_index];
+  const std::size_t position = extended.value().columns.size() - 1;
+  PageResult<Rid> tables_rid = FindTablesRow(entry.table_id);
+  if (!tables_rid.ok()) {
+    return tables_rid.error();
+  }
+  const std::int64_t auto_increment =
+      entry.schema.auto_increment_index.has_value()
+          ? static_cast<std::int64_t>(*entry.schema.auto_increment_index)
+          : -1;
+  PageResult<Rid> column_rid = sys_columns_->Insert(
+      ColumnsRow(entry.table_id, position, extended.value()));
+  if (!column_rid.ok()) {
+    return column_rid.error();
+  }
+  Status updated = sys_tables_->Update(
+      tables_rid.value(),
+      TablesRow(entry.table_id, entry.schema.name, new_first_page,
+                static_cast<std::int64_t>(entry.schema.primary_key_index),
+                auto_increment));
+  if (updated.has_value()) {
+    PageError failure = *updated;
+    if (Status undone = sys_columns_->Delete(column_rid.value())) {
+      failure.message += "; undoing the rows also failed: " + undone->message;
+    }
+    return failure;
+  }
+  std::unique_lock<std::shared_mutex> cache_lock(cache_mutex_);
+  entries_[entry_index].schema = std::move(extended).value();
+  entries_[entry_index].first_page = new_first_page;
+  return std::nullopt;
+}
+
+Status Catalog::DropTable(const std::string& table) {
+  std::lock_guard<std::mutex> ddl_lock(ddl_mutex_);
+  if (sys_tables_ == nullptr) {
+    return MakeError(PageErrorCode::kInvalidArgument,
+                     "the catalog has not been loaded");
+  }
+  auto found = position_of_name_.find(domain::ToLower(table));
+  if (found == position_of_name_.end()) {
+    return MakeError(PageErrorCode::kNotFound, "no table named " + table);
+  }
+  const std::size_t entry_index = found->second;
+  const Entry& entry = entries_[entry_index];
+  // A catalog with a foreign key to a missing table fails Load, so a table
+  // that another table references stays.
+  for (const Entry& other : entries_) {
+    if (other.table_id == entry.table_id) {
+      continue;
+    }
+    for (const domain::ForeignKey& key : other.schema.foreign_keys) {
+      if (domain::ToLower(key.ref_table) == domain::ToLower(table)) {
+        return Invalid("table " + entry.schema.name + " is referenced by " +
+                       other.schema.name + "." +
+                       other.schema.columns[key.column_index].name);
+      }
+    }
+  }
+  PageResult<Rid> tables_rid = FindTablesRow(entry.table_id);
+  if (!tables_rid.ok()) {
+    return tables_rid.error();
+  }
+  std::vector<ScanItem> column_items;
+  HeapScan scan = sys_columns_->Scan();
+  while (true) {
+    PageResult<std::optional<ScanItem>> next = scan.Next();
+    if (!next.ok()) {
+      return next.error();
+    }
+    if (!next.value().has_value()) {
+      break;
+    }
+    if (IntAt(next.value()->row, 0) ==
+        static_cast<std::int64_t>(entry.table_id)) {
+      column_items.push_back(std::move(*next.value()));
+    }
+  }
+  std::vector<Row> deleted_columns;
+  for (const ScanItem& item : column_items) {
+    if (Status status = sys_columns_->Delete(item.rid)) {
+      PageError failure = *status;
+      failure.message += ReinsertRows(*sys_columns_, deleted_columns);
+      return failure;
+    }
+    deleted_columns.push_back(item.row);
+  }
+  if (Status status = sys_tables_->Delete(tables_rid.value())) {
+    PageError failure = *status;
+    failure.message += ReinsertRows(*sys_columns_, deleted_columns);
+    return failure;
+  }
+  std::unique_lock<std::shared_mutex> cache_lock(cache_mutex_);
+  entries_.erase(entries_.begin() + static_cast<std::ptrdiff_t>(entry_index));
+  position_of_name_.clear();
+  for (std::size_t index = 0; index < entries_.size(); ++index) {
+    position_of_name_[domain::ToLower(entries_[index].schema.name)] = index;
+  }
+  return std::nullopt;
 }
 
 }  // namespace strata::paged

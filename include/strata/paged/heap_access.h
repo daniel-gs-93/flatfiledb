@@ -33,7 +33,10 @@ enum class ErrorSite {
   // as kRowAccess.
   kOpenTable,
   kCreateTable,  // Database::CreateTable: kInvalidArgument, kAlreadyExists
-  kRowAccess     // a TableHeap read, insert, update or delete
+  // Database::AddColumn: kInvalidArgument (the catalog row or the default),
+  // kNotFound (an unknown table)
+  kAddColumn,
+  kRowAccess  // a TableHeap read, insert, update or delete
 };
 
 struct ErrorContext {

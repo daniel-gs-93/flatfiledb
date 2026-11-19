@@ -11,6 +11,7 @@
 #include "strata/domain/value.h"
 #include "strata/paged/buffer_manager.h"
 #include "strata/paged/catalog.h"
+#include "strata/paged/page_allocator.h"
 #include "strata/paged/page_store.h"
 #include "strata/paged/paged_types.h"
 #include "strata/paged/table_heap.h"
@@ -18,9 +19,9 @@
 // The paged engine's storage layer as one object: the database file, the
 // buffer pool in front of it, the catalog, and the table heaps (design
 // document 2.1, 3.1). Resource-aware. A Database owns the IPageStore,
-// BufferManager, Catalog and TableHeaps through unique_ptr; it can be moved
-// (the references between the members point at heap objects whose addresses do
-// not change) but not copied.
+// BufferManager, PageAllocator, Catalog and TableHeaps through unique_ptr; it
+// can be moved (the references between the members point at heap objects whose
+// addresses do not change) but not copied.
 //
 // Writes need the caller to ensure a single writer at a time (QueryService
 // holds a database-level reader-writer lock for this); reads may run from
@@ -57,7 +58,8 @@ class Database {
   ~Database();
 
   // The table's heap, opened on first use and cached. The pointer is not
-  // owned and is valid until Close or destruction. kNotFound: no such table
+  // owned and is valid until Close, destruction, or AddColumn or DropTable of
+  // that table. kNotFound: no such table
   // (names are case-insensitive). kClosed: after Close. kCorrupt: a page of
   // the table fails its checks.
   PageResult<TableHeap*> Table(const std::string& name);
@@ -66,8 +68,34 @@ class Database {
   PageResult<domain::TableSchema> CreateTable(
       const domain::TableSchema& schema);
 
+  // ALTER TABLE ADD COLUMN (design document 2.6, 3.4, ADR-0045): checks the
+  // new catalog row and that every row still fits in a tuple with the
+  // default appended (no page is written when a check fails), copies the rows
+  // into a new page chain, points the catalog at it, and releases the old
+  // chain. Returns the schema after the change. kNotFound: no such table.
+  // kAlreadyExists: the column exists. kInvalidArgument: no DEFAULT of the
+  // column's type, or the catalog row does not fit. kTooLarge: a row would
+  // exceed kMaxTupleSize. kCorrupt: a page of the table fails its checks.
+  // kClosed: after Close. When a step before the switch fails the new chain
+  // is released and the table is as it was; when only the release of the old
+  // chain fails the change is applied and the message ends with `; statement
+  // was applied but its pages were not reclaimed`. The caller ensures a
+  // single writer and no reader of the table.
+  PageResult<domain::TableSchema> AddColumn(const std::string& table,
+                                            const domain::ColumnDef& column);
+
+  // DROP TABLE (design document 2.6, 3.4, ADR-0046): removes the table from
+  // the catalog and puts its page chain on the free list. kNotFound,
+  // kCorrupt and kClosed as for AddColumn. When a catalog step fails the rows
+  // already deleted are inserted again; when only the release fails the table
+  // is gone and the message ends with `; statement was applied but its pages
+  // were not reclaimed`. The caller ensures a single writer and no reader of
+  // the table.
+  Status DropTable(const std::string& table);
+
   Catalog& catalog() { return *catalog_; }
   BufferManager& buffer() { return *buffer_; }
+  PageAllocator& allocator() { return *allocator_; }
 
   // Writes every dirty page and syncs the file. Calling it again after it
   // succeeded returns success. The caller must hold no PageGuard.
@@ -76,10 +104,15 @@ class Database {
  private:
   Database(std::unique_ptr<IPageStore> store,
            std::unique_ptr<BufferManager> buffer,
+           std::unique_ptr<PageAllocator> allocator,
            std::unique_ptr<Catalog> catalog);
+
+  // Table with tables_mutex_ already held.
+  PageResult<TableHeap*> TableLocked(const std::string& name);
 
   std::unique_ptr<IPageStore> store_;
   std::unique_ptr<BufferManager> buffer_;
+  std::unique_ptr<PageAllocator> allocator_;
   std::unique_ptr<Catalog> catalog_;
   // Lower-cased table name to heap. Looking up a name is O(1); the mutex
   // serializes the opening of a heap, which several reader threads may request

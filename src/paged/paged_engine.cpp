@@ -131,6 +131,32 @@ ExecutionResult RunCreateTable(const domain::CreateTableNode& create,
   return domain::CommandComplete{"CREATE TABLE " + create.schema.name};
 }
 
+ExecutionResult RunAddColumn(const domain::AddColumnNode& add_column,
+                             Database& database) {
+  PageResult<TableSchema> altered =
+      database.AddColumn(add_column.table, add_column.column);
+  if (!altered.ok()) {
+    return ToExecutionError(
+        altered.error(), ErrorContext{ErrorSite::kAddColumn, add_column.table});
+  }
+  if (auto error = WriteBack(database)) {
+    return std::move(*error);
+  }
+  return domain::CommandComplete{"ALTER TABLE " + add_column.table};
+}
+
+ExecutionResult RunDropTable(const domain::DropTableNode& drop,
+                             Database& database) {
+  if (Status status = database.DropTable(drop.table)) {
+    return ToExecutionError(*status,
+                            ErrorContext{ErrorSite::kOpenTable, drop.table});
+  }
+  if (auto error = WriteBack(database)) {
+    return std::move(*error);
+  }
+  return domain::CommandComplete{"DROP TABLE " + drop.table};
+}
+
 // The first row that TupleCodec cannot encode (a row longer than
 // kMaxTupleSize, which is the case that matters), as the mapped error.
 std::optional<ExecutionError> CheckRowLengths(const TableSchema& schema,
@@ -200,11 +226,11 @@ ExecutionResult PagedEngine::Execute(const PlanNode& plan) {
   if (const auto* import = std::get_if<domain::ImportTableNode>(&plan.node)) {
     return RunImport(*import, database_);
   }
-  if (std::holds_alternative<domain::AddColumnNode>(plan.node)) {
-    return Unsupported("paged engine does not support ALTER TABLE ADD COLUMN");
+  if (const auto* add_column = std::get_if<domain::AddColumnNode>(&plan.node)) {
+    return RunAddColumn(*add_column, database_);
   }
-  if (std::holds_alternative<domain::DropTableNode>(plan.node)) {
-    return Unsupported("paged engine does not support DROP TABLE");
+  if (const auto* drop = std::get_if<domain::DropTableNode>(&plan.node)) {
+    return RunDropTable(*drop, database_);
   }
   return Unsupported("unknown plan node");
 }

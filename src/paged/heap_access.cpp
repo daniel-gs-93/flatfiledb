@@ -231,7 +231,8 @@ ExecutionError ToExecutionError(const PageError& error,
     case PageErrorCode::kClosed:
       return MakeExecutionError(ErrorKind::kIo, "database is closed");
     case PageErrorCode::kNotFound:
-      if (context.site == ErrorSite::kOpenTable) {
+      if (context.site == ErrorSite::kOpenTable ||
+          context.site == ErrorSite::kAddColumn) {
         return MakeExecutionError(ErrorKind::kBind,
                                   "unknown table: " + context.table);
       }
@@ -239,7 +240,8 @@ ExecutionError ToExecutionError(const PageError& error,
     case PageErrorCode::kTooLarge:
       return RowTooLongError(context.table);
     case PageErrorCode::kInvalidArgument:
-      if (context.site == ErrorSite::kCreateTable) {
+      if (context.site == ErrorSite::kCreateTable ||
+          context.site == ErrorSite::kAddColumn) {
         return MakeExecutionError(ErrorKind::kUnsupported, error.message);
       }
       return InternalError(error);

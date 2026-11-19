@@ -51,12 +51,16 @@ inline constexpr std::size_t kFilePageSize = 44;
 inline constexpr std::size_t kNextTableId = 48;
 inline constexpr std::size_t kSysTablesFirstPage = 52;
 inline constexpr std::size_t kSysColumnsFirstPage = 56;
+// The first page of the free list, or 0 when no page is free (page 0 is the
+// file header and is never free).
+inline constexpr std::size_t kFreeListHead = 60;
 }  // namespace layout
 
 enum class PageType : std::uint8_t {
   kUnformatted = 0,
   kFileHeader = 1,
-  kHeapData = 2
+  kHeapData = 2,
+  kFree = 3
 };
 
 enum class LatchMode { kShared, kExclusive };

@@ -316,35 +316,55 @@ TEST(test_engine_command_documented_demo_output) {
 TEST(test_engine_command_failure_outputs) {
   testing::TempDir dir;
   const std::string long_text(4100, 'x');
+  // A row of 8 + 2 + 4045 = 4055 bytes: it fits, but one more INT column
+  // would make it 4063 bytes.
+  const std::string near_limit_text(4045, 'y');
 
-  const Lines output =
-      Run({".engine paged", OpenLine(dir.path()),
-           "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);",
-           "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');",
-           "CREATE TABLE posts (id INT PRIMARY KEY, username TEXT REFERENCES "
-           "users(username));",
-           "INSERT INTO posts VALUES (1, 'ann');",
-           "DELETE FROM users WHERE id = 1;",
-           "ALTER TABLE users ADD COLUMN pinned INT DEFAULT 0;",
-           "DROP TABLE posts;",
-           "INSERT INTO users VALUES (3, '" + long_text + "');",
-           "UPDATE users SET username = '" + long_text + "' WHERE id = 2;",
-           "INSERT INTO users VALUES (1, 'zed');",
-           "SELECT id, username FROM users ORDER BY id;"});
+  const Lines output = Run(
+      {".engine paged", OpenLine(dir.path()),
+       "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);",
+       "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');",
+       "CREATE TABLE posts (id INT PRIMARY KEY, username TEXT REFERENCES "
+       "users(username));",
+       "INSERT INTO posts VALUES (1, 'ann');",
+       "DELETE FROM users WHERE id = 1;",
+       "UPDATE users SET username = '" + near_limit_text + "' WHERE id = 2;",
+       "ALTER TABLE users ADD COLUMN pinned INT DEFAULT 0;",
+       "DROP TABLE users;",
+       "INSERT INTO users VALUES (3, '" + long_text + "');",
+       "UPDATE users SET username = '" + long_text + "' WHERE id = 2;",
+       "INSERT INTO users VALUES (1, 'zed');",
+       "SELECT id, LENGTH(username) FROM users ORDER BY id;"});
 
   CHECK_EQ(output,
            Lines({"engine paged", "loaded no tables", "OK CREATE TABLE users",
                   "OK affected=2", "OK CREATE TABLE posts", "OK affected=1",
                   "error: constraint violation: users.id=1 is referenced by "
                   "posts.username",
-                  "error: unsupported: paged engine does not support ALTER "
-                  "TABLE ADD COLUMN",
-                  "error: unsupported: paged engine does not support DROP "
-                  "TABLE",
+                  "OK affected=1",
+                  "error: unsupported: paged engine cannot store a row longer "
+                  "than 4060 bytes in users",
+                  "error: bind: table users is referenced by posts.username",
                   "error: unsupported: paged engine cannot store a row longer "
                   "than 4060 bytes in users",
                   "error: unsupported: paged engine cannot store a row longer "
                   "than 4060 bytes in users",
                   "error: constraint violation: duplicate key: users.id=1",
-                  "id\tusername", "1\tann", "2\tbob"}));
+                  "id\tLENGTH(username)", "1\t3", "2\t4045"}));
+}
+
+TEST(test_engine_command_alter_and_drop_on_paged) {
+  testing::TempDir dir;
+  const Lines output =
+      Run({".engine paged", OpenLine(dir.path()),
+           "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body "
+           "TEXT);",
+           "INSERT INTO notes (body) VALUES ('a'), ('b');",
+           "ALTER TABLE notes ADD COLUMN pinned INT DEFAULT 0;",
+           "SELECT id, body, pinned FROM notes ORDER BY id;",
+           "DROP TABLE notes;", ".tables"});
+  CHECK_EQ(output,
+           Lines({"engine paged", "loaded no tables", "OK CREATE TABLE notes",
+                  "OK affected=2", "OK ALTER TABLE notes", "id\tbody\tpinned",
+                  "1\ta\t0", "2\tb\t0", "OK DROP TABLE notes"}));
 }

@@ -11,10 +11,12 @@
 #include "strata/domain/value.h"
 #include "strata/paged/buffer_manager.h"
 #include "strata/paged/byte_codec.h"
+#include "strata/paged/page_allocator.h"
 #include "strata/paged/page_store.h"
 #include "strata/paged/slotted_page.h"
 #include "strata/paged/table_heap.h"
 #include "test_harness.h"
+#include "test_paged_ddl_support.h"
 #include "test_paged_support.h"
 
 // TableHeap over a MemoryPageStore.
@@ -29,6 +31,7 @@ using strata::paged::BufferManager;
 using strata::paged::kInvalidPageId;
 using strata::paged::LatchMode;
 using strata::paged::MemoryPageStore;
+using strata::paged::PageAllocator;
 using strata::paged::PageGuard;
 using strata::paged::PageId;
 using strata::paged::ReplacementPolicyKind;
@@ -70,12 +73,15 @@ class HeapEnv {
       return;
     }
     buffer_ = std::move(created).value();
-    auto first = TableHeap::Create(*buffer_, kTableId);
+    CHECK_OK(strata::testing::AddFileHeaderPage(*buffer_));
+    allocator_ = std::make_unique<PageAllocator>(*buffer_);
+    auto first = TableHeap::Create(*allocator_, kTableId);
     CHECK_OK(first);
     if (!first.ok()) {
       return;
     }
-    auto opened = TableHeap::Open(*buffer_, schema_, kTableId, first.value());
+    auto opened = TableHeap::Open(*buffer_, *allocator_, schema_, kTableId,
+                                  first.value());
     CHECK_OK(opened);
     if (!opened.ok()) {
       return;
@@ -86,6 +92,7 @@ class HeapEnv {
   bool is_ready() const { return heap_ != nullptr; }
   MemoryPageStore& store() { return store_; }
   BufferManager& buffer() { return *buffer_; }
+  PageAllocator& allocator() { return *allocator_; }
   TableHeap& heap() { return *heap_; }
   const TableSchema& schema() const { return schema_; }
 
@@ -93,6 +100,7 @@ class HeapEnv {
   MemoryPageStore store_;
   TableSchema schema_;
   std::unique_ptr<BufferManager> buffer_;
+  std::unique_ptr<PageAllocator> allocator_;
   std::unique_ptr<TableHeap> heap_;
 };
 
@@ -292,7 +300,7 @@ TEST(test_paged_heap_rejects_invalid_arguments) {
   CHECK_EQ(env.store().PageCount(), pages_before);
 
   // A page of another table.
-  auto other_first = TableHeap::Create(env.buffer(), 6);
+  auto other_first = TableHeap::Create(env.allocator(), 6);
   CHECK_OK(other_first);
   if (other_first.ok()) {
     CHECK_ERROR(env.heap().Get(Rid{other_first.value(), 0}), kInvalidArgument);
@@ -320,8 +328,8 @@ TEST(test_paged_heap_free_space_map_rebuild_matches_incremental) {
     }
   }
   const auto incremental = env.heap().FreeSpaceSnapshot();
-  auto reopened = TableHeap::Open(env.buffer(), env.schema(), kTableId,
-                                  env.heap().first_page());
+  auto reopened = TableHeap::Open(env.buffer(), env.allocator(), env.schema(),
+                                  kTableId, env.heap().first_page());
   CHECK_OK(reopened);
   if (!reopened.ok()) {
     return;
@@ -488,7 +496,9 @@ OpenOutcome OpenAfterDamage(ChainDamage damage) {
     return OpenOutcome{"no buffer", ""};
   }
   std::unique_ptr<BufferManager> buffer = std::move(fresh).value();
-  auto opened = TableHeap::Open(*buffer, env.schema(), kTableId, first_page);
+  PageAllocator allocator(*buffer);
+  auto opened =
+      TableHeap::Open(*buffer, allocator, env.schema(), kTableId, first_page);
   return OpenOutcome{strata::testing::ErrorName(opened),
                      strata::testing::MessageOf(opened)};
 }
@@ -557,4 +567,100 @@ TEST(test_paged_heap_scan_ends_after_a_page_error) {
     }
   }
   CHECK_EQ(env.buffer().PinnedFrameCount(), static_cast<std::size_t>(0));
+}
+
+TEST(test_paged_table_heap_takes_its_pages_from_the_free_list) {
+  HeapEnv env(8);
+  if (!env.is_ready()) {
+    return;
+  }
+  for (std::int64_t id = 0; id < 195; ++id) {
+    MustInsert(env.heap(), HundredByteRow(id));
+  }
+  const std::vector<PageId> first_chain =
+      strata::testing::ChainOf(env.buffer(), env.heap().first_page());
+  CHECK(first_chain.size() >= 5);
+  const PageId page_count = env.store().PageCount();
+  CHECK_OK(env.allocator().Release(env.heap().first_page()));
+
+  auto first_page = TableHeap::Create(env.allocator(), 6);
+  CHECK_OK(first_page);
+  if (!first_page.ok()) {
+    return;
+  }
+  auto opened = TableHeap::Open(env.buffer(), env.allocator(), env.schema(), 6,
+                                first_page.value());
+  CHECK_OK(opened);
+  if (!opened.ok()) {
+    return;
+  }
+  TableHeap& second = opened.value();
+  for (std::int64_t id = 1000; id < 1195; ++id) {
+    MustInsert(second, HundredByteRow(id));
+  }
+  CHECK_EQ(env.store().PageCount(), page_count);
+
+  std::vector<std::int64_t> ids;
+  auto scan = second.Scan();
+  while (true) {
+    auto next = scan.Next();
+    CHECK_OK(next);
+    if (!next.ok() || !next.value().has_value()) {
+      break;
+    }
+    ids.push_back(std::get<std::int64_t>(next.value()->row[0]));
+  }
+  std::ranges::sort(ids);
+  CHECK_EQ(ids.size(), std::size_t{195});
+  CHECK_EQ(ids.front(), std::int64_t{1000});
+  CHECK_EQ(ids.back(), std::int64_t{1194});
+  for (PageId page_id :
+       strata::testing::ChainOf(env.buffer(), first_page.value())) {
+    auto fetched = env.buffer().FetchPage(page_id, LatchMode::kShared);
+    CHECK_OK(fetched);
+    if (fetched.ok()) {
+      CHECK_OK(SlottedPageView(fetched.value().data()).CheckStructure());
+    }
+  }
+}
+
+TEST(test_paged_table_heap_rejects_a_free_page_in_its_chain) {
+  HeapEnv env(8);
+  if (!env.is_ready()) {
+    return;
+  }
+  for (std::int64_t id = 0; id < 100; ++id) {
+    MustInsert(env.heap(), HundredByteRow(id));
+  }
+  const std::vector<PageId> chain =
+      strata::testing::ChainOf(env.buffer(), env.heap().first_page());
+  CHECK(chain.size() >= 3);
+  if (chain.size() < 3) {
+    return;
+  }
+  const PageId middle = chain[1];
+  {
+    auto fetched = env.buffer().FetchPage(middle, LatchMode::kExclusive);
+    CHECK_OK(fetched);
+    if (!fetched.ok()) {
+      return;
+    }
+    PageGuard guard = std::move(fetched).value();
+    const PageId next = SlottedPageView(guard.data()).next_page_id();
+    SlottedPage::FormatFree(guard.mutable_data(), middle, next);
+    guard.MarkDirty();
+  }
+  CHECK_OK(env.buffer().FlushAll());
+  auto fresh =
+      BufferManager::Create(env.store(), 4, ReplacementPolicyKind::kLru);
+  CHECK_OK(fresh);
+  if (!fresh.ok()) {
+    return;
+  }
+  std::unique_ptr<BufferManager> buffer = std::move(fresh).value();
+  PageAllocator allocator(*buffer);
+  auto reopened = TableHeap::Open(*buffer, allocator, env.schema(), kTableId,
+                                  chain.front());
+  CHECK_ERROR(reopened, kCorrupt);
+  CHECK_MESSAGE_CONTAINS(reopened, "page " + std::to_string(middle));
 }

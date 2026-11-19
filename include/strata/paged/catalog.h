@@ -13,6 +13,7 @@
 #include "strata/domain/engine.h"
 #include "strata/domain/value.h"
 #include "strata/paged/buffer_manager.h"
+#include "strata/paged/page_allocator.h"
 #include "strata/paged/paged_types.h"
 #include "strata/paged/table_heap.h"
 
@@ -22,8 +23,9 @@
 // cache, so FindTable is O(1) plus a copy of the schema.
 //
 // FindTable, TableNames, TableId and FirstPage may be called from several
-// threads at once; the cache is guarded by a shared_mutex. CreateTable calls
-// are serialized by a mutex and update the cache under the exclusive lock.
+// threads at once; the cache is guarded by a shared_mutex. CreateTable,
+// CommitAddColumn and DropTable calls are serialized by a mutex and update the
+// cache under the exclusive lock.
 
 namespace strata::paged {
 
@@ -34,10 +36,10 @@ class Catalog : public domain::ICatalog {
   static domain::TableSchema SysColumnsSchema();
 
   // The first pages of the system tables are read from the file header by the
-  // caller and passed in. buffer must outlive the Catalog. Nothing is read
-  // until Load.
-  Catalog(BufferManager& buffer, PageId sys_tables_first_page,
-          PageId sys_columns_first_page);
+  // caller and passed in. buffer and allocator must outlive the Catalog.
+  // Nothing is read until Load.
+  Catalog(BufferManager& buffer, PageAllocator& allocator,
+          PageId sys_tables_first_page, PageId sys_columns_first_page);
 
   // Reads and validates both system tables, including the target of every
   // foreign key, and the file header's next_table_id, and replaces the cache.
@@ -53,6 +55,33 @@ class Catalog : public domain::ICatalog {
   // case-insensitively). kInvalidArgument: any other rule of 2.6 is violated.
   PageResult<domain::TableSchema> CreateTable(
       const domain::TableSchema& schema);
+
+  // ADD COLUMN, first step (design document 2.6, ADR-0045): the schema that
+  // the table has once the column is added, with nothing changed.
+  // kNotFound: no such table. kAlreadyExists: the table has a column of that
+  // name (compared case-insensitively). kInvalidArgument: the column has no
+  // DEFAULT of its type, or its sys_columns row would not fit in one tuple.
+  PageResult<domain::TableSchema> CheckAddColumn(
+      const std::string& table, const domain::ColumnDef& column) const;
+
+  // ADD COLUMN, last step: adds the sys_columns row at the next position,
+  // points the table's sys_tables row at new_first_page, which holds the rows
+  // already copied with the new schema, and updates the cache. The errors
+  // are those of CheckAddColumn, and kCorrupt when sys_tables has no row for
+  // the table. When the second write fails the first is deleted (best
+  // effort) and the message ends with `; undoing the rows also failed: ...`
+  // if that fails too. The table's old pages are not touched.
+  Status CommitAddColumn(const std::string& table,
+                         const domain::ColumnDef& column,
+                         PageId new_first_page);
+
+  // Deletes the sys_columns rows and the sys_tables row of the table and
+  // removes it from the cache. Its table id is not used again. The table's
+  // pages are not touched; the caller releases them afterwards. kNotFound:
+  // no such table. kInvalidArgument: another table has a foreign key to it.
+  // When a delete fails the rows already deleted are
+  // inserted again (best effort), as for CommitAddColumn.
+  Status DropTable(const std::string& table);
 
   // ICatalog: names are matched case-insensitively, and the schema is a copy.
   std::optional<domain::TableSchema> FindTable(
@@ -75,7 +104,11 @@ class Catalog : public domain::ICatalog {
   std::string UndoRows(const std::vector<Rid>& table_rows,
                        const std::vector<Rid>& column_rows);
 
+  // The rid of the sys_tables row of table_id; kCorrupt when there is none.
+  PageResult<Rid> FindTablesRow(std::uint32_t table_id) const;
+
   BufferManager& buffer_;
+  PageAllocator& allocator_;
   PageId sys_tables_first_page_;
   PageId sys_columns_first_page_;
   std::unique_ptr<TableHeap> sys_tables_;
@@ -88,7 +121,7 @@ class Catalog : public domain::ICatalog {
   std::vector<Entry> entries_;
   std::unordered_map<std::string, std::size_t> position_of_name_;
 
-  std::mutex create_mutex_;
+  std::mutex ddl_mutex_;
 };
 
 }  // namespace strata::paged

@@ -297,7 +297,7 @@ TEST(test_paged_slotted_page_detects_corruption) {
   }
   {
     Page broken = base;
-    broken[8] = 3;
+    broken[8] = 4;
     SlottedPage::SealChecksum(broken.data());
     CHECK_ERROR(SlottedPage::VerifyHeader(broken.data(), 9), kCorrupt);
   }
@@ -413,4 +413,35 @@ TEST(test_paged_checksum_detects_every_single_byte_change) {
     page[index] ^= static_cast<std::uint8_t>(1u << (index % 8));
   }
   CHECK_OK(SlottedPage::VerifyHeader(page.data(), 9));
+}
+
+TEST(test_paged_slotted_page_verifies_free_pages) {
+  Page page{};
+  SlottedPage::FormatFree(page.data(), 7, kInvalidPageId);
+  CHECK(SlottedPageView(page.data()).page_type() == PageType::kFree);
+  CHECK_EQ(SlottedPageView(page.data()).next_page_id(), kInvalidPageId);
+  CHECK_EQ(SlottedPageView(page.data()).table_id(), std::uint32_t{0});
+  SlottedPage::SealChecksum(page.data());
+  CHECK(SlottedPage::VerifyHeader(page.data(), 7) == std::nullopt);
+
+  // Page type 4 does not exist.
+  Page unknown_type = page;
+  unknown_type[8] = 4;
+  SlottedPage::SealChecksum(unknown_type.data());
+  const auto unknown_status = SlottedPage::VerifyHeader(unknown_type.data(), 7);
+  CHECK(unknown_status.has_value());
+  if (unknown_status.has_value()) {
+    CHECK(unknown_status->code == strata::paged::PageErrorCode::kCorrupt);
+    CHECK(unknown_status->message.find("page_type 4") != std::string::npos);
+  }
+
+  // A slot array that reaches past free_end.
+  Page bad_slots = page;
+  WriteLe16(bad_slots.data() + 10, 2000);
+  SlottedPage::SealChecksum(bad_slots.data());
+  const auto slot_status = SlottedPage::VerifyHeader(bad_slots.data(), 7);
+  CHECK(slot_status.has_value());
+  if (slot_status.has_value()) {
+    CHECK(slot_status->code == strata::paged::PageErrorCode::kCorrupt);
+  }
 }

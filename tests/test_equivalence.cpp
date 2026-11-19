@@ -489,6 +489,40 @@ const std::vector<std::string>& DefinitionCorpus() {
   return corpus;
 }
 
+// ALTER TABLE ADD COLUMN of each type, DROP TABLE of a table that nothing
+// references, a refused DROP of a referenced table, and a table created again
+// under a dropped name. The users table is referenced by posts and
+// engagements.
+const std::vector<std::string>& SchemaChangeCorpus() {
+  static const std::vector<std::string> corpus = {
+      "CREATE TABLE scratch (id INT PRIMARY KEY, name TEXT, score DOUBLE)",
+      "INSERT INTO scratch VALUES (1, 'a', 1.5), (2, 'b', 2.5), (3, 'c', 3.5)",
+      "ALTER TABLE scratch ADD COLUMN flag INT DEFAULT 0",
+      "ALTER TABLE scratch ADD COLUMN ratio DOUBLE DEFAULT 0.25",
+      "ALTER TABLE scratch ADD COLUMN note TEXT DEFAULT 'none'",
+      "SELECT id, name, score, flag, ratio, note FROM scratch ORDER BY id",
+      "INSERT INTO scratch (id, name) VALUES (4, 'd')",
+      "UPDATE scratch SET flag = 1, note = 'changed' WHERE id = 2",
+      "SELECT id, flag, ratio, note FROM scratch ORDER BY id",
+      "SELECT COUNT(*), SUM(flag) FROM scratch",
+      "SELECT s.id, u.username FROM scratch s JOIN users u ON u.id = s.id "
+      "ORDER BY s.id",
+      "ALTER TABLE scratch ADD COLUMN flag INT DEFAULT 5",
+      "ALTER TABLE missing ADD COLUMN x INT DEFAULT 0",
+      "ALTER TABLE scratch ADD COLUMN y INT",
+      "DROP TABLE users",
+      "DROP TABLE scratch",
+      "SELECT * FROM scratch",
+      "CREATE TABLE scratch (id INT PRIMARY KEY, other TEXT)",
+      "SELECT * FROM scratch",
+      "INSERT INTO scratch VALUES (1, 'again')",
+      "SELECT id, other FROM scratch",
+      "DROP TABLE scratch",
+      "DROP TABLE scratch",
+  };
+  return corpus;
+}
+
 // UPDATE: assignments, no-ops, uniqueness, foreign keys, the cascade (a swap,
 // a chained rename), evaluation errors, and rows that grow until they move to
 // another page.
@@ -608,6 +642,7 @@ void RunFixedCorpus(ReplacementPolicyKind policy) {
       &AggregateCorpus(),
       &InsertCorpus(),
       &DefinitionCorpus(),
+      &SchemaChangeCorpus(),
       &UpdateCorpus(),
       &ZeroCorpus(),
       &DeleteCorpus()};
@@ -786,22 +821,8 @@ void CheckDdlDifferences(EnginePair* pair) {
 
   CHECK(ExpectSame(pair, "CREATE TABLE spare (id INT PRIMARY KEY, v INT)"));
   CHECK(ExpectSame(pair, "INSERT INTO spare VALUES (1, 10)"));
-  const BothResults alter =
-      RunBoth(pair, "ALTER TABLE spare ADD COLUMN extra INT DEFAULT 0");
-  ExpectComplete(alter.flatfile, "ALTER TABLE spare");
-  ExpectError(alter.paged, ErrorKind::kUnsupported,
-              "paged engine does not support ALTER TABLE ADD COLUMN");
-  const BothResults drop = RunBoth(pair, "DROP TABLE spare");
-  ExpectComplete(drop.flatfile, "DROP TABLE spare");
-  ExpectError(drop.paged, ErrorKind::kUnsupported,
-              "paged engine does not support DROP TABLE");
-
-  // The refused statements left the paged table as it was; flatfile dropped it.
-  const BothResults after = RunBoth(pair, "SELECT * FROM spare");
-  CHECK(AsError(after.flatfile) != nullptr &&
-        AsError(after.flatfile)->kind == ErrorKind::kBind);
-  const domain::ResultSet* kept = AsResultSet(after.paged);
-  CHECK(kept != nullptr && kept->columns.size() == 2 && kept->rows.size() == 1);
+  CHECK(ExpectSame(pair, "ALTER TABLE spare ADD COLUMN extra INT DEFAULT 0"));
+  CHECK(ExpectSame(pair, "DROP TABLE spare"));
 }
 
 // Rows below a LIMIT that are never read (ADR-0036).
@@ -1008,6 +1029,32 @@ void CheckDurabilityDifference() {
 // ----------------------------------------------------------------------------
 
 constexpr std::size_t kStatementsPerSeed = 1500;
+// A scratch table is created, altered and dropped after every this many
+// generated statements, so that the DDL runs among the random writes.
+constexpr std::size_t kStatementsPerScratchCycle = 100;
+
+// Creates `table`, fills it, adds an INT and a TEXT column, reads it back,
+// updates it and drops it, comparing the engines after each statement. The
+// table is gone at the end, so the generator never meets it. False after the
+// first difference.
+bool RunScratchCycle(EquivalenceRunner* runner, const std::string& table) {
+  const std::string statements[] = {
+      "CREATE TABLE " + table + " (id INT PRIMARY KEY, v TEXT)",
+      "INSERT INTO " + table + " VALUES (1, 'a'), (2, 'b'), (3, 'c')",
+      "ALTER TABLE " + table + " ADD COLUMN n INT DEFAULT 4",
+      "ALTER TABLE " + table + " ADD COLUMN t TEXT DEFAULT 'z'",
+      "INSERT INTO " + table + " (id, v) VALUES (4, 'd')",
+      "UPDATE " + table + " SET n = n + id WHERE id > 1",
+      "SELECT id, v, n, t FROM " + table + " ORDER BY id",
+      "DROP TABLE " + table,
+  };
+  for (const std::string& sql : statements) {
+    if (!RUN_EQUIVALENT(*runner, sql)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 struct RandomRun {
   std::uint64_t seed;
@@ -1034,6 +1081,10 @@ void RunRandomStatements(const RandomRun& run) {
   StatementGenerator generator(run.seed);
   Outcomes outcomes;
   for (std::size_t i = 0; i < kStatementsPerSeed; ++i) {
+    if (i % kStatementsPerScratchCycle == 0 &&
+        !RunScratchCycle(&runner, "scratch" + std::to_string(i))) {
+      return;
+    }
     const std::string sql = generator.Next(runner.flatfile_tables());
     if (!RUN_EQUIVALENT(runner, sql)) {
       return;

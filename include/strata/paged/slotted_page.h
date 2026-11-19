@@ -61,14 +61,22 @@ class SlottedPage {
   static void Format(std::uint8_t* page, PageId page_id,
                      std::uint32_t table_id);
 
+  // Zeroes the page and writes an empty free page: page_type 3, no slots,
+  // free_end 4096, table_id 0, next_page_id as given (the next free page, or
+  // kInvalidPageId at the end of the free list). The checksum is not
+  // written; see SealChecksum.
+  static void FormatFree(std::uint8_t* page, PageId page_id,
+                         PageId next_page_id);
+
   // Writes the CRC-32C of bytes [4, 4096) into bytes [0, 4). Applies to a page
   // of any type.
   static void SealChecksum(std::uint8_t* page);
 
   // The checks made after a page is read (any page type): checksum, page_id
-  // equal to expected_page_id, page_type in 0..2, and for heap data
-  // free_start <= free_end <= 4096. An all-zero page passes as unformatted.
-  // kCorrupt messages name expected_page_id and the violation. O(kPageSize).
+  // equal to expected_page_id, page_type in 0..3, and for heap data and free
+  // pages free_start <= free_end <= 4096. An all-zero page passes as
+  // unformatted. kCorrupt messages name expected_page_id and the violation.
+  // O(kPageSize).
   static Status VerifyHeader(const std::uint8_t* page, PageId expected_page_id);
 
   SlottedPageView view() const { return SlottedPageView(page_); }
