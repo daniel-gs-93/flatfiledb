@@ -88,24 +88,24 @@ std::string ReadFile(const std::filesystem::path& path) {
 void WriteCatalogFixture(const std::filesystem::path& dir) {
   WriteFile(dir / "catalog.csv",
             infrastructure::SerializeCatalog(
-                {UsersSchema(), PostsSchema(), EngagementsSchema()}));
+                {VisitorsSchema(), StoriesSchema(), ReactionsSchema()}));
 }
 
 void WriteFixtureA(const std::filesystem::path& dir) {
   WriteCatalogFixture(dir);
-  WriteFile(dir / "users.csv",
+  WriteFile(dir / "visitors.csv",
             "id,username,location\n"
             "1,alice,Paris\n"
             "2,carol,Paris\n"
             "3,bob,Rome\n"
             "4,dave,Oslo\n");
-  WriteFile(dir / "posts.csv",
+  WriteFile(dir / "stories.csv",
             "id,content,username,views\n"
             "10,hello world,alice,5\n"
-            "11,second post,alice,0\n"
-            "12,bobs post,bob,7\n");
-  WriteFile(dir / "engagements.csv",
-            "id,postid,username,type,comment,timestamp\n"
+            "11,second story,alice,0\n"
+            "12,bobs story,bob,7\n");
+  WriteFile(dir / "reactions.csv",
+            "id,storyid,username,type,comment,timestamp\n"
             "100,10,bob,like,None,1000\n"
             "101,10,carol,comment,nice,1001\n"
             "102,11,bob,comment,ok,1002\n"
@@ -115,19 +115,19 @@ void WriteFixtureA(const std::filesystem::path& dir) {
 
 void WriteFixtureB(const std::filesystem::path& dir) {
   WriteCatalogFixture(dir);
-  WriteFile(dir / "users.csv",
+  WriteFile(dir / "visitors.csv",
             "id,username,location\n"
             "1,alice,Paris\n"
             "x,bad,Nowhere\n"
             "5,eve\n"
             "1,alicia,Rome\n"
             "2,bob,Rome\n");
-  WriteFile(dir / "posts.csv",
+  WriteFile(dir / "stories.csv",
             "id,content,username,views\n"
             "10,hello,alice,5\n"
             "11,bad views,bob,abc\n");
-  WriteFile(dir / "engagements.csv",
-            "id,postid,username,type,comment,timestamp\n"
+  WriteFile(dir / "reactions.csv",
+            "id,storyid,username,type,comment,timestamp\n"
             "100,10,bob,like,None,1\n"
             "101,99,bob,like,None,2\n"
             "102,10,zed,like,None,3\n"
@@ -136,30 +136,30 @@ void WriteFixtureB(const std::filesystem::path& dir) {
 
 void WriteFixtureC1(const std::filesystem::path& dir) {
   WriteCatalogFixture(dir);
-  WriteFile(dir / "users.csv",
+  WriteFile(dir / "visitors.csv",
             "id,username,location\n"
             "1,a,b\n"
             "2,b,c\n");
-  WriteFile(dir / "posts.csv",
+  WriteFile(dir / "stories.csv",
             "id,content,username,views\n"
             "10,x,a,0\n"
             "11,y,b,0\n");
-  WriteFile(dir / "engagements.csv",
-            "id,postid,username,type,comment,timestamp\n");
+  WriteFile(dir / "reactions.csv",
+            "id,storyid,username,type,comment,timestamp\n");
 }
 
 void WriteFixtureC2(const std::filesystem::path& dir) {
   WriteCatalogFixture(dir);
-  WriteFile(dir / "users.csv",
+  WriteFile(dir / "visitors.csv",
             "id,username,location\n"
             "1,a,b\n"
             "2,b,a\n");
-  WriteFile(dir / "posts.csv",
+  WriteFile(dir / "stories.csv",
             "id,content,username,views\n"
             "10,x,a,0\n"
             "11,y,b,0\n");
-  WriteFile(dir / "engagements.csv",
-            "id,postid,username,type,comment,timestamp\n");
+  WriteFile(dir / "reactions.csv",
+            "id,storyid,username,type,comment,timestamp\n");
 }
 
 void WriteFixtureD(const std::filesystem::path& dir) {
@@ -185,8 +185,8 @@ std::unique_ptr<infrastructure::CsvRepository> MakeCsvRepository(
   return std::make_unique<infrastructure::CsvRepository>(dir.string());
 }
 
-domain::TableSchema UsersSchema() {
-  return domain::TableSchema{"users",
+domain::TableSchema VisitorsSchema() {
+  return domain::TableSchema{"visitors",
                              {Column("id", domain::DataType::kInt),
                               Column("username", domain::DataType::kText),
                               Column("location", domain::DataType::kText)},
@@ -195,27 +195,27 @@ domain::TableSchema UsersSchema() {
                              {1}};
 }
 
-domain::TableSchema PostsSchema() {
-  return domain::TableSchema{"posts",
+domain::TableSchema StoriesSchema() {
+  return domain::TableSchema{"stories",
                              {Column("id", domain::DataType::kInt),
                               Column("content", domain::DataType::kText),
                               Column("username", domain::DataType::kText),
                               Column("views", domain::DataType::kInt)},
                              0,
-                             {domain::ForeignKey{2, "users", 1}}};
+                             {domain::ForeignKey{2, "visitors", 1}}};
 }
 
-domain::TableSchema EngagementsSchema() {
-  return domain::TableSchema{
-      "engagements",
-      {Column("id", domain::DataType::kInt),
-       Column("postId", domain::DataType::kInt),
-       Column("username", domain::DataType::kText),
-       Column("type", domain::DataType::kText),
-       Column("comment", domain::DataType::kText),
-       Column("timestamp", domain::DataType::kInt)},
-      0,
-      {domain::ForeignKey{1, "posts", 0}, domain::ForeignKey{2, "users", 1}}};
+domain::TableSchema ReactionsSchema() {
+  return domain::TableSchema{"reactions",
+                             {Column("id", domain::DataType::kInt),
+                              Column("storyId", domain::DataType::kInt),
+                              Column("username", domain::DataType::kText),
+                              Column("type", domain::DataType::kText),
+                              Column("comment", domain::DataType::kText),
+                              Column("timestamp", domain::DataType::kInt)},
+                             0,
+                             {domain::ForeignKey{1, "stories", 0},
+                              domain::ForeignKey{2, "visitors", 1}}};
 }
 
 domain::TableSchema MeasuresSchema() {
@@ -256,14 +256,14 @@ std::optional<domain::TableSchema> FakeCatalog::FindTable(
     if (table_name != lowered) {
       continue;
     }
-    if (lowered == "users") {
-      return UsersSchema();
+    if (lowered == "visitors") {
+      return VisitorsSchema();
     }
-    if (lowered == "posts") {
-      return PostsSchema();
+    if (lowered == "stories") {
+      return StoriesSchema();
     }
-    if (lowered == "engagements") {
-      return EngagementsSchema();
+    if (lowered == "reactions") {
+      return ReactionsSchema();
     }
     if (lowered == "drafts") {
       return DraftsSchema();
@@ -277,7 +277,7 @@ std::optional<domain::TableSchema> FakeCatalog::FindTable(
 }
 
 std::vector<std::string> FakeCatalog::TableNames() const {
-  return {"users", "posts", "engagements", "measures", "drafts", "jobs"};
+  return {"visitors", "stories", "reactions", "measures", "drafts", "jobs"};
 }
 
 DecoratorRepository::DecoratorRepository(

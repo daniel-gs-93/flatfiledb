@@ -10,9 +10,10 @@
 namespace strata::adapter {
 
 struct ParseError {
-  // 1-based position of the offending token's first character; for an error at
-  // the end of the input it is the input length plus 1; for an unterminated
-  // string literal it is the position of the opening quote.
+  // 1-based byte position of the offending token's first byte (a multi-byte
+  // UTF-8 character before it counts as several); for an error at the end of
+  // the input it is the input length plus 1; for an unterminated string
+  // literal it is the position of the opening quote.
   std::size_t column;
   std::string description;
 };

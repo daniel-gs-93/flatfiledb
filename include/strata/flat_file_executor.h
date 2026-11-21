@@ -52,7 +52,7 @@ enum class SchemaChangeKind { kCreate, kAddColumn, kDrop };
 // it.
 struct SchemaChange {
   SchemaChangeKind kind;
-  std::string tag;    // the CommandComplete tag, e.g. "CREATE TABLE users"
+  std::string tag;    // the CommandComplete tag, e.g. "CREATE TABLE visitors"
   std::string table;  // lower-case name of the affected table
   // The table after the change: new for kCreate (with the adopted rows) and
   // kAddColumn (every row with the default appended); empty for kDrop.

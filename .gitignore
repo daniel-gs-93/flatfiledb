@@ -19,10 +19,3 @@ __pycache__/
 # Engine data files
 *.dat
 .strata.lock
-
-# CSV data, kept local only
-/data/
-
-# Local tooling and process notes
-/mydb/
-

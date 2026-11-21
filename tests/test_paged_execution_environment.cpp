@@ -20,15 +20,16 @@
 #include "strata/sql_parser.h"
 #include "test_equivalence_support.h"
 #include "test_harness.h"
+#include "test_scale_data_support.h"
 #include "test_support.h"
 
 #ifndef STRATA_SOURCE_DIR
 #error "STRATA_SOURCE_DIR must be defined by the build"
 #endif
 
-// The real data volume of data/ and the sample database of sample_my_db/ on
-// both engines (docs/TestDocument.md). Every file the tests write
-// is in a temporary directory; data/ and sample_my_db/ are only read.
+// The generated volume data (test_scale_data_support.h) and the sample
+// database of sample_my_db/ on both engines (docs/TestDocument.md). Every file
+// the tests write is in a temporary directory; sample_my_db/ is only read.
 
 namespace strata::testing {
 
@@ -42,15 +43,6 @@ constexpr std::size_t kPagedFrames = 64;  // 256 KiB, far below the data volume
 
 std::filesystem::path SourceDirectory() {
   return std::filesystem::path(STRATA_SOURCE_DIR);
-}
-
-std::filesystem::path DataDirectory() { return SourceDirectory() / "data"; }
-
-bool HasData() {
-  std::error_code error;
-  return std::filesystem::exists(DataDirectory() / "users.csv", error) &&
-         std::filesystem::exists(DataDirectory() / "posts.csv", error) &&
-         std::filesystem::exists(DataDirectory() / "engagements.csv", error);
 }
 
 // Copies the regular files of `from` into `to` (created when missing). Returns
@@ -81,23 +73,23 @@ bool CopyFiles(const std::filesystem::path& from,
 }
 
 // ----------------------------------------------------------------------------
-// Two engines over a copy of data/.
+// Two engines over the CSV files of the volume data.
 // ----------------------------------------------------------------------------
 
-// The imports of the README: users.csv with the id typed as INT and the three
-// malformed rows skipped, the other two files as they are.
+// The three imports: depots.csv with the id typed as INT and the three
+// rejected lines skipped, the other two files as they are.
 std::vector<domain::ImportRequest> DataImports(
     const std::filesystem::path& source) {
-  domain::ImportRequest users;
-  users.file_path = (source / "users.csv").string();
-  users.primary_key = "id";
-  users.column_types.emplace_back("id", domain::DataType::kInt);
-  users.should_skip_bad_rows = true;
-  domain::ImportRequest posts;
-  posts.file_path = (source / "posts.csv").string();
-  domain::ImportRequest engagements;
-  engagements.file_path = (source / "engagements.csv").string();
-  return {users, posts, engagements};
+  domain::ImportRequest depots;
+  depots.file_path = (source / "depots.csv").string();
+  depots.primary_key = "id";
+  depots.column_types.emplace_back("id", domain::DataType::kInt);
+  depots.should_skip_bad_rows = true;
+  domain::ImportRequest parcels;
+  parcels.file_path = (source / "parcels.csv").string();
+  domain::ImportRequest scans;
+  scans.file_path = (source / "scans.csv").string();
+  return {depots, parcels, scans};
 }
 
 // A flat-file engine and a paged engine, each with its own directory under one
@@ -118,66 +110,72 @@ bool OpenDataEngines(const std::filesystem::path& root, DataEngines* engines) {
   return engines->flatfile != nullptr && engines->paged.service != nullptr;
 }
 
-// The queries of the README that read data/, then twelve more join, aggregate,
-// sort and LIMIT queries. Every LIMIT sits behind an ORDER BY that ends with a
-// unique key, so the cut is the same on both engines.
+// Four basic queries, then fifteen more join, aggregate, sort and LIMIT
+// queries. Every LIMIT sits behind an ORDER BY that ends with a unique key, so
+// the cut is the same on both engines.
 const std::vector<std::string>& DataQueries() {
   static const std::vector<std::string> queries = {
-      "SELECT username, location FROM users WHERE id = 1",
-      "SELECT id, UPPER(username), LENGTH(username) FROM users WHERE username "
-      "LIKE 'kn%' ORDER BY id LIMIT 2",
-      "SELECT COUNT(*), MIN(timestamp), MAX(timestamp), AVG(timestamp) FROM "
-      "engagements",
-      "SELECT e.type, COUNT(*) FROM engagements e JOIN users u ON e.username = "
-      "u.username WHERE u.location = 'Patriciashire' GROUP BY e.type",
-      "SELECT location, COUNT(*) FROM users GROUP BY location ORDER BY 2 DESC, "
-      "1 LIMIT 10",
-      "SELECT p.id, u.location FROM posts p JOIN users u ON p.username = "
-      "u.username ORDER BY p.id LIMIT 50",
-      "SELECT u.location, COUNT(*), SUM(p.views) FROM users u JOIN posts p ON "
-      "p.username = u.username JOIN engagements e ON e.postid = p.id GROUP BY "
-      "u.location ORDER BY 2 DESC, 1 LIMIT 10",
-      "SELECT type, COUNT(*), MIN(timestamp), MAX(timestamp) FROM engagements "
-      "GROUP BY type ORDER BY type",
-      "SELECT username, COUNT(*) FROM posts GROUP BY username ORDER BY 2 DESC, "
-      "1 LIMIT 10",
-      "SELECT id, content, views FROM posts ORDER BY views DESC, id LIMIT 10",
-      "SELECT COUNT(*) FROM users u JOIN posts p ON p.username = u.username",
-      "SELECT e.id, p.id, u.id FROM engagements e JOIN posts p ON e.postid = "
-      "p.id JOIN users u ON e.username = u.username WHERE e.type = 'comment' "
-      "ORDER BY e.id LIMIT 10",
-      "SELECT LENGTH(content), COUNT(*) FROM posts GROUP BY LENGTH(content) "
+      "SELECT code, town FROM depots WHERE id = 1",
+      "SELECT id, UPPER(code), LENGTH(code) FROM depots WHERE code LIKE "
+      "'d000%' ORDER BY id LIMIT 2",
+      "SELECT COUNT(*), MIN(scanned_at), MAX(scanned_at), AVG(scanned_at) "
+      "FROM scans",
+      "SELECT s.status, COUNT(*) FROM scans s JOIN depots d ON s.depot_code = "
+      "d.code WHERE d.town = 'Wrenfold' GROUP BY s.status",
+      "SELECT town, COUNT(*) FROM depots GROUP BY town ORDER BY 2 DESC, 1 "
+      "LIMIT 10",
+      "SELECT p.id, d.town FROM parcels p JOIN depots d ON p.depot_code = "
+      "d.code ORDER BY p.id LIMIT 50",
+      "SELECT d.town, COUNT(*), SUM(p.weight_g) FROM depots d JOIN parcels p "
+      "ON p.depot_code = d.code JOIN scans s ON s.parcel_id = p.id GROUP BY "
+      "d.town ORDER BY 2 DESC, 1 LIMIT 10",
+      "SELECT status, COUNT(*), MIN(scanned_at), MAX(scanned_at) FROM scans "
+      "GROUP BY status ORDER BY status",
+      "SELECT depot_code, COUNT(*) FROM parcels GROUP BY depot_code ORDER BY "
+      "2 DESC, 1 LIMIT 10",
+      "SELECT id, label, weight_g FROM parcels ORDER BY weight_g DESC, id "
+      "LIMIT 10",
+      "SELECT COUNT(*) FROM depots d JOIN parcels p ON p.depot_code = d.code",
+      "SELECT s.id, p.id, d.id FROM scans s JOIN parcels p ON s.parcel_id = "
+      "p.id JOIN depots d ON s.depot_code = d.code WHERE s.status = 'delayed' "
+      "ORDER BY s.id LIMIT 10",
+      "SELECT LENGTH(label), COUNT(*) FROM parcels GROUP BY LENGTH(label) "
       "ORDER BY 1 LIMIT 15",
-      "SELECT SUM(views), MIN(views), MAX(views), AVG(views) FROM posts",
-      "SELECT p.username, MAX(e.timestamp) FROM posts p JOIN engagements e ON "
-      "e.postid = p.id GROUP BY p.username ORDER BY 2 DESC, 1 LIMIT 5",
-      "SELECT e.username, COUNT(*) FROM engagements e GROUP BY e.username "
-      "ORDER BY 2 DESC, 1 LIMIT 10",
-      "SELECT username, id FROM users ORDER BY username, id LIMIT 10 OFFSET "
-      "5000",
-      "SELECT id, username FROM users WHERE id < 0",
-      "SELECT AVG(views) FROM posts WHERE id < 0",
+      "SELECT SUM(weight_g), MIN(weight_g), MAX(weight_g), AVG(weight_g) FROM "
+      "parcels",
+      "SELECT p.depot_code, MAX(s.scanned_at) FROM parcels p JOIN scans s ON "
+      "s.parcel_id = p.id GROUP BY p.depot_code ORDER BY 2 DESC, 1 LIMIT 5",
+      "SELECT s.depot_code, COUNT(*) FROM scans s GROUP BY s.depot_code ORDER "
+      "BY 2 DESC, 1 LIMIT 10",
+      "SELECT code, id FROM depots ORDER BY code, id LIMIT 10 OFFSET 5000",
+      "SELECT id, code FROM depots WHERE id < 0",
+      "SELECT AVG(weight_g) FROM parcels WHERE id < 0",
   };
   return queries;
 }
 
 }  // namespace
 
-TEST(test_environment_data_directory_queries_match_on_both_engines) {
-  if (!HasData()) {
-    SKIP("data/ is missing");
-  }
+TEST(test_environment_volume_data_queries_match_on_both_engines) {
   TempDir work;
-  if (!CopyFiles(DataDirectory(), work.path() / "source")) {
-    return;
-  }
+  WriteScaleCsv(work.path() / "source");
   DataEngines engines;
   if (!OpenDataEngines(work.path(), &engines)) {
     return;
   }
   EquivalenceRunner runner(*engines.flatfile, *engines.paged.service,
-                           "data volume");
+                           "volume data");
 
+  // What each import reports: depots.csv skips its three rejected lines.
+  const std::vector<std::string> expected_tags = {
+      "IMPORT depots (imported 10000 rows, skipped 3)",
+      "IMPORT parcels (imported 10000 rows)",
+      "IMPORT scans (imported 10000 rows)"};
+  const std::vector<std::string> expected_depot_notes = {
+      "skipped line 12: id 'x10' is not INT",
+      "skipped line 17: expected 3 fields, found 2",
+      "skipped line 18: expected 3 fields, found 4"};
+  std::size_t import_index = 0;
   for (const domain::ImportRequest& request :
        DataImports(work.path() / "source")) {
     if (!ReportDifference(__FILE__, __LINE__, runner.RunImport(request))) {
@@ -186,6 +184,15 @@ TEST(test_environment_data_directory_queries_match_on_both_engines) {
     const domain::CommandComplete* complete =
         AsCommandComplete(runner.last_paged_result());
     CHECK(complete != nullptr);
+    if (complete != nullptr) {
+      CHECK_EQ(complete->tag, expected_tags[import_index]);
+      if (import_index == 0) {
+        CHECK(complete->notes == expected_depot_notes);
+      } else {
+        CHECK(complete->notes.empty());
+      }
+    }
+    ++import_index;
   }
   for (const std::string& sql : DataQueries()) {
     if (!RUN_EQUIVALENT(runner, sql)) {
@@ -199,7 +206,7 @@ TEST(test_environment_data_directory_queries_match_on_both_engines) {
   CHECK(stats.evictions > 0);
   CHECK_EQ(engines.paged.engine->database().buffer().PinnedFrameCount(),
            std::size_t{0});
-  CHECK(engines.paged.engine->database().buffer().PageCount() > 540);
+  CHECK(engines.paged.engine->database().buffer().PageCount() > 500);
 }
 
 // ----------------------------------------------------------------------------
@@ -477,19 +484,14 @@ void PrintTiming(const std::string& workload, double flatfile_ms,
 }  // namespace
 
 TEST(test_environment_timing_of_both_engines) {
-  if (!HasData()) {
-    SKIP("data/ is missing");
-  }
   TempDir work;
-  if (!CopyFiles(DataDirectory(), work.path() / "source")) {
-    return;
-  }
+  WriteScaleCsv(work.path() / "source");
   const std::filesystem::path source = work.path() / "source";
 
   // The load: fresh databases each time.
   const double flatfile_import = TimeImports(source, false);
   const double paged_import = TimeImports(source, true);
-  PrintTiming("import of users, posts and engagements (" +
+  PrintTiming("import of depots, parcels and scans (" +
                   std::to_string(kImportRepetitions) + " runs)",
               flatfile_import, paged_import);
 
@@ -505,16 +507,13 @@ TEST(test_environment_timing_of_both_engines) {
       return;
     }
   }
-  const std::vector<std::string> readme_queries = {
+  const std::vector<std::string> basic_queries = {
       DataQueries()[0], DataQueries()[1], DataQueries()[2], DataQueries()[3]};
   const std::vector<TimedStatement> workloads = {
-      {"the four README queries", readme_queries},
-      {"three-table join with GROUP BY",
-       {"SELECT u.location, COUNT(*), SUM(p.views) FROM users u JOIN posts p "
-        "ON p.username = u.username JOIN engagements e ON e.postid = p.id "
-        "GROUP BY u.location ORDER BY 2 DESC, 1 LIMIT 10"}},
+      {"the four basic queries", basic_queries},
+      {"three-table join with GROUP BY", {DataQueries()[6]}},
       {"LIMIT 10 behind ORDER BY id",
-       {"SELECT id, username FROM users ORDER BY id LIMIT 10"}},
+       {"SELECT id, code FROM depots ORDER BY id LIMIT 10"}},
   };
   for (const TimedStatement& workload : workloads) {
     for (const std::string& sql : workload.sql) {
@@ -533,7 +532,7 @@ TEST(test_environment_timing_of_both_engines) {
 
   // LIMIT 10 without ORDER BY stops early on paged. Which ten rows come back
   // is undefined (2.8), so only the row count and the columns are compared.
-  const std::string unordered = "SELECT id, username FROM users LIMIT 10";
+  const std::string unordered = "SELECT id, code FROM depots LIMIT 10";
   const std::vector<std::string> unordered_sql = {unordered};
   for (QueryService* service :
        {engines.flatfile.get(), engines.paged.service.get()}) {

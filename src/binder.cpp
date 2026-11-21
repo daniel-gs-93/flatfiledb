@@ -849,15 +849,29 @@ PlanPtr MakePlan(Node node) {
   return plan;
 }
 
-// Combines conjuncts into ((c0 AND c1) AND c2) ... Precondition: conjuncts is
-// not empty. Moves every element out; the caller's vector keeps null entries.
-BoundExprPtr ChainWithAnd(std::vector<BoundExprPtr>& conjuncts) {
-  BoundExprPtr combined = std::move(conjuncts[0]);
-  for (std::size_t i = 1; i < conjuncts.size(); ++i) {
-    combined = MakeBinary(ExprType::kBool, BinaryOp::kAnd, std::move(combined),
-                          std::move(conjuncts[i]));
+// Combines conjuncts[first, last) into one AND tree that splits the range at
+// its middle. The leaves keep their order and AND is evaluated left to right,
+// so the result and the first failing operand are those of a left-deep chain.
+// The depth is log2(count) where a chain would have count levels, and the
+// evaluator and the plan destructor recurse over that depth: a parenthesized
+// WHERE of 100,000 balanced terms passes the parser limits.
+// Precondition: first < last.
+BoundExprPtr CombineRangeWithAnd(std::vector<BoundExprPtr>& conjuncts,
+                                 std::size_t first, std::size_t last) {
+  if (last - first == 1) {
+    return std::move(conjuncts[first]);
   }
-  return combined;
+  const std::size_t middle = first + (last - first) / 2;
+  BoundExprPtr lhs = CombineRangeWithAnd(conjuncts, first, middle);
+  BoundExprPtr rhs = CombineRangeWithAnd(conjuncts, middle, last);
+  return MakeBinary(ExprType::kBool, BinaryOp::kAnd, std::move(lhs),
+                    std::move(rhs));
+}
+
+// Combines conjuncts into one balanced AND tree. Precondition: conjuncts is
+// not empty. Moves every element out; the caller's vector keeps null entries.
+BoundExprPtr CombineWithAnd(std::vector<BoundExprPtr>& conjuncts) {
+  return CombineRangeWithAnd(conjuncts, 0, conjuncts.size());
 }
 
 // Takes ownership of child and, when conjuncts is not empty, moves them out
@@ -866,7 +880,7 @@ PlanPtr WrapInFilter(PlanPtr child, std::vector<BoundExprPtr>& conjuncts) {
   if (conjuncts.empty()) {
     return child;
   }
-  return MakePlan(FilterNode{std::move(child), ChainWithAnd(conjuncts)});
+  return MakePlan(FilterNode{std::move(child), CombineWithAnd(conjuncts)});
 }
 
 // One output column of a SELECT, with `*` already expanded. BuildSelectPlan

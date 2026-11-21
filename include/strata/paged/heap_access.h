@@ -29,8 +29,8 @@ namespace strata::paged {
 // things at different call sites (design document 2.13).
 enum class ErrorSite {
   // Database::Table: kNotFound is an unknown table. A kNotFound for a table
-  // that the catalog has comes from its page chain; the callers map that one
-  // as kRowAccess.
+  // that the catalog has comes from its page chain; OpenTableError maps that
+  // one as an internal error.
   kOpenTable,
   kCreateTable,  // Database::CreateTable: kInvalidArgument, kAlreadyExists
   // Database::AddColumn: kInvalidArgument (the catalog row or the default),

@@ -55,7 +55,7 @@ TEST(test_query_service_binds_then_executes_on_engine) {
   strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(OneRowResult())));
 
-  domain::Statement statement = testing::MustParse("SELECT id FROM users");
+  domain::Statement statement = testing::MustParse("SELECT id FROM visitors");
   domain::ExecutionResult result = service.Execute(statement);
 
   CHECK_EQ(log->execute_calls, 1);
@@ -79,7 +79,8 @@ TEST(test_query_service_bind_error_does_not_reach_engine) {
   strata::application::QueryService service(std::make_unique<FakeEngine>(
       log, domain::ExecutionResult(OneRowResult())));
 
-  domain::Statement statement = testing::MustParse("SELECT nosuch FROM users");
+  domain::Statement statement =
+      testing::MustParse("SELECT nosuch FROM visitors");
   domain::ExecutionResult result = service.Execute(statement);
 
   const domain::ExecutionError* error = testing::AsError(result);
@@ -103,7 +104,7 @@ TEST(test_query_service_propagates_engine_errors) {
     strata::application::QueryService service(
         std::make_unique<FakeEngine>(log, domain::ExecutionResult(canned)));
 
-    domain::Statement statement = testing::MustParse("SELECT id FROM users");
+    domain::Statement statement = testing::MustParse("SELECT id FROM visitors");
     domain::ExecutionResult result = service.Execute(statement);
 
     const domain::ExecutionError* error = testing::AsError(result);
@@ -146,7 +147,7 @@ TEST(test_query_service_describe_catalog_returns_schemas_in_order) {
   for (const domain::TableSchema& schema : schemas) {
     names.push_back(schema.name);
   }
-  CHECK_EQ(names, std::vector<std::string>({"users", "posts", "engagements",
+  CHECK_EQ(names, std::vector<std::string>({"visitors", "stories", "reactions",
                                             "measures", "drafts", "jobs"}));
   CHECK_EQ(schemas.size(), catalog.TableNames().size());
   for (std::size_t i = 0; i < schemas.size() && i < catalog.TableNames().size();

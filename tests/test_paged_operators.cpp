@@ -249,7 +249,7 @@ void AddJoinTables(TestTables* tables) {
 
 TEST(test_operators_scan_yields_stream_rows_and_unknown_table) {
   TestTables tables;
-  tables.Add("users",
+  tables.Add("visitors",
              {Column("id", DataType::kInt), Column("name", DataType::kText),
               Column("score", DataType::kDouble)},
              Rows{Row{Int(3), Text("carol"), Real(2.5)},
@@ -257,7 +257,7 @@ TEST(test_operators_scan_yields_stream_rows_and_unknown_table) {
                   Row{Int(2), Text("bob"), Real(-1.5)}});
 
   // The order of the stream is kept, and so are the columns.
-  PlanPtr scan = ScanPlan("users");
+  PlanPtr scan = ScanPlan("visitors");
   Outcome outcome = RunPlan(*scan, tables.reader);
   CHECK_EQ(ErrorText(outcome), "none");
   CHECK_EQ(
@@ -267,7 +267,7 @@ TEST(test_operators_scan_yields_stream_rows_and_unknown_table) {
            (std::vector<std::string>{"id:INT", "name:TEXT", "score:DOUBLE"}));
 
   // Table names are case-insensitive.
-  PlanPtr other_spelling = ScanPlan("UsErS");
+  PlanPtr other_spelling = ScanPlan("ViSiToRs");
   Outcome other = RunPlan(*other_spelling, tables.reader);
   CHECK_EQ(ErrorText(other), "none");
   CHECK_EQ(other.rows.size(), static_cast<std::size_t>(3));

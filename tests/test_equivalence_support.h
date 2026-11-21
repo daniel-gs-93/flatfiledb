@@ -90,8 +90,9 @@ using TableContents = std::map<std::string, std::vector<domain::Row>>;
 class EquivalenceRunner {
  public:
   // label prefixes every difference (a seed or a corpus name). The constructor
-  // snapshots both services; a snapshot that fails or differs is reported by
-  // the first Run.
+  // snapshots both services; a snapshot that fails is reported by the first
+  // Run. The two snapshots are not compared with each other: a difference in
+  // the starting data shows at the first write or the first SELECT.
   EquivalenceRunner(application::QueryService& flatfile,
                     application::QueryService& paged, std::string label);
 

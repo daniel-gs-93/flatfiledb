@@ -39,8 +39,8 @@ class TempDir {
 void WriteFile(const std::filesystem::path& path, const std::string& content);
 std::string ReadFile(const std::filesystem::path& path);
 
-// Writes catalog.csv for the three tables of the `data/` example (users,
-// posts, engagements; users.username is UNIQUE).
+// Writes catalog.csv for the three tables of the catalog fixture (visitors,
+// stories, reactions; visitors.username is UNIQUE).
 void WriteCatalogFixture(const std::filesystem::path& dir);
 
 // Each of the following writes catalog.csv and the table files of the fixture
@@ -57,11 +57,11 @@ void WriteFixtureD(const std::filesystem::path& dir);
 std::unique_ptr<infrastructure::CsvRepository> MakeCsvRepository(
     const std::filesystem::path& dir);
 
-// The schemas of the catalog fixture of docs/TestDocument.md (users.username
+// The schemas of the catalog fixture of docs/TestDocument.md (visitors.username
 // is UNIQUE), plus the test-only table measures(id INT, score DOUBLE).
-domain::TableSchema UsersSchema();
-domain::TableSchema PostsSchema();
-domain::TableSchema EngagementsSchema();
+domain::TableSchema VisitorsSchema();
+domain::TableSchema StoriesSchema();
+domain::TableSchema ReactionsSchema();
 domain::TableSchema MeasuresSchema();
 // Test-only tables for INSERT that omits columns: drafts(id INT PRIMARY KEY,
 // body TEXT, owner TEXT DEFAULT 'none', score DOUBLE DEFAULT 1.0) and
@@ -69,7 +69,7 @@ domain::TableSchema MeasuresSchema();
 domain::TableSchema DraftsSchema();
 domain::TableSchema JobsSchema();
 
-// ICatalog over the schemas above (users, posts, engagements, measures,
+// ICatalog over the schemas above (visitors, stories, reactions, measures,
 // drafts, jobs).
 class FakeCatalog : public domain::ICatalog {
  public:

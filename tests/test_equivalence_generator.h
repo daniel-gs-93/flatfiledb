@@ -15,8 +15,8 @@
 
 namespace strata::testing {
 
-// CREATE TABLE and INSERT statements for users (6 rows), posts (10 rows) and
-// engagements (20 rows), in an order the foreign keys allow. The data repeats
+// CREATE TABLE and INSERT statements for visitors (6 rows), stories (10 rows)
+// and reactions (20 rows), in an order the foreign keys allow. The data repeats
 // text values, mixes DOUBLE values, and holds one pair of usernames (ann,
 // annx) that a rename can chain.
 const std::vector<std::string>& EquivalenceSetupStatements();
@@ -100,9 +100,9 @@ class StatementGenerator {
 
   // INSERT, UPDATE, DELETE.
   std::string Insert();
-  std::string InsertUsers();
-  std::string InsertPosts();
-  std::string InsertEngagements();
+  std::string InsertVisitors();
+  std::string InsertStories();
+  std::string InsertReactions();
   std::string Update();
   std::string UpdatePlain();
   std::string UpdateText(const std::string& table,

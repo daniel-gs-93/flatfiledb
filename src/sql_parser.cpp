@@ -55,6 +55,9 @@ namespace {
 // stack.
 constexpr std::size_t kMaxNestingDepth = 100;
 constexpr std::size_t kMaxExpressionDepth = 500;
+// The plan of a SELECT is a chain as deep as its joins, and 20,000 joins ended
+// the CLI with a segmentation fault (ADR-0011).
+constexpr std::size_t kMaxJoins = 64;
 
 enum class TokenKind {
   kEnd,
@@ -107,8 +110,8 @@ enum class TokenKind {
 
 struct Token {
   TokenKind kind;
-  std::size_t offset;  // 0-based index of the first character in the input
-  std::size_t length;  // number of input characters the token spans
+  std::size_t offset;  // 0-based index of the first byte in the input
+  std::size_t length;  // number of input bytes the token spans
   // Identifier spelling, digits of a number, decoded content of a string, or
   // the description of a lexical error; empty for punctuation and keywords.
   std::string text;
@@ -762,7 +765,13 @@ class Parser {
       return std::nullopt;
     }
     select.from = std::move(*from);
-    while (Match(TokenKind::kJoin)) {
+    while (Current().kind == TokenKind::kJoin) {
+      if (select.joins.size() >= kMaxJoins) {
+        Fail(Current(), "too many JOINs: at most " + std::to_string(kMaxJoins) +
+                            " are allowed");
+        return std::nullopt;
+      }
+      Advance();
       std::optional<domain::TableRef> table = ParseTableRef();
       if (!table.has_value()) {
         return std::nullopt;

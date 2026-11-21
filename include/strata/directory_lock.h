@@ -26,8 +26,10 @@ class DirectoryLock {
   // Takes the lock without waiting. The description is
   // "database is locked by another process" when another open file description
   // holds it. A directory in which the lock file cannot be created or opened
-  // for lack of permission yields no lock and no error: a process that cannot
-  // write there needs no protection.
+  // for lack of permission yields no lock and no error. Such a process cannot
+  // commit, because a commit creates files in the directory, but it can still
+  // append to a table file it may write; only the change check of ADR-0022
+  // guards that append.
   static LockOutcome Acquire(const std::string& directory);
 
   ~DirectoryLock();

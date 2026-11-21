@@ -33,8 +33,10 @@ bool TryParseInt(const std::string& text, int64_t& parsed) {
   return result.ec == std::errc() && result.ptr == end;
 }
 
-// strtod accepts white space, a '+' sign, hexadecimal and "inf"; only a plain
-// decimal number is a DOUBLE in a CSV file.
+// Only a plain decimal number is a DOUBLE in a CSV file: the character filter
+// keeps out white space, a '+' sign, hexadecimal and "inf". std::from_chars
+// ignores the locale and reports a value that underflows to 0 or overflows as
+// result_out_of_range, where strtod would return 0 or infinity.
 bool TryParseDouble(const std::string& text, double& parsed) {
   if (text.empty() || text.front() == '+') {
     return false;
@@ -42,9 +44,15 @@ bool TryParseDouble(const std::string& text, double& parsed) {
   if (text.find_first_not_of("0123456789-.eE") != std::string::npos) {
     return false;
   }
-  char* end = nullptr;
-  parsed = std::strtod(text.c_str(), &end);
-  return end == text.c_str() + text.size() && std::isfinite(parsed);
+  const char* begin = text.data();
+  const char* end = begin + text.size();
+  double value = 0.0;
+  const std::from_chars_result result = std::from_chars(begin, end, value);
+  if (result.ec != std::errc() || result.ptr != end || !std::isfinite(value)) {
+    return false;
+  }
+  parsed = value;
+  return true;
 }
 
 std::optional<domain::Value> ParseValue(const std::string& field,
@@ -145,6 +153,23 @@ std::string LinePrefix(std::size_t line_number) {
   return "line " + std::to_string(line_number) + ": ";
 }
 
+// The name rule of a CREATE TABLE statement: a letter or '_', then letters,
+// digits or '_'.
+bool IsIdentifier(const std::string& name) {
+  if (name.empty() || (name.front() >= '0' && name.front() <= '9')) {
+    return false;
+  }
+  for (const char letter : name) {
+    const bool is_ascii_letter =
+        (letter >= 'a' && letter <= 'z') || (letter >= 'A' && letter <= 'Z');
+    if (!(is_ascii_letter || letter == '_' ||
+          (letter >= '0' && letter <= '9'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool TryParseFlag(const std::string& text, bool& flag) {
   if (text != "0" && text != "1") {
     return false;
@@ -168,6 +193,13 @@ std::optional<std::string> ParseCatalogRow(
   row->column = fields[2];
   if (row->table.empty() || row->column.empty()) {
     return where + "table and column names must not be empty";
+  }
+  // The table name becomes a file name, so a name such as ../x must not load.
+  if (!IsIdentifier(row->table)) {
+    return where + "table name '" + row->table + "' is not an identifier";
+  }
+  if (!IsIdentifier(row->column)) {
+    return where + "column name '" + row->column + "' is not an identifier";
   }
   int64_t position = 0;
   if (!TryParseInt(fields[1], position) || position < 0) {
@@ -395,6 +427,12 @@ std::optional<domain::Row> ParseRow(const std::vector<std::string>& fields,
   domain::Row row;
   row.reserve(fields.size());
   for (std::size_t i = 0; i < fields.size(); ++i) {
+    // The caller has already removed the \r of a CRLF break; one that remains
+    // is part of the field, and a rewrite would silently change it.
+    if (schema.columns[i].type == domain::DataType::kText &&
+        fields[i].find('\r') != std::string::npos) {
+      return std::nullopt;
+    }
     std::optional<domain::Value> value =
         ParseValue(fields[i], schema.columns[i].type);
     if (!value) {

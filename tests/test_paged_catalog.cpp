@@ -192,15 +192,15 @@ TEST(test_paged_catalog_create_table_validation) {
     return;
   }
   Database& database = *env.database;
-  CHECK_OK(database.CreateTable(BasicSchema("users")));
+  CHECK_OK(database.CreateTable(BasicSchema("visitors")));
 
   struct Case {
     TableSchema schema;
     const char* expected_error;
   };
   std::vector<Case> cases;
-  cases.push_back({BasicSchema("users"), "kAlreadyExists"});
-  cases.push_back({BasicSchema("USERS"), "kAlreadyExists"});
+  cases.push_back({BasicSchema("visitors"), "kAlreadyExists"});
+  cases.push_back({BasicSchema("VISITORS"), "kAlreadyExists"});
   cases.push_back({BasicSchema("sys_tables"), "kInvalidArgument"});
   cases.push_back({BasicSchema("SYS_x"), "kInvalidArgument"});
   cases.push_back({BasicSchema(""), "kInvalidArgument"});
@@ -225,7 +225,7 @@ TEST(test_paged_catalog_create_table_validation) {
   unsorted_unique.unique_indexes = {1, 0};
   cases.push_back({unsorted_unique, "kInvalidArgument"});
   TableSchema bad_foreign_key = BasicSchema("t7");
-  bad_foreign_key.foreign_keys = {ForeignKey{5, "users", 0}};
+  bad_foreign_key.foreign_keys = {ForeignKey{5, "visitors", 0}};
   cases.push_back({bad_foreign_key, "kInvalidArgument"});
 
   const PageId pages_before = env.store->PageCount();
@@ -239,7 +239,7 @@ TEST(test_paged_catalog_create_table_validation) {
     CHECK_EQ(SystemRowCount(database, 1), tables_before);
     CHECK_EQ(SystemRowCount(database, 2), columns_before);
   }
-  const std::vector<std::string> names = {"users"};
+  const std::vector<std::string> names = {"visitors"};
   CHECK(database.catalog().TableNames() == names);
 }
 

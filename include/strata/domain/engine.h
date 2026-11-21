@@ -32,7 +32,8 @@ class IEngine {
   virtual const ICatalog& Catalog() const = 0;
 
   // Borrows plan for the duration of the call. A plan the engine cannot run
-  // yields ExecutionError{kUnsupported}; writes yield AffectedRows.
+  // yields ExecutionError{kUnsupported}; INSERT, UPDATE and DELETE yield
+  // AffectedRows, and DDL and import yield CommandComplete.
   virtual ExecutionResult Execute(const PlanNode& plan) = 0;
 };
 

@@ -26,19 +26,19 @@ struct ColumnSpec {
 // The tables of the setup, in creation order.
 const std::vector<std::pair<std::string, std::vector<ColumnSpec>>>& Tables() {
   static const std::vector<std::pair<std::string, std::vector<ColumnSpec>>>
-      tables = {{"users",
+      tables = {{"visitors",
                  {{"id", DataType::kInt},
                   {"username", DataType::kText},
                   {"location", DataType::kText},
                   {"rating", DataType::kDouble}}},
-                {"posts",
+                {"stories",
                  {{"id", DataType::kInt},
                   {"content", DataType::kText},
                   {"username", DataType::kText},
                   {"views", DataType::kInt}}},
-                {"engagements",
+                {"reactions",
                  {{"id", DataType::kInt},
-                  {"postid", DataType::kInt},
+                  {"storyid", DataType::kInt},
                   {"username", DataType::kText},
                   {"type", DataType::kText},
                   {"weight", DataType::kDouble},
@@ -75,7 +75,7 @@ const std::vector<std::string>& LocationPool() {
 
 const std::vector<std::string>& ContentPool() {
   static const std::vector<std::string> pool = {"hello world",
-                                                "second post",
+                                                "second story",
                                                 "",
                                                 "a, b and \"c\"",
                                                 "h\xC3\xA9llo w\xC3\xB6rld",
@@ -167,22 +167,24 @@ std::string Join(const std::vector<std::string>& parts,
 // The statements that build the setup (see the header).
 std::vector<std::string> BuildSetup() {
   return {
-      "CREATE TABLE users (id INT PRIMARY KEY AUTOINCREMENT, username TEXT "
+      "CREATE TABLE visitors (id INT PRIMARY KEY AUTOINCREMENT, username TEXT "
       "UNIQUE, location TEXT, rating DOUBLE DEFAULT 0.0)",
-      "CREATE TABLE posts (id INT PRIMARY KEY AUTOINCREMENT, content TEXT, "
-      "username TEXT REFERENCES users(username), views INT DEFAULT 0)",
-      "CREATE TABLE engagements (id INT PRIMARY KEY, postid INT REFERENCES "
-      "posts(id), username TEXT REFERENCES users(username), type TEXT, weight "
+      "CREATE TABLE stories (id INT PRIMARY KEY AUTOINCREMENT, content TEXT, "
+      "username TEXT REFERENCES visitors(username), views INT DEFAULT 0)",
+      "CREATE TABLE reactions (id INT PRIMARY KEY, storyid INT REFERENCES "
+      "stories(id), username TEXT REFERENCES visitors(username), type TEXT, "
+      "weight "
       "DOUBLE, timestamp INT)",
-      "INSERT INTO users VALUES (1, 'ann', 'Paris', 4.5), (2, 'bob', 'Rome', "
+      "INSERT INTO visitors VALUES (1, 'ann', 'Paris', 4.5), (2, 'bob', "
+      "'Rome', "
       "3.25), (3, 'cat', 'Paris', 4.5), (4, 'dan', 'Oslo', 0.0), (5, 'eve', "
       "'Rome', 2.0), (6, 'annx', 'Oslo', 3.25)",
-      "INSERT INTO posts VALUES (1, 'hello world', 'ann', 5), (2, 'second "
-      "post', 'ann', 0), (3, 'hello world', 'bob', 7), (4, 'a, b and \"c\"', "
-      "'cat', 7), (5, '', 'dan', 12), (6, 'second post', 'eve', 0), (7, "
+      "INSERT INTO stories VALUES (1, 'hello world', 'ann', 5), (2, 'second "
+      "story', 'ann', 0), (3, 'hello world', 'bob', 7), (4, 'a, b and \"c\"', "
+      "'cat', 7), (5, '', 'dan', 12), (6, 'second story', 'eve', 0), (7, "
       "'h\xC3\xA9llo w\xC3\xB6rld', 'bob', 3), (8, '  padded  ', 'cat', 3), "
       "(9, 'LONG text of words', 'annx', 20), (10, 'hello world', 'ann', 5)",
-      "INSERT INTO engagements VALUES (1, 1, 'bob', 'like', 1.0, 1000), (2, "
+      "INSERT INTO reactions VALUES (1, 1, 'bob', 'like', 1.0, 1000), (2, "
       "1, 'cat', 'comment', 2.5, 1001), (3, 2, 'bob', 'like', 1.0, 1002), (4, "
       "3, 'ann', 'like', 1.0, 1003), (5, 3, 'cat', 'share', 0.5, 1004), (6, "
       "4, 'ann', 'comment', 2.5, 1005), (7, 4, 'bob', 'like', 1.0, 1006), (8, "
@@ -318,7 +320,7 @@ std::string StatementGenerator::IntExprSmall(const Scope& scope, int depth) {
 std::string StatementGenerator::IntExpr(const Scope& scope, int depth) {
   std::vector<std::string> timestamps;
   for (const Source& source : scope) {
-    if (source.table != "engagements") {
+    if (source.table != "reactions") {
       continue;
     }
     timestamps.push_back(source.alias + ".timestamp");
@@ -472,32 +474,32 @@ struct EdgeColumns {
 // matter.
 EdgeColumns EdgeBetween(const std::string& first, const std::string& second) {
   if (first == second) {
-    if (first == "users") {
+    if (first == "visitors") {
       return {"location", "location"};
     }
-    if (first == "posts") {
+    if (first == "stories") {
       return {"content", "content"};
     }
-    return {"postid", "postid"};
+    return {"storyid", "storyid"};
   }
-  if (first == "users" && second == "posts") {
+  if (first == "visitors" && second == "stories") {
     return {"username", "username"};
   }
-  if (first == "posts" && second == "users") {
+  if (first == "stories" && second == "visitors") {
     return {"username", "username"};
   }
-  if (first == "posts" && second == "engagements") {
-    return {"id", "postid"};
+  if (first == "stories" && second == "reactions") {
+    return {"id", "storyid"};
   }
-  if (first == "engagements" && second == "posts") {
-    return {"postid", "id"};
+  if (first == "reactions" && second == "stories") {
+    return {"storyid", "id"};
   }
-  return {"username", "username"};  // users and engagements
+  return {"username", "username"};  // visitors and reactions
 }
 
 // The tables in the order a join lists them.
 std::vector<std::string> PermutationOfTables(std::mt19937_64* engine) {
-  std::vector<std::string> names = {"users", "posts", "engagements"};
+  std::vector<std::string> names = {"visitors", "stories", "reactions"};
   for (std::size_t i = names.size() - 1; i > 0; --i) {
     std::swap(names[i], names[(*engine)() % (i + 1)]);
   }
@@ -518,17 +520,18 @@ std::string StatementGenerator::JoinCondition(const Scope& scope,
     static const std::vector<std::string> operators = {"<", ">", "<=", ">="};
     condition =
         left.alias + ".id " + PickText(operators) + " " + right.alias + ".id";
-  } else if (form < 24 && left.table == "users" && right.table == "posts") {
+  } else if (form < 24 && left.table == "visitors" &&
+             right.table == "stories") {
     // INT against DOUBLE, in both operand orders.
     condition = Chance(50) ? left.alias + ".rating = " + right.alias + ".views"
                            : right.alias + ".views = " + left.alias + ".rating";
-  } else if (form < 24 && left.table == "posts" && right.table == "users") {
+  } else if (form < 24 && left.table == "stories" &&
+             right.table == "visitors") {
     condition = Chance(50) ? left.alias + ".views = " + right.alias + ".rating"
                            : right.alias + ".rating = " + left.alias + ".views";
   } else {
     EdgeColumns columns = EdgeBetween(left.table, right.table);
-    if (left.table == "engagements" && right.table == "engagements" &&
-        Chance(50)) {
+    if (left.table == "reactions" && right.table == "reactions" && Chance(50)) {
       // The timestamps include two INT values that share one DOUBLE value.
       columns = {"timestamp", "timestamp"};
     }
@@ -674,11 +677,11 @@ std::string StatementGenerator::AggregateSelect() {
       key_candidates.push_back(name);
       key_candidates.push_back("LENGTH(" + name + ")");
     }
-    if (source.table == "posts") {
+    if (source.table == "stories") {
       key_candidates.push_back(source.alias + ".views");
     }
-    if (source.table == "engagements") {
-      key_candidates.push_back(source.alias + ".postid");
+    if (source.table == "reactions") {
+      key_candidates.push_back(source.alias + ".storyid");
     }
   }
   std::vector<std::string> keys;
@@ -753,10 +756,10 @@ std::string StatementGenerator::AggregateSelect() {
 // A conversion of TEXT that fails on one row: the message names the text, so
 // the statement selects a single row.
 std::string StatementGenerator::SingleRowCastSelect() {
-  const std::int64_t id = ExistingOrNewId("posts");
+  const std::int64_t id = ExistingOrNewId("stories");
   const std::string target = Chance(50) ? "INT" : "DOUBLE";
   return "SELECT id, CAST(content AS " + target +
-         ") FROM posts WHERE id = " + std::to_string(id);
+         ") FROM stories WHERE id = " + std::to_string(id);
 }
 
 std::string StatementGenerator::Select() {
@@ -804,7 +807,7 @@ std::size_t StatementGenerator::RowCount() {
   return Chance(25) ? 2 + Below(2) : 1;
 }
 
-std::string StatementGenerator::InsertUsers() {
+std::string StatementGenerator::InsertVisitors() {
   const bool has_id = Chance(50);
   const bool has_rating = !has_id && Chance(50);
   std::vector<std::string> rows;
@@ -812,8 +815,8 @@ std::string StatementGenerator::InsertUsers() {
   for (std::size_t i = 0; i < row_count; ++i) {
     std::vector<std::string> cells;
     if (has_id) {
-      cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("users")
-                                                : NextFreeId("users", i)));
+      cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("visitors")
+                                                : NextFreeId("visitors", i)));
     }
     cells.push_back(NewUserName());
     cells.push_back(Quote(PickText(LocationPool())));
@@ -827,10 +830,10 @@ std::string StatementGenerator::InsertUsers() {
     columns =
         has_rating ? " (username, location, rating)" : " (username, location)";
   }
-  return "INSERT INTO users" + columns + " VALUES " + Join(rows, ", ");
+  return "INSERT INTO visitors" + columns + " VALUES " + Join(rows, ", ");
 }
 
-std::string StatementGenerator::InsertPosts() {
+std::string StatementGenerator::InsertStories() {
   const std::size_t form = Below(100);
   const bool has_id = form >= 70;
   const bool has_views = form >= 50;
@@ -839,8 +842,8 @@ std::string StatementGenerator::InsertPosts() {
   for (std::size_t i = 0; i < row_count; ++i) {
     std::vector<std::string> cells;
     if (has_id) {
-      cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("posts")
-                                                : NextFreeId("posts", i)));
+      cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("stories")
+                                                : NextFreeId("stories", i)));
     }
     std::string content = Quote(PickText(ContentPool()));
     if (Chance(6)) {
@@ -853,7 +856,7 @@ std::string StatementGenerator::InsertPosts() {
       content = Quote(words);
     }
     cells.push_back(content);
-    cells.push_back(Chance(88) ? ExistingLiteral("users", 1, "'ann'")
+    cells.push_back(Chance(88) ? ExistingLiteral("visitors", 1, "'ann'")
                                : Quote(PickText(NamePool())));
     if (has_views) {
       cells.push_back(PickText(SmallIntPool()));
@@ -865,19 +868,19 @@ std::string StatementGenerator::InsertPosts() {
     columns =
         has_views ? " (content, username, views)" : " (content, username)";
   }
-  return "INSERT INTO posts" + columns + " VALUES " + Join(rows, ", ");
+  return "INSERT INTO stories" + columns + " VALUES " + Join(rows, ", ");
 }
 
-std::string StatementGenerator::InsertEngagements() {
+std::string StatementGenerator::InsertReactions() {
   std::vector<std::string> rows;
   const std::size_t row_count = RowCount();
   for (std::size_t i = 0; i < row_count; ++i) {
     std::vector<std::string> cells;
-    cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("engagements")
-                                              : NextFreeId("engagements", i)));
-    cells.push_back(Chance(88) ? ExistingLiteral("posts", 0, "1")
+    cells.push_back(std::to_string(Chance(12) ? ExistingOrNewId("reactions")
+                                              : NextFreeId("reactions", i)));
+    cells.push_back(Chance(88) ? ExistingLiteral("stories", 0, "1")
                                : std::to_string(1 + Below(40)));
-    cells.push_back(Chance(88) ? ExistingLiteral("users", 1, "'ann'")
+    cells.push_back(Chance(88) ? ExistingLiteral("visitors", 1, "'ann'")
                                : Quote(PickText(NamePool())));
     cells.push_back(Quote(PickText(TypePool())));
     cells.push_back(Chance(20) ? PickText(SmallIntPool())
@@ -886,18 +889,18 @@ std::string StatementGenerator::InsertEngagements() {
                               : PickText(TimestampPool()));
     rows.push_back("(" + Join(cells, ", ") + ")");
   }
-  return "INSERT INTO engagements VALUES " + Join(rows, ", ");
+  return "INSERT INTO reactions VALUES " + Join(rows, ", ");
 }
 
 std::string StatementGenerator::Insert() {
   const std::size_t form = Below(100);
   if (form < 30) {
-    return InsertUsers();
+    return InsertVisitors();
   }
   if (form < 65) {
-    return InsertPosts();
+    return InsertStories();
   }
-  return InsertEngagements();
+  return InsertReactions();
 }
 
 // ----------------------------------------------------------------------------
@@ -913,8 +916,8 @@ std::string StatementGenerator::UpdatePlain() {
   std::vector<std::string> assignments;
   std::string guard;
   if (form < 30) {
-    table = "users";
-    const Scope scope = {Source{"users", "users"}};
+    table = "visitors";
+    const Scope scope = {Source{"visitors", "visitors"}};
     // None of these yields a zero of either sign from a non-zero cell (see
     // DoublePool): no ROUND of a small negative number, no division of zero.
     static const std::vector<std::string> ratings = {
@@ -942,8 +945,8 @@ std::string StatementGenerator::UpdatePlain() {
     return UpdateText(table, assignments, guard, scope);
   }
   if (form < 70) {
-    table = "posts";
-    const Scope scope = {Source{"posts", "posts"}};
+    table = "stories";
+    const Scope scope = {Source{"stories", "stories"}};
     static const std::vector<std::string> views = {
         "(views + 1)", "(views - 3)", "(views / 2)", "LENGTH(content)",
         "id",          "ABS(views)",  "views"};
@@ -976,8 +979,8 @@ std::string StatementGenerator::UpdatePlain() {
     }
     return UpdateText(table, assignments, guard, scope);
   }
-  table = "engagements";
-  const Scope scope = {Source{"engagements", "engagements"}};
+  table = "reactions";
+  const Scope scope = {Source{"reactions", "reactions"}};
   assignments.push_back("type = " + (Chance(50) ? Quote(PickText(TypePool()))
                                                 : std::string("UPPER(type)")));
   if (Chance(50)) {
@@ -1026,35 +1029,35 @@ std::string StatementGenerator::UpdateKey() {
     if (source < 35) {
       value = NewUserName();
     } else if (source < 55) {
-      value = ExistingLiteral("users", 1, "'bob'");
+      value = ExistingLiteral("visitors", 1, "'bob'");
     } else if (source < 80) {
       value = "(username || 'x')";
     } else {
       value = "SUBSTR(username, 1, 3)";
     }
     if (Chance(80)) {
-      return "UPDATE users SET username = " + value +
-             " WHERE id = " + std::to_string(ExistingOrNewId("users"));
+      return "UPDATE visitors SET username = " + value +
+             " WHERE id = " + std::to_string(ExistingOrNewId("visitors"));
     }
-    return "UPDATE users SET username = " + value +
-           " WHERE username = " + ExistingLiteral("users", 1, "'bob'");
+    return "UPDATE visitors SET username = " + value +
+           " WHERE username = " + ExistingLiteral("visitors", 1, "'bob'");
   }
   if (form < 65) {
-    return "UPDATE posts SET username = " +
-           (Chance(85) ? ExistingLiteral("users", 1, "'ann'")
+    return "UPDATE stories SET username = " +
+           (Chance(85) ? ExistingLiteral("visitors", 1, "'ann'")
                        : Quote(PickText(NamePool()))) +
-           " WHERE id = " + std::to_string(ExistingOrNewId("posts"));
+           " WHERE id = " + std::to_string(ExistingOrNewId("stories"));
   }
   if (form < 85) {
-    return "UPDATE engagements SET postid = " +
-           (Chance(85) ? ExistingLiteral("posts", 0, "1")
+    return "UPDATE reactions SET storyid = " +
+           (Chance(85) ? ExistingLiteral("stories", 0, "1")
                        : std::to_string(1 + Below(40))) +
-           " WHERE id = " + std::to_string(ExistingOrNewId("engagements"));
+           " WHERE id = " + std::to_string(ExistingOrNewId("reactions"));
   }
-  return "UPDATE engagements SET username = " +
-         (Chance(85) ? ExistingLiteral("users", 1, "'ann'")
+  return "UPDATE reactions SET username = " +
+         (Chance(85) ? ExistingLiteral("visitors", 1, "'ann'")
                      : Quote(PickText(NamePool()))) +
-         " WHERE id = " + std::to_string(ExistingOrNewId("engagements"));
+         " WHERE id = " + std::to_string(ExistingOrNewId("reactions"));
 }
 
 // A rename that shifts a chain of usernames (A to Ax, Ax to Axx) in one
@@ -1063,26 +1066,26 @@ std::string StatementGenerator::UpdateKey() {
 // rows are exactly the chain, so at most one row (the end of the chain, when
 // the next name is taken) can violate uniqueness.
 std::string StatementGenerator::UpdateChainRename() {
-  auto found = tables_->find("users");
+  auto found = tables_->find("visitors");
   if (found == tables_->end()) {
     return UpdateKey();
   }
-  std::vector<std::pair<std::int64_t, std::string>> users;
+  std::vector<std::pair<std::int64_t, std::string>> visitors;
   for (const Row& row : found->second) {
-    users.emplace_back(std::get<std::int64_t>(row[0]),
-                       std::get<std::string>(row[1]));
+    visitors.emplace_back(std::get<std::int64_t>(row[0]),
+                          std::get<std::string>(row[1]));
   }
   std::vector<std::vector<std::int64_t>> chains;
-  for (const auto& start : users) {
+  for (const auto& start : visitors) {
     std::vector<std::int64_t> chain = {start.first};
     std::string name = start.second;
     bool is_extended = true;
     while (is_extended) {
       is_extended = false;
-      for (const auto& user : users) {
-        if (user.second == name + "x") {
-          chain.push_back(user.first);
-          name = user.second;
+      for (const auto& visitor : visitors) {
+        if (visitor.second == name + "x") {
+          chain.push_back(visitor.first);
+          name = visitor.second;
           is_extended = true;
           break;
         }
@@ -1100,20 +1103,21 @@ std::string StatementGenerator::UpdateChainRename() {
   for (std::int64_t id : chain) {
     conditions.push_back("id = " + std::to_string(id));
   }
-  return "UPDATE users SET username = (username || 'x') WHERE " +
+  return "UPDATE visitors SET username = (username || 'x') WHERE " +
          Join(conditions, " OR ");
 }
 
-// Two TEXT columns of one row exchanged: for users the username changes (a
-// cascade), for posts a username that is unlikely to exist.
+// Two TEXT columns of one row exchanged: for visitors the username changes (a
+// cascade), for stories a username that is unlikely to exist.
 std::string StatementGenerator::UpdateSwapColumns() {
   if (Chance(60)) {
-    return "UPDATE users SET location = username, username = location WHERE "
+    return "UPDATE visitors SET location = username, username = location WHERE "
            "id = " +
-           std::to_string(ExistingOrNewId("users"));
+           std::to_string(ExistingOrNewId("visitors"));
   }
-  return "UPDATE posts SET content = username, username = content WHERE id = " +
-         std::to_string(ExistingOrNewId("posts"));
+  return "UPDATE stories SET content = username, username = content WHERE id "
+         "= " +
+         std::to_string(ExistingOrNewId("stories"));
 }
 
 std::string StatementGenerator::Update() {
@@ -1131,10 +1135,10 @@ std::string StatementGenerator::Update() {
     return UpdateSwapColumns();
   }
   if (form < 96) {
-    return "UPDATE users SET rating = (rating * 1.0)";
+    return "UPDATE visitors SET rating = (rating * 1.0)";
   }
-  return "UPDATE posts SET views = views WHERE " +
-         Predicate({Source{"posts", "posts"}}, 1);
+  return "UPDATE stories SET views = views WHERE " +
+         Predicate({Source{"stories", "stories"}}, 1);
 }
 
 // ----------------------------------------------------------------------------
@@ -1142,33 +1146,33 @@ std::string StatementGenerator::Update() {
 // ----------------------------------------------------------------------------
 
 // A DELETE that may reject a row of a referenced table (RESTRICT) selects one
-// row. Engagements are referenced by nobody, so any predicate is safe there.
+// row. Reactions are referenced by nobody, so any predicate is safe there.
 std::string StatementGenerator::Delete() {
   const std::size_t form = Below(100);
-  auto engagements = tables_->find("engagements");
-  const bool has_engagements =
-      engagements != tables_->end() && engagements->second.size() > 4;
-  if (form < 30 && has_engagements) {
-    const Scope scope = {Source{"engagements", "engagements"}};
+  auto reactions = tables_->find("reactions");
+  const bool has_reactions =
+      reactions != tables_->end() && reactions->second.size() > 4;
+  if (form < 30 && has_reactions) {
+    const Scope scope = {Source{"reactions", "reactions"}};
     if (Chance(4)) {
-      return "DELETE FROM engagements";
+      return "DELETE FROM reactions";
     }
-    return "DELETE FROM engagements WHERE " + Predicate(scope, 2);
+    return "DELETE FROM reactions WHERE " + Predicate(scope, 2);
   }
   if (form < 55) {
-    return "DELETE FROM engagements WHERE id = " +
-           std::to_string(ExistingOrNewId("engagements"));
+    return "DELETE FROM reactions WHERE id = " +
+           std::to_string(ExistingOrNewId("reactions"));
   }
   if (form < 77) {
-    return "DELETE FROM posts WHERE id = " +
-           std::to_string(ExistingOrNewId("posts"));
+    return "DELETE FROM stories WHERE id = " +
+           std::to_string(ExistingOrNewId("stories"));
   }
   if (form < 95) {
-    return "DELETE FROM users WHERE id = " +
-           std::to_string(ExistingOrNewId("users"));
+    return "DELETE FROM visitors WHERE id = " +
+           std::to_string(ExistingOrNewId("visitors"));
   }
-  return "DELETE FROM users WHERE username = " +
-         ExistingLiteral("users", 1, "'bob'");
+  return "DELETE FROM visitors WHERE username = " +
+         ExistingLiteral("visitors", 1, "'bob'");
 }
 
 // ----------------------------------------------------------------------------

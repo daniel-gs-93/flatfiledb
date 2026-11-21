@@ -30,8 +30,8 @@ std::string SerializeRow(const domain::Row& row);
 
 // The fields as a row of the schema's column types. std::nullopt when the field
 // count differs from the column count, an INT is not a decimal number in the
-// int64 range, or a DOUBLE is not a finite decimal number. A leading '+' or
-// white space is rejected.
+// int64 range, a DOUBLE is not a finite decimal number, or a TEXT field holds a
+// '\r' (the engine cannot store one). A leading '+' or white space is rejected.
 std::optional<domain::Row> ParseRow(const std::vector<std::string>& fields,
                                     const domain::TableSchema& schema);
 

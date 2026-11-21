@@ -431,12 +431,12 @@ struct CallSet {
 
 CallSet MakeCallSet() {
   CallSet calls;
-  calls.select = testing::MustParse("SELECT id FROM users");
+  calls.select = testing::MustParse("SELECT id FROM visitors");
   calls.insert =
-      testing::MustParse("INSERT INTO users VALUES (9, 'zed', 'Oslo')");
+      testing::MustParse("INSERT INTO visitors VALUES (9, 'zed', 'Oslo')");
   calls.update =
-      testing::MustParse("UPDATE users SET location = 'Rome' WHERE id = 1");
-  calls.delete_rows = testing::MustParse("DELETE FROM users WHERE id = 1");
+      testing::MustParse("UPDATE visitors SET location = 'Rome' WHERE id = 1");
+  calls.delete_rows = testing::MustParse("DELETE FROM visitors WHERE id = 1");
   calls.create_table =
       testing::MustParse("CREATE TABLE fresh (id INT PRIMARY KEY)");
   calls.import_request.file_path = "fresh.csv";

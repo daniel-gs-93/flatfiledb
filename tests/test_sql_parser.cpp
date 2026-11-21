@@ -25,6 +25,10 @@ constexpr int64_t kInt64Min = std::numeric_limits<int64_t>::min();
 // tree the parser accepts. A left-leaning chain of n operators has depth n + 1.
 constexpr std::size_t kParserMaxExpressionDepth = 500;
 
+// Mirrors kMaxJoins in src/sql_parser.cpp: the most JOIN clauses one SELECT
+// may have.
+constexpr std::size_t kParserMaxJoins = 64;
+
 void ReportError(const std::string& message) {
   strata::testing::ReportFailure(__FILE__, __LINE__, message);
 }
@@ -283,7 +287,7 @@ struct ShapeCase {
 
 TEST(test_parser_select_star_builds_ast) {
   domain::SelectStatement select =
-      ParseAs<domain::SelectStatement>("SELECT * FROM users");
+      ParseAs<domain::SelectStatement>("SELECT * FROM visitors");
 
   CHECK_EQ(select.items.size(), 1u);
   const domain::SelectItem* item = ItemAt(select, 0);
@@ -291,7 +295,7 @@ TEST(test_parser_select_star_builds_ast) {
     CHECK(item->is_star);
     CHECK(item->expr == nullptr);
   }
-  CHECK_EQ(select.from.table, "users");
+  CHECK_EQ(select.from.table, "visitors");
   CHECK(select.from.alias.empty());
   CHECK(select.joins.empty());
   CHECK(select.where == nullptr);
@@ -301,36 +305,36 @@ TEST(test_parser_select_star_builds_ast) {
 
 TEST(test_parser_select_full_clauses_builds_ast) {
   domain::SelectStatement full = ParseAs<domain::SelectStatement>(
-      "SELECT u.username AS name, COUNT(*) FROM users AS u "
-      "JOIN posts p ON u.username = p.username WHERE u.id > 1 "
-      "GROUP BY u.username ORDER BY name DESC");
-  domain::SelectStatement ascending =
-      ParseAs<domain::SelectStatement>("SELECT id FROM users ORDER BY id ASC");
+      "SELECT v.username AS name, COUNT(*) FROM visitors AS v "
+      "JOIN stories s ON v.username = s.username WHERE v.id > 1 "
+      "GROUP BY v.username ORDER BY name DESC");
+  domain::SelectStatement ascending = ParseAs<domain::SelectStatement>(
+      "SELECT id FROM visitors ORDER BY id ASC");
 
   CHECK_EQ(full.items.size(), 2u);
   const domain::SelectItem* aliased_item = ItemAt(full, 0);
   if (aliased_item != nullptr) {
     CHECK_EQ(aliased_item->alias, "name");
-    CHECK_EQ(DescribeExpr(aliased_item->expr.get()), "u.username");
+    CHECK_EQ(DescribeExpr(aliased_item->expr.get()), "v.username");
   }
   const domain::SelectItem* count_item = ItemAt(full, 1);
   if (count_item != nullptr) {
     CHECK_EQ(DescribeExpr(count_item->expr.get()), "COUNT(*)");
   }
-  CHECK_EQ(full.from.table, "users");
-  CHECK_EQ(full.from.alias, "u");
+  CHECK_EQ(full.from.table, "visitors");
+  CHECK_EQ(full.from.alias, "v");
   CHECK_EQ(full.joins.size(), 1u);
   if (full.joins.size() == 1) {
-    CHECK_EQ(full.joins[0].table.table, "posts");
-    CHECK_EQ(full.joins[0].table.alias, "p");
+    CHECK_EQ(full.joins[0].table.table, "stories");
+    CHECK_EQ(full.joins[0].table.alias, "s");
     CHECK_EQ(DescribeExpr(full.joins[0].on.get()),
-             "EQ(u.username, p.username)");
+             "EQ(v.username, s.username)");
   }
   CHECK(full.where != nullptr);
-  CHECK_EQ(DescribeExpr(full.where.get()), "GT(u.id, 1)");
+  CHECK_EQ(DescribeExpr(full.where.get()), "GT(v.id, 1)");
   CHECK_EQ(full.group_by.size(), 1u);
   if (full.group_by.size() == 1) {
-    CHECK_EQ(DescribeExpr(full.group_by[0].get()), "u.username");
+    CHECK_EQ(DescribeExpr(full.group_by[0].get()), "v.username");
   }
   CHECK_EQ(full.order_by.size(), 1u);
   if (full.order_by.size() == 1) {
@@ -358,9 +362,9 @@ TEST(test_parser_expression_precedence_orders_operators) {
 
 TEST(test_parser_keywords_are_case_insensitive) {
   domain::SelectStatement select =
-      ParseAs<domain::SelectStatement>("select ID from USERS where Id = 1");
+      ParseAs<domain::SelectStatement>("select ID from VISITORS where Id = 1");
 
-  CHECK_EQ(select.from.table, "USERS");
+  CHECK_EQ(select.from.table, "VISITORS");
   const domain::SelectItem* item = ItemAt(select, 0);
   if (item != nullptr) {
     CHECK_EQ(DescribeExpr(item->expr.get()), "ID");
@@ -437,11 +441,12 @@ TEST(test_parser_negative_literals_and_lowering) {
 
 TEST(test_parser_insert_with_and_without_columns) {
   domain::InsertStatement with_columns = ParseAs<domain::InsertStatement>(
-      "INSERT INTO users (id, username, location) VALUES (9, 'zed', 'Oslo')");
+      "INSERT INTO visitors (id, username, location) VALUES (9, 'zed', "
+      "'Oslo')");
   domain::InsertStatement without_columns = ParseAs<domain::InsertStatement>(
-      "INSERT INTO users VALUES (9, 'zed', 'Oslo')");
+      "INSERT INTO visitors VALUES (9, 'zed', 'Oslo')");
 
-  CHECK_EQ(with_columns.table, "users");
+  CHECK_EQ(with_columns.table, "visitors");
   const std::vector<std::string> expected_columns = {"id", "username",
                                                      "location"};
   CHECK(with_columns.columns == expected_columns);
@@ -458,11 +463,11 @@ TEST(test_parser_insert_with_and_without_columns) {
 
 TEST(test_parser_update_assignments_and_optional_where) {
   domain::UpdateStatement with_where = ParseAs<domain::UpdateStatement>(
-      "UPDATE users SET username = 'zed', location = 'Oslo' WHERE id = 1");
+      "UPDATE visitors SET username = 'zed', location = 'Oslo' WHERE id = 1");
   domain::UpdateStatement without_where =
-      ParseAs<domain::UpdateStatement>("UPDATE users SET location = 'Oslo'");
+      ParseAs<domain::UpdateStatement>("UPDATE visitors SET location = 'Oslo'");
 
-  CHECK_EQ(with_where.table, "users");
+  CHECK_EQ(with_where.table, "visitors");
   CHECK_EQ(with_where.assignments.size(), 2u);
   if (with_where.assignments.size() == 2) {
     CHECK_EQ(with_where.assignments[0].column, "username");
@@ -478,14 +483,14 @@ TEST(test_parser_update_assignments_and_optional_where) {
 
 TEST(test_parser_delete_optional_where) {
   domain::DeleteStatement with_where =
-      ParseAs<domain::DeleteStatement>("DELETE FROM users WHERE id = 1");
+      ParseAs<domain::DeleteStatement>("DELETE FROM visitors WHERE id = 1");
   domain::DeleteStatement without_where =
-      ParseAs<domain::DeleteStatement>("DELETE FROM users");
+      ParseAs<domain::DeleteStatement>("DELETE FROM visitors");
 
-  CHECK_EQ(with_where.table, "users");
+  CHECK_EQ(with_where.table, "visitors");
   CHECK(with_where.where != nullptr);
   CHECK_EQ(DescribeExpr(with_where.where.get()), "EQ(id, 1)");
-  CHECK_EQ(without_where.table, "users");
+  CHECK_EQ(without_where.table, "visitors");
   CHECK(without_where.where == nullptr);
 }
 
@@ -502,9 +507,9 @@ TEST(test_parser_trailing_semicolon_rules) {
 
 TEST(test_parser_invalid_input_reports_column) {
   const ErrorCase cases[] = {
-      {"SELEC username FROM users;", 1},
-      {"SELECT FROM users", 8},
-      {"SELECT 'abc FROM users", 8},
+      {"SELEC username FROM visitors;", 1},
+      {"SELECT FROM visitors", 8},
+      {"SELECT 'abc FROM visitors", 8},
       {"SELECT 1 # 2 FROM t", 10},
       {"SELECT 9223372036854775808 FROM t", 8},
       {"SELECT id FROM", 15},
@@ -514,13 +519,13 @@ TEST(test_parser_invalid_input_reports_column) {
   for (const ErrorCase& error_case : cases) {
     CheckErrorAt(error_case.sql, error_case.column);
   }
-  CHECK_EQ(ParseFailure("SELEC username FROM users;").description,
+  CHECK_EQ(ParseFailure("SELEC username FROM visitors;").description,
            "unrecognized statement");
 }
 
 TEST(test_parser_select_items_keep_alias_and_source_text) {
   domain::SelectStatement select = ParseAs<domain::SelectStatement>(
-      "SELECT COUNT(*), username AS name, id + 1 FROM users");
+      "SELECT COUNT(*), username AS name, id + 1 FROM visitors");
 
   CHECK_EQ(select.items.size(), 3u);
   const domain::SelectItem* count_item = ItemAt(select, 0);
@@ -540,7 +545,7 @@ TEST(test_parser_select_items_keep_alias_and_source_text) {
 
 TEST(test_parser_aggregate_calls_build_ast) {
   domain::SelectStatement select = ParseAs<domain::SelectStatement>(
-      "SELECT COUNT(*), COUNT(views), SUM(views + 1) FROM posts");
+      "SELECT COUNT(*), COUNT(views), SUM(views + 1) FROM stories");
 
   CHECK_EQ(select.items.size(), 3u);
   const domain::SelectItem* count_star = ItemAt(select, 0);
@@ -668,20 +673,20 @@ TEST(test_parser_select_item_text_keeps_written_spelling) {
 }
 
 TEST(test_parser_table_alias_forms_and_join_type_words) {
-  domain::SelectStatement implicit_alias =
-      ParseAs<domain::SelectStatement>("SELECT 1 FROM users Usr WHERE 1 = 1");
+  domain::SelectStatement implicit_alias = ParseAs<domain::SelectStatement>(
+      "SELECT 1 FROM visitors Vis WHERE 1 = 1");
   domain::SelectStatement explicit_alias =
-      ParseAs<domain::SelectStatement>("SELECT 1 FROM users AS Usr");
+      ParseAs<domain::SelectStatement>("SELECT 1 FROM visitors AS Vis");
   domain::SelectStatement no_alias =
-      ParseAs<domain::SelectStatement>("SELECT 1 FROM users WHERE 1 = 1");
+      ParseAs<domain::SelectStatement>("SELECT 1 FROM visitors WHERE 1 = 1");
 
-  CHECK_EQ(implicit_alias.from.alias, "Usr");
-  CHECK_EQ(explicit_alias.from.alias, "Usr");
+  CHECK_EQ(implicit_alias.from.alias, "Vis");
+  CHECK_EQ(explicit_alias.from.alias, "Vis");
   CHECK(no_alias.from.alias.empty());
-  CheckErrorAt("SELECT 1 FROM users AS", 23);
-  CheckErrorAt("SELECT 1 FROM users u v", 23);
-  CheckErrorAt("SELECT 1 FROM users LEFT JOIN posts p ON 1 = 1", 21);
-  CheckErrorAt("SELECT 1 FROM users INNER JOIN posts p ON 1 = 1", 21);
+  CheckErrorAt("SELECT 1 FROM visitors AS", 26);
+  CheckErrorAt("SELECT 1 FROM visitors u v", 26);
+  CheckErrorAt("SELECT 1 FROM visitors LEFT JOIN stories s ON 1 = 1", 24);
+  CheckErrorAt("SELECT 1 FROM visitors INNER JOIN stories s ON 1 = 1", 24);
 }
 
 TEST(test_parser_reserved_words_cannot_be_identifiers) {
@@ -724,7 +729,7 @@ TEST(test_parser_select_list_and_clause_shapes_reject_malformed_input) {
 }
 
 TEST(test_parser_malformed_dml_returns_parse_error) {
-  CheckErrorAt("INSERT users VALUES (1)", 8);
+  CheckErrorAt("INSERT visitors VALUES (1)", 8);
   CheckErrorAt("INSERT INTO t () VALUES (1)", 16);
   CheckErrorAt("INSERT INTO t VALUES ()", 23);
   CheckErrorAt("INSERT INTO t VALUES (1) (2)", 26);
@@ -741,14 +746,45 @@ TEST(test_parser_deeply_nested_input_returns_parse_error_without_crashing) {
   const std::string many_parentheses = "SELECT " +
                                        std::string(kHugeDepth, '(') + "1" +
                                        std::string(kHugeDepth, ')') + " FROM t";
-  const std::string many_minus_signs =
-      "SELECT " + std::string(kHugeDepth, '-') + "x FROM t";
+  // Separated by spaces: a run of '-' characters would start a `--` comment.
+  std::string many_minus_signs = "SELECT ";
+  for (std::size_t i = 0; i < kHugeDepth; ++i) {
+    many_minus_signs += "- ";
+  }
+  many_minus_signs += "x FROM t";
 
   CHECK(!Parses(many_parentheses));
-  CHECK(!Parses(many_minus_signs));
+  CHECK_EQ(ParseFailure(many_minus_signs).description,
+           "expression is nested too deeply");
   CHECK(!Parses(SubtractionChain(4 * kParserMaxExpressionDepth)));
   CHECK(!Parses(SubtractionChain(kParserMaxExpressionDepth)));
   CHECK(Parses(SubtractionChain(kParserMaxExpressionDepth - 1)));
+}
+
+// A SELECT of table a that joins a to itself join_count times.
+std::string JoinChain(std::size_t join_count) {
+  std::string sql = "SELECT a.id FROM a";
+  for (std::size_t i = 0; i < join_count; ++i) {
+    const std::string alias = "a" + std::to_string(i);
+    sql += " JOIN a AS " + alias + " ON " + alias + ".id = a.id";
+  }
+  return sql;
+}
+
+TEST(test_parser_join_count_limit) {
+  const domain::SelectStatement at_limit =
+      ParseAs<domain::SelectStatement>(JoinChain(kParserMaxJoins));
+  CHECK_EQ(at_limit.joins.size(), kParserMaxJoins);
+
+  // The 65th JOIN keyword starts one space after the 64th clause; columns
+  // are 1-based.
+  const adapter::ParseError over_limit =
+      ParseFailure(JoinChain(kParserMaxJoins + 1));
+  CHECK_EQ(over_limit.description, "too many JOINs: at most 64 are allowed");
+  CHECK_EQ(over_limit.column, JoinChain(kParserMaxJoins).size() + 2);
+
+  CHECK_EQ(ParseFailure(JoinChain(100000)).description,
+           "too many JOINs: at most 64 are allowed");
 }
 
 TEST(test_parser_not_supported_words_name_the_word) {
@@ -765,8 +801,8 @@ TEST(test_parser_not_supported_words_name_the_word) {
 }
 
 TEST(test_parser_star_item_may_share_the_list) {
-  domain::SelectStatement select =
-      ParseAs<domain::SelectStatement>("SELECT *, COUNT(*), id, * FROM users");
+  domain::SelectStatement select = ParseAs<domain::SelectStatement>(
+      "SELECT *, COUNT(*), id, * FROM visitors");
 
   CHECK_EQ(select.items.size(), 4u);
   const domain::SelectItem* leading_star = ItemAt(select, 0);
@@ -835,10 +871,11 @@ domain::ColumnDefinition ParseColumnDefinition(const std::string& definition) {
 
 TEST(test_parser_create_table_builds_column_definitions) {
   domain::CreateTableStatement create = ParseAs<domain::CreateTableStatement>(
-      "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE NOT NULL, "
+      "CREATE TABLE visitors (id INT PRIMARY KEY, username TEXT UNIQUE NOT "
+      "NULL, "
       "location TEXT DEFAULT 'none', score DOUBLE REFERENCES scores(value))");
 
-  CHECK_EQ(create.table, std::string("users"));
+  CHECK_EQ(create.table, std::string("visitors"));
   CHECK_EQ(create.columns.size(), std::size_t{4});
   if (create.columns.size() != 4) {
     return;

@@ -17,8 +17,8 @@
 // The `.engine` command, the engine setting of `.open`, the `note:` lines and
 // the failure output of the paged engine (docs/TestDocument.md).
 // RunRepl runs over string streams on temporary directories; the paged
-// demonstration of XI-16 (docs/TestDocument.md) runs the real strata_cli
-// executable.
+// demonstration of the session in the README section Engines runs the real
+// strata_cli executable.
 
 namespace {
 
@@ -119,7 +119,7 @@ namespace {
 // to flat-file fails because a table file of the catalog is missing: each time
 // the database and the engine setting stay as they were.
 void CheckFailedSwitchKeepsDatabaseAndSetting() {
-  const std::string flatfile_loaded = "loaded users=4 posts=3 engagements=5";
+  const std::string flatfile_loaded = "loaded visitors=4 stories=3 reactions=5";
 
   // Flat-file to paged: paged.db is not a database file.
   testing::TempDir garbage_dir;
@@ -129,13 +129,13 @@ void CheckFailedSwitchKeepsDatabaseAndSetting() {
       std::filesystem::canonical(garbage_dir.path()).string();
   const Lines to_paged =
       Run({OpenLine(garbage_dir.path()), ".engine paged", ".engine",
-           "SELECT username FROM users WHERE id = 1;", ".engine flatfile"});
+           "SELECT username FROM visitors WHERE id = 1;", ".engine flatfile"});
 
   // Paged to flat-file: a table file of the catalog is missing.
   testing::TempDir broken_dir;
   testing::WriteFixtureA(broken_dir.path());
   std::error_code error;
-  std::filesystem::remove(broken_dir.path() / "posts.csv", error);
+  std::filesystem::remove(broken_dir.path() / "stories.csv", error);
   CHECK(!error);
   const std::string broken_canonical =
       std::filesystem::canonical(broken_dir.path()).string();
@@ -156,7 +156,7 @@ void CheckFailedSwitchKeepsDatabaseAndSetting() {
   CHECK_EQ(to_flatfile, Lines({"engine paged", "loaded no tables",
                                kNoteOfFlatFileCatalog, "OK CREATE TABLE t",
                                "error: could not open " + broken_canonical +
-                                   ": cannot read posts.csv",
+                                   ": cannot read stories.csv",
                                "engine paged", "OK affected=1", "id", "7"}));
 }
 
@@ -174,13 +174,13 @@ TEST(test_engine_command_switch_reopens_directory) {
       {".open " + directory,
        "CREATE TABLE notes (id INT PRIMARY KEY, body TEXT);",
        "INSERT INTO notes VALUES (1, 'flat');", ".engine paged",
-       ".engine paged", "CREATE TABLE posts (id INT PRIMARY KEY, body TEXT);",
+       ".engine paged", "CREATE TABLE stories (id INT PRIMARY KEY, body TEXT);",
        ".engine flatfile", "SELECT body FROM notes;", ".engine paged",
-       ".open " + missing, ".engine", "INSERT INTO posts VALUES (1, 'one');",
-       ".open " + directory + " --parallel", "SELECT body FROM posts;",
-       "INSERT INTO posts VALUES (2, 'two');"});
+       ".open " + missing, ".engine", "INSERT INTO stories VALUES (1, 'one');",
+       ".open " + directory + " --parallel", "SELECT body FROM stories;",
+       "INSERT INTO stories VALUES (2, 'two');"});
   const Lines reopened = Run({".engine paged", ".open " + directory,
-                              "SELECT id, body FROM posts ORDER BY id;"});
+                              "SELECT id, body FROM stories ORDER BY id;"});
 
   // Assert
   CHECK_EQ(output,
@@ -191,21 +191,21 @@ TEST(test_engine_command_switch_reopens_directory) {
                   "loaded no tables",
                   kNoteOfFlatFileCatalog,
                   "engine paged",
-                  "OK CREATE TABLE posts",
+                  "OK CREATE TABLE stories",
                   "engine flatfile",
                   "loaded notes=1",
                   "body",
                   "flat",
                   "engine paged",
-                  "loaded posts=0",
+                  "loaded stories=0",
                   "error: could not open " + missing + ": no such directory",
                   "engine paged",
                   "OK affected=1",
-                  "loaded posts=1",
+                  "loaded stories=1",
                   "body",
                   "one",
                   "OK affected=1"}));
-  CHECK_EQ(reopened, Lines({"engine paged", "loaded posts=2", "id\tbody",
+  CHECK_EQ(reopened, Lines({"engine paged", "loaded stories=2", "id\tbody",
                             "1\tone", "2\ttwo"}));
   CheckFailedSwitchKeepsDatabaseAndSetting();
 }
@@ -260,7 +260,8 @@ TEST(test_engine_command_notes_for_other_engine_files) {
   CHECK_EQ(flatfile_alone, Lines({"loaded no tables"}));
   CHECK_EQ(paged_alone, Lines({"engine paged", "loaded no tables"}));
   CHECK_EQ(paged_with_both, Lines({"engine paged", "loaded notes=0"}));
-  CHECK_EQ(flatfile_with_both, Lines({"loaded users=4 posts=3 engagements=5"}));
+  CHECK_EQ(flatfile_with_both,
+           Lines({"loaded visitors=4 stories=3 reactions=5"}));
   CHECK_EQ(created,
            Lines({"engine paged", "created new database " +
                                       (parent.path() / "fresh").string()}));
@@ -295,22 +296,22 @@ TEST(test_engine_command_documented_demo_output) {
   const CliRun first =
       RunCli(work.path(),
              {".engine paged", ".open demo",
-              "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);",
-              "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');",
-              "SELECT id, username FROM users ORDER BY id;"});
+              "CREATE TABLE students (id INT PRIMARY KEY, name TEXT UNIQUE);",
+              "INSERT INTO students VALUES (1, 'ann'), (2, 'bob');",
+              "SELECT id, name FROM students ORDER BY id;"});
   const bool has_file_after_first_run =
       std::filesystem::is_regular_file(work.path() / "demo" / "paged.db");
   const CliRun second = RunCli(work.path(), {".engine paged", ".open demo",
-                                             "SELECT COUNT(*) FROM users;"});
+                                             "SELECT COUNT(*) FROM students;"});
 
   CHECK_EQ(first.status, 0);
   CHECK_EQ(first.output, Lines({"engine paged", "created new database demo",
-                                "OK CREATE TABLE users", "OK affected=2",
-                                "id\tusername", "1\tann", "2\tbob"}));
+                                "OK CREATE TABLE students", "OK affected=2",
+                                "id\tname", "1\tann", "2\tbob"}));
   CHECK(has_file_after_first_run);
   CHECK_EQ(second.status, 0);
   CHECK_EQ(second.output,
-           Lines({"engine paged", "loaded users=2", "COUNT(*)", "2"}));
+           Lines({"engine paged", "loaded students=2", "COUNT(*)", "2"}));
 }
 
 TEST(test_engine_command_failure_outputs) {
@@ -322,35 +323,36 @@ TEST(test_engine_command_failure_outputs) {
 
   const Lines output = Run(
       {".engine paged", OpenLine(dir.path()),
-       "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);",
-       "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');",
-       "CREATE TABLE posts (id INT PRIMARY KEY, username TEXT REFERENCES "
-       "users(username));",
-       "INSERT INTO posts VALUES (1, 'ann');",
-       "DELETE FROM users WHERE id = 1;",
-       "UPDATE users SET username = '" + near_limit_text + "' WHERE id = 2;",
-       "ALTER TABLE users ADD COLUMN pinned INT DEFAULT 0;",
-       "DROP TABLE users;",
-       "INSERT INTO users VALUES (3, '" + long_text + "');",
-       "UPDATE users SET username = '" + long_text + "' WHERE id = 2;",
-       "INSERT INTO users VALUES (1, 'zed');",
-       "SELECT id, LENGTH(username) FROM users ORDER BY id;"});
+       "CREATE TABLE visitors (id INT PRIMARY KEY, username TEXT UNIQUE);",
+       "INSERT INTO visitors VALUES (1, 'ann'), (2, 'bob');",
+       "CREATE TABLE stories (id INT PRIMARY KEY, username TEXT REFERENCES "
+       "visitors(username));",
+       "INSERT INTO stories VALUES (1, 'ann');",
+       "DELETE FROM visitors WHERE id = 1;",
+       "UPDATE visitors SET username = '" + near_limit_text + "' WHERE id = 2;",
+       "ALTER TABLE visitors ADD COLUMN pinned INT DEFAULT 0;",
+       "DROP TABLE visitors;",
+       "INSERT INTO visitors VALUES (3, '" + long_text + "');",
+       "UPDATE visitors SET username = '" + long_text + "' WHERE id = 2;",
+       "INSERT INTO visitors VALUES (1, 'zed');",
+       "SELECT id, LENGTH(username) FROM visitors ORDER BY id;"});
 
-  CHECK_EQ(output,
-           Lines({"engine paged", "loaded no tables", "OK CREATE TABLE users",
-                  "OK affected=2", "OK CREATE TABLE posts", "OK affected=1",
-                  "error: constraint violation: users.id=1 is referenced by "
-                  "posts.username",
-                  "OK affected=1",
-                  "error: unsupported: paged engine cannot store a row longer "
-                  "than 4060 bytes in users",
-                  "error: bind: table users is referenced by posts.username",
-                  "error: unsupported: paged engine cannot store a row longer "
-                  "than 4060 bytes in users",
-                  "error: unsupported: paged engine cannot store a row longer "
-                  "than 4060 bytes in users",
-                  "error: constraint violation: duplicate key: users.id=1",
-                  "id\tLENGTH(username)", "1\t3", "2\t4045"}));
+  CHECK_EQ(
+      output,
+      Lines({"engine paged", "loaded no tables", "OK CREATE TABLE visitors",
+             "OK affected=2", "OK CREATE TABLE stories", "OK affected=1",
+             "error: constraint violation: visitors.id=1 is referenced by "
+             "stories.username",
+             "OK affected=1",
+             "error: unsupported: paged engine cannot store a row longer "
+             "than 4060 bytes in visitors",
+             "error: bind: table visitors is referenced by stories.username",
+             "error: unsupported: paged engine cannot store a row longer "
+             "than 4060 bytes in visitors",
+             "error: unsupported: paged engine cannot store a row longer "
+             "than 4060 bytes in visitors",
+             "error: constraint violation: duplicate key: visitors.id=1",
+             "id\tLENGTH(username)", "1\t3", "2\t4045"}));
 }
 
 TEST(test_engine_command_alter_and_drop_on_paged) {

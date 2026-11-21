@@ -33,15 +33,15 @@ using domain::PlanPtr;
 using domain::Row;
 using domain::TableSchema;
 using domain::Value;
-using strata::testing::EngagementsSchema;
 using strata::testing::FakeRid;
 using strata::testing::FakeTableReader;
 using strata::testing::JobsSchema;
 using strata::testing::MapCatalog;
 using strata::testing::MeasuresSchema;
 using strata::testing::MustBind;
-using strata::testing::PostsSchema;
-using strata::testing::UsersSchema;
+using strata::testing::ReactionsSchema;
+using strata::testing::StoriesSchema;
+using strata::testing::VisitorsSchema;
 
 constexpr int64_t kInt64Max = std::numeric_limits<int64_t>::max();
 
@@ -94,24 +94,24 @@ struct PlannerTables {
   }
 };
 
-// users, posts and engagements of the `data/` example. users.username is UNIQUE
-// and is referenced by posts.username and engagements.username; posts.id is
-// referenced by engagements.postId. Rows follow the fixture of the flat-file
-// engine tests; `users` can be given in another order.
-Rows ShopUsers() {
+// visitors, stories and reactions of the catalog fixture. visitors.username is
+// UNIQUE and is referenced by stories.username and reactions.username;
+// stories.id is referenced by reactions.storyId. Rows follow the fixture of the
+// flat-file engine tests; `visitors` can be given in another order.
+Rows ShopVisitors() {
   return Rows{Row{Int(1), Text("alice"), Text("Paris")},
               Row{Int(2), Text("carol"), Text("Paris")},
               Row{Int(3), Text("bob"), Text("Rome")},
               Row{Int(4), Text("dave"), Text("Oslo")}};
 }
 
-void AddShop(PlannerTables* tables, const Rows& users) {
-  tables->Add(UsersSchema(), users);
-  tables->Add(PostsSchema(),
+void AddShop(PlannerTables* tables, const Rows& visitors) {
+  tables->Add(VisitorsSchema(), visitors);
+  tables->Add(StoriesSchema(),
               Rows{Row{Int(10), Text("hello world"), Text("alice"), Int(5)},
-                   Row{Int(11), Text("second post"), Text("alice"), Int(0)},
-                   Row{Int(12), Text("bobs post"), Text("bob"), Int(7)}});
-  tables->Add(EngagementsSchema(),
+                   Row{Int(11), Text("second story"), Text("alice"), Int(0)},
+                   Row{Int(12), Text("bobs story"), Text("bob"), Int(7)}});
+  tables->Add(ReactionsSchema(),
               Rows{Row{Int(100), Int(10), Text("bob"), Text("like"),
                        Text("None"), Int(1000)},
                    Row{Int(101), Int(10), Text("carol"), Text("comment"),
@@ -124,7 +124,7 @@ void AddShop(PlannerTables* tables, const Rows& users) {
                        Text("None"), Int(1004)}});
 }
 
-void AddShop(PlannerTables* tables) { AddShop(tables, ShopUsers()); }
+void AddShop(PlannerTables* tables) { AddShop(tables, ShopVisitors()); }
 
 // ----------------------------------------------------------------------------
 // Hand-built nodes.
@@ -256,27 +256,28 @@ TEST(test_planner_insert_builds_change_set_with_one_scan_per_table) {
   // inserts are the rows of the statement in order, and affected is their
   // number.
   Planned planned = PlanSql(
-      "INSERT INTO posts VALUES (20, 'a', 'alice', 1), (21, 'b', 'bob', 2), "
+      "INSERT INTO stories VALUES (20, 'a', 'alice', 1), (21, 'b', 'bob', 2), "
       "(22, 'c', 'alice', 3)",
       tables);
-  CHECK_EQ(Report(planned), (std::vector<std::string>{
-                                "affected 3", "posts + 20|a|alice|1",
-                                "posts + 21|b|bob|2", "posts + 22|c|alice|3"}));
+  CHECK_EQ(Report(planned),
+           (std::vector<std::string>{"affected 3", "stories + 20|a|alice|1",
+                                     "stories + 21|b|bob|2",
+                                     "stories + 22|c|alice|3"}));
   CHECK_EQ(ChangeCount(planned), static_cast<std::size_t>(1));
 
   // The target and the parent table are each scanned once, and read to their
   // end once (the rows plus the end of the rows). A table the statement does
   // not touch is not scanned.
-  CHECK_EQ(tables.ScansOf("posts"), static_cast<std::size_t>(1));
-  CHECK_EQ(tables.NextCallsOf("posts"), static_cast<std::size_t>(3 + 1));
-  CHECK_EQ(tables.ScansOf("users"), static_cast<std::size_t>(1));
-  CHECK_EQ(tables.NextCallsOf("users"), static_cast<std::size_t>(4 + 1));
-  CHECK_EQ(tables.ScansOf("engagements"), static_cast<std::size_t>(0));
+  CHECK_EQ(tables.ScansOf("stories"), static_cast<std::size_t>(1));
+  CHECK_EQ(tables.NextCallsOf("stories"), static_cast<std::size_t>(3 + 1));
+  CHECK_EQ(tables.ScansOf("visitors"), static_cast<std::size_t>(1));
+  CHECK_EQ(tables.NextCallsOf("visitors"), static_cast<std::size_t>(4 + 1));
+  CHECK_EQ(tables.ScansOf("reactions"), static_cast<std::size_t>(0));
 
   // The scan count does not grow with the number of rows of the statement.
   PlannerTables wide_tables;
   AddShop(&wide_tables);
-  std::string sql = "INSERT INTO posts VALUES ";
+  std::string sql = "INSERT INTO stories VALUES ";
   for (int row_number = 0; row_number < 40; ++row_number) {
     if (row_number > 0) {
       sql += ", ";
@@ -289,24 +290,24 @@ TEST(test_planner_insert_builds_change_set_with_one_scan_per_table) {
   CHECK_EQ(wide.error.has_value(), false);
   CHECK_EQ(wide.plan.has_value() ? wide.plan->affected : 0,
            static_cast<std::size_t>(40));
-  CHECK_EQ(wide_tables.ScansOf("posts"), static_cast<std::size_t>(1));
-  CHECK_EQ(wide_tables.ScansOf("users"), static_cast<std::size_t>(1));
-  CHECK_EQ(wide_tables.NextCallsOf("posts"), static_cast<std::size_t>(3 + 1));
-  CHECK_EQ(wide_tables.NextCallsOf("users"), static_cast<std::size_t>(4 + 1));
+  CHECK_EQ(wide_tables.ScansOf("stories"), static_cast<std::size_t>(1));
+  CHECK_EQ(wide_tables.ScansOf("visitors"), static_cast<std::size_t>(1));
+  CHECK_EQ(wide_tables.NextCallsOf("stories"), static_cast<std::size_t>(3 + 1));
+  CHECK_EQ(wide_tables.NextCallsOf("visitors"),
+           static_cast<std::size_t>(4 + 1));
 
-  // Two foreign keys: engagements has one to posts and one to users, and each
-  // parent is scanned once.
-  PlannerTables engagement_tables;
-  AddShop(&engagement_tables);
-  Planned engagement = PlanSql(
-      "INSERT INTO engagements VALUES (200, 10, 'bob', 'like', 'x', 1), "
+  // Two foreign keys: reactions has one to stories and one to visitors, and
+  // each parent is scanned once.
+  PlannerTables reaction_tables;
+  AddShop(&reaction_tables);
+  Planned reaction = PlanSql(
+      "INSERT INTO reactions VALUES (200, 10, 'bob', 'like', 'x', 1), "
       "(201, 11, 'alice', 'like', 'y', 2)",
-      engagement_tables);
-  CHECK_EQ(engagement.error.has_value(), false);
-  CHECK_EQ(engagement_tables.ScansOf("engagements"),
-           static_cast<std::size_t>(1));
-  CHECK_EQ(engagement_tables.ScansOf("posts"), static_cast<std::size_t>(1));
-  CHECK_EQ(engagement_tables.ScansOf("users"), static_cast<std::size_t>(1));
+      reaction_tables);
+  CHECK_EQ(reaction.error.has_value(), false);
+  CHECK_EQ(reaction_tables.ScansOf("reactions"), static_cast<std::size_t>(1));
+  CHECK_EQ(reaction_tables.ScansOf("stories"), static_cast<std::size_t>(1));
+  CHECK_EQ(reaction_tables.ScansOf("visitors"), static_cast<std::size_t>(1));
 }
 
 namespace {
@@ -389,48 +390,48 @@ TEST(test_planner_insert_auto_increment) {
 
 namespace {
 
-std::vector<std::string> PlanUsersInsert(const std::string& values) {
+std::vector<std::string> PlanVisitorsInsert(const std::string& values) {
   PlannerTables tables;
   AddShop(&tables);
-  return Report(PlanSql("INSERT INTO users VALUES " + values, tables));
+  return Report(PlanSql("INSERT INTO visitors VALUES " + values, tables));
 }
 
 }  // namespace
 
 TEST(test_planner_insert_duplicate_checks_and_order) {
   // The primary key repeats an existing row.
-  CHECK_EQ(PlanUsersInsert("(1, 'zed', 'Oslo')"),
-           ErrorReport("constraint violation", "duplicate key: users.id=1"));
+  CHECK_EQ(PlanVisitorsInsert("(1, 'zed', 'Oslo')"),
+           ErrorReport("constraint violation", "duplicate key: visitors.id=1"));
 
   // The primary key repeats an earlier row of the same statement.
-  CHECK_EQ(PlanUsersInsert("(9, 'x', 'a'), (9, 'y', 'b')"),
-           ErrorReport("constraint violation", "duplicate key: users.id=9"));
-  CHECK_EQ(PlanUsersInsert("(9, 'p', 'x'), (10, 'q', 'y'), (9, 'r', 'z')"),
-           ErrorReport("constraint violation", "duplicate key: users.id=9"));
+  CHECK_EQ(PlanVisitorsInsert("(9, 'x', 'a'), (9, 'y', 'b')"),
+           ErrorReport("constraint violation", "duplicate key: visitors.id=9"));
+  CHECK_EQ(PlanVisitorsInsert("(9, 'p', 'x'), (10, 'q', 'y'), (9, 'r', 'z')"),
+           ErrorReport("constraint violation", "duplicate key: visitors.id=9"));
 
   // A UNIQUE value repeats an existing row, or an earlier row of the statement.
-  CHECK_EQ(PlanUsersInsert("(9, 'alice', 'a')"),
+  CHECK_EQ(PlanVisitorsInsert("(9, 'alice', 'a')"),
            ErrorReport("constraint violation",
-                       "duplicate key: users.username=alice"));
-  CHECK_EQ(
-      PlanUsersInsert("(9, 'neo', 'a'), (10, 'neo', 'b')"),
-      ErrorReport("constraint violation", "duplicate key: users.username=neo"));
+                       "duplicate key: visitors.username=alice"));
+  CHECK_EQ(PlanVisitorsInsert("(9, 'neo', 'a'), (10, 'neo', 'b')"),
+           ErrorReport("constraint violation",
+                       "duplicate key: visitors.username=neo"));
 
   // One row that violates both: the primary key is reported.
-  CHECK_EQ(PlanUsersInsert("(1, 'alice', 'a')"),
-           ErrorReport("constraint violation", "duplicate key: users.id=1"));
+  CHECK_EQ(PlanVisitorsInsert("(1, 'alice', 'a')"),
+           ErrorReport("constraint violation", "duplicate key: visitors.id=1"));
 
   // Two rows that each violate one rule: the first violating row is reported.
-  CHECK_EQ(PlanUsersInsert("(9, 'alice', 'a'), (1, 'zed', 'b')"),
+  CHECK_EQ(PlanVisitorsInsert("(9, 'alice', 'a'), (1, 'zed', 'b')"),
            ErrorReport("constraint violation",
-                       "duplicate key: users.username=alice"));
-  CHECK_EQ(PlanUsersInsert("(1, 'zed', 'a'), (9, 'alice', 'b')"),
-           ErrorReport("constraint violation", "duplicate key: users.id=1"));
+                       "duplicate key: visitors.username=alice"));
+  CHECK_EQ(PlanVisitorsInsert("(1, 'zed', 'a'), (9, 'alice', 'b')"),
+           ErrorReport("constraint violation", "duplicate key: visitors.id=1"));
 
   // Distinct rows pass.
-  CHECK_EQ(PlanUsersInsert("(9, 'p', 'x'), (10, 'q', 'y')"),
-           (std::vector<std::string>{"affected 2", "users + 9|p|x",
-                                     "users + 10|q|y"}));
+  CHECK_EQ(PlanVisitorsInsert("(9, 'p', 'x'), (10, 'q', 'y')"),
+           (std::vector<std::string>{"affected 2", "visitors + 9|p|x",
+                                     "visitors + 10|q|y"}));
 
   // Two UNIQUE columns are checked ascending by column position, whichever
   // order the row names them in.
@@ -460,55 +461,55 @@ TEST(test_planner_insert_foreign_key) {
   AddShop(&tables);
 
   // A parent value that exists passes.
-  CHECK_EQ(
-      Report(PlanSql("INSERT INTO posts VALUES (20, 'c', 'alice', 1)", tables)),
-      (std::vector<std::string>{"affected 1", "posts + 20|c|alice|1"}));
+  CHECK_EQ(Report(PlanSql("INSERT INTO stories VALUES (20, 'c', 'alice', 1)",
+                          tables)),
+           (std::vector<std::string>{"affected 1", "stories + 20|c|alice|1"}));
 
   // A parent value that does not exist is reported with both column names.
   CHECK_EQ(
-      Report(PlanSql("INSERT INTO posts VALUES (20, 'c', 'zed', 1)", tables)),
+      Report(PlanSql("INSERT INTO stories VALUES (20, 'c', 'zed', 1)", tables)),
       ErrorReport("constraint violation",
-                  "no matching row: posts.username=zed not found in "
-                  "users.username"));
+                  "no matching row: stories.username=zed not found in "
+                  "visitors.username"));
 
   // The second row of the statement is the one that fails.
-  CHECK_EQ(Report(PlanSql("INSERT INTO posts VALUES (20, 'c', 'alice', 1), "
+  CHECK_EQ(Report(PlanSql("INSERT INTO stories VALUES (20, 'c', 'alice', 1), "
                           "(21, 'd', 'zed', 1)",
                           tables)),
            ErrorReport("constraint violation",
-                       "no matching row: posts.username=zed not found in "
-                       "users.username"));
+                       "no matching row: stories.username=zed not found in "
+                       "visitors.username"));
 
   // Uniqueness is checked before the foreign key: id 10 exists and so does not
-  // user zed.
+  // visitor zed.
   CHECK_EQ(
-      Report(PlanSql("INSERT INTO posts VALUES (10, 'c', 'zed', 1)", tables)),
-      ErrorReport("constraint violation", "duplicate key: posts.id=10"));
+      Report(PlanSql("INSERT INTO stories VALUES (10, 'c', 'zed', 1)", tables)),
+      ErrorReport("constraint violation", "duplicate key: stories.id=10"));
 
   // Two foreign keys are checked in declaration order, with the column spelled
   // as declared.
-  CHECK_EQ(Report(PlanSql("INSERT INTO engagements VALUES (200, 999, 'zed', "
+  CHECK_EQ(Report(PlanSql("INSERT INTO reactions VALUES (200, 999, 'zed', "
                           "'like', 'x', 1)",
                           tables)),
            ErrorReport("constraint violation",
-                       "no matching row: engagements.postId=999 not found in "
-                       "posts.id"));
-  CHECK_EQ(Report(PlanSql("INSERT INTO engagements VALUES (200, 10, 'zed', "
+                       "no matching row: reactions.storyId=999 not found in "
+                       "stories.id"));
+  CHECK_EQ(Report(PlanSql("INSERT INTO reactions VALUES (200, 10, 'zed', "
                           "'like', 'x', 1)",
                           tables)),
            ErrorReport("constraint violation",
-                       "no matching row: engagements.username=zed not found in "
-                       "users.username"));
+                       "no matching row: reactions.username=zed not found in "
+                       "visitors.username"));
 
   // An empty parent table has no matching row for any value.
   PlannerTables empty_parent;
-  empty_parent.Add(UsersSchema(), Rows{});
-  empty_parent.Add(PostsSchema(), Rows{});
-  CHECK_EQ(Report(PlanSql("INSERT INTO posts VALUES (20, 'c', 'alice', 1)",
+  empty_parent.Add(VisitorsSchema(), Rows{});
+  empty_parent.Add(StoriesSchema(), Rows{});
+  CHECK_EQ(Report(PlanSql("INSERT INTO stories VALUES (20, 'c', 'alice', 1)",
                           empty_parent)),
            ErrorReport("constraint violation",
-                       "no matching row: posts.username=alice not found in "
-                       "users.username"));
+                       "no matching row: stories.username=alice not found in "
+                       "visitors.username"));
 
   // A foreign key to a table that the catalog does not have.
   PlannerTables dangling;
@@ -806,69 +807,72 @@ TEST(test_planner_update_uniqueness) {
 }
 
 TEST(test_planner_update_foreign_key) {
-  // posts holds one row (13) whose user does not exist: loaded data is not
+  // stories holds one row (13) whose visitor does not exist: loaded data is not
   // checked against foreign keys.
   PlannerTables tables;
   AddShop(&tables);
   tables.reader.AddTable(
-      PostsSchema(),
+      StoriesSchema(),
       Rows{Row{Int(10), Text("hello world"), Text("alice"), Int(5)},
-           Row{Int(11), Text("second post"), Text("alice"), Int(0)},
+           Row{Int(11), Text("second story"), Text("alice"), Int(0)},
            Row{Int(13), Text("orphan"), Text("ghost"), Int(1)}});
 
   // A new value that exists in the parent passes.
-  CHECK_EQ(Report(PlanSql("UPDATE posts SET username = 'bob' WHERE id = 10",
-                          tables)),
-           (std::vector<std::string>{
-               "affected 1",
-               "posts ~ @1.0 10|hello world|alice|5 => 10|hello world|bob|5"}));
-  CHECK_EQ(tables.ScansOf("users"), static_cast<std::size_t>(1));
+  CHECK_EQ(
+      Report(
+          PlanSql("UPDATE stories SET username = 'bob' WHERE id = 10", tables)),
+      (std::vector<std::string>{
+          "affected 1",
+          "stories ~ @1.0 10|hello world|alice|5 => 10|hello world|bob|5"}));
+  CHECK_EQ(tables.ScansOf("visitors"), static_cast<std::size_t>(1));
 
   // A new value that does not exist is reported with both column names.
-  CHECK_EQ(Report(PlanSql("UPDATE posts SET username = 'zed' WHERE id = 10",
+  CHECK_EQ(Report(PlanSql("UPDATE stories SET username = 'zed' WHERE id = 10",
                           tables)),
            ErrorReport("constraint violation",
-                       "no matching row: posts.username=zed not found in "
-                       "users.username"));
+                       "no matching row: stories.username=zed not found in "
+                       "visitors.username"));
 
   // Assigning the stored value skips the check, even when the parent row is
   // missing; the parent is not scanned.
   PlannerTables skipped;
   AddShop(&skipped);
-  skipped.reader.AddTable(
-      PostsSchema(), Rows{Row{Int(13), Text("orphan"), Text("ghost"), Int(1)}});
-  CHECK_EQ(Report(PlanSql("UPDATE posts SET username = 'ghost' WHERE id = 13",
+  skipped.reader.AddTable(StoriesSchema(), Rows{Row{Int(13), Text("orphan"),
+                                                    Text("ghost"), Int(1)}});
+  CHECK_EQ(Report(PlanSql("UPDATE stories SET username = 'ghost' WHERE id = 13",
                           skipped)),
            (std::vector<std::string>{"affected 1"}));
-  CHECK_EQ(skipped.ScansOf("users"), static_cast<std::size_t>(0));
+  CHECK_EQ(skipped.ScansOf("visitors"), static_cast<std::size_t>(0));
 
   // Updating another column of that row does not check the foreign key either.
-  CHECK_EQ(Report(PlanSql("UPDATE posts SET views = 2 WHERE id = 13", skipped)),
-           (std::vector<std::string>{
-               "affected 1",
-               "posts ~ @1.0 13|orphan|ghost|1 => 13|orphan|ghost|2"}));
-  CHECK_EQ(skipped.ScansOf("users"), static_cast<std::size_t>(0));
+  CHECK_EQ(
+      Report(PlanSql("UPDATE stories SET views = 2 WHERE id = 13", skipped)),
+      (std::vector<std::string>{
+          "affected 1",
+          "stories ~ @1.0 13|orphan|ghost|1 => 13|orphan|ghost|2"}));
+  CHECK_EQ(skipped.ScansOf("visitors"), static_cast<std::size_t>(0));
 
   // Only the changed cells are checked: the statement repairs 'alicex' and
   // leaves the orphan 'ghost' as it is.
   PlannerTables repaired;
   AddShop(&repaired);
   repaired.reader.AddTable(
-      PostsSchema(), Rows{Row{Int(10), Text("p"), Text("alicex"), Int(0)},
-                          Row{Int(13), Text("q"), Text("ghost"), Int(0)}});
-  CHECK_EQ(Report(PlanSql("UPDATE posts SET username = SUBSTR(username, 1, 5)",
-                          repaired)),
-           (std::vector<std::string>{"affected 2",
-                                     "posts ~ @1.0 10|p|alicex|0 => "
-                                     "10|p|alice|0"}));
+      StoriesSchema(), Rows{Row{Int(10), Text("p"), Text("alicex"), Int(0)},
+                            Row{Int(13), Text("q"), Text("ghost"), Int(0)}});
+  CHECK_EQ(
+      Report(PlanSql("UPDATE stories SET username = SUBSTR(username, 1, 5)",
+                     repaired)),
+      (std::vector<std::string>{"affected 2",
+                                "stories ~ @1.0 10|p|alicex|0 => "
+                                "10|p|alice|0"}));
 
   // Many rows change the foreign key: the parent is scanned once.
   PlannerTables many;
   AddShop(&many);
-  Planned all_to_bob = PlanSql("UPDATE posts SET username = 'bob'", many);
+  Planned all_to_bob = PlanSql("UPDATE stories SET username = 'bob'", many);
   CHECK_EQ(all_to_bob.error.has_value(), false);
   CHECK_EQ(Report(all_to_bob).size(), static_cast<std::size_t>(1 + 2));
-  CHECK_EQ(many.ScansOf("users"), static_cast<std::size_t>(1));
+  CHECK_EQ(many.ScansOf("visitors"), static_cast<std::size_t>(1));
 
   // A column that is both UNIQUE and a foreign key: uniqueness is checked
   // before the foreign key, so two rows that get a value that is a duplicate
@@ -878,7 +882,7 @@ TEST(test_planner_update_foreign_key) {
   members.Add(MakeSchema("members",
                          {Column("id", DataType::kInt),
                           Column("username", DataType::kText)},
-                         {domain::ForeignKey{1, "users", 1}}, {1}),
+                         {domain::ForeignKey{1, "visitors", 1}}, {1}),
               Rows{Row{Int(1), Text("alice")}, Row{Int(2), Text("bob")}});
   CHECK_EQ(Report(PlanSql("UPDATE members SET username = 'zed'", members)),
            ErrorReport("constraint violation",
@@ -887,22 +891,22 @@ TEST(test_planner_update_foreign_key) {
                           members)),
            ErrorReport("constraint violation",
                        "no matching row: members.username=zed not found in "
-                       "users.username"));
+                       "visitors.username"));
 
   // Two foreign keys changed together: the first in declaration order is
   // reported.
-  CHECK_EQ(Report(PlanSql("UPDATE engagements SET postId = 999, username = "
+  CHECK_EQ(Report(PlanSql("UPDATE reactions SET storyId = 999, username = "
                           "'zed' WHERE id = 100",
                           many)),
            ErrorReport("constraint violation",
-                       "no matching row: engagements.postId=999 not found in "
-                       "posts.id"));
-  CHECK_EQ(Report(PlanSql("UPDATE engagements SET username = 'zed' WHERE id = "
+                       "no matching row: reactions.storyId=999 not found in "
+                       "stories.id"));
+  CHECK_EQ(Report(PlanSql("UPDATE reactions SET username = 'zed' WHERE id = "
                           "100",
                           many)),
            ErrorReport("constraint violation",
-                       "no matching row: engagements.username=zed not found in "
-                       "users.username"));
+                       "no matching row: reactions.username=zed not found in "
+                       "visitors.username"));
 }
 
 TEST(test_planner_update_cascade) {
@@ -967,54 +971,55 @@ TEST(test_planner_update_cascade) {
   CHECK_EQ(two_keys.ScansOf("p2"), static_cast<std::size_t>(1));
 
   // One old value that maps to two new values takes the first in scan order:
-  // users 1 and 2 both hold 'dup' (UNIQUE is not checked on load) and are
+  // visitors 1 and 2 both hold 'dup' (UNIQUE is not checked on load) and are
   // renamed to n1 and n2.
   PlannerTables duplicates;
   AddShop(&duplicates, Rows{Row{Int(1), Text("dup"), Text("x")},
                             Row{Int(2), Text("dup"), Text("y")},
                             Row{Int(3), Text("solo"), Text("z")}});
   duplicates.reader.AddTable(
-      PostsSchema(), Rows{Row{Int(10), Text("p"), Text("dup"), Int(0)}});
-  duplicates.reader.AddTable(EngagementsSchema(), Rows{});
+      StoriesSchema(), Rows{Row{Int(10), Text("p"), Text("dup"), Int(0)}});
+  duplicates.reader.AddTable(ReactionsSchema(), Rows{});
   Planned first_wins = PlanSql(
-      "UPDATE users SET username = 'n' || CAST(id AS TEXT) WHERE id <= 2",
+      "UPDATE visitors SET username = 'n' || CAST(id AS TEXT) WHERE id <= 2",
       duplicates);
-  CHECK_EQ(
-      Report(first_wins),
-      (std::vector<std::string>{"affected 2", "users ~ @1.0 1|dup|x => 1|n1|x",
-                                "users ~ @1.1 2|dup|y => 2|n2|y",
-                                "posts ~ @1.0 10|p|dup|0 => 10|p|n1|0"}));
-  // engagements was scanned and has no referencing row, so it has no change.
-  CHECK_EQ(duplicates.ScansOf("engagements"), static_cast<std::size_t>(1));
+  CHECK_EQ(Report(first_wins),
+           (std::vector<std::string>{
+               "affected 2", "visitors ~ @1.0 1|dup|x => 1|n1|x",
+               "visitors ~ @1.1 2|dup|y => 2|n2|y",
+               "stories ~ @1.0 10|p|dup|0 => 10|p|n1|0"}));
+  // reactions was scanned and has no referencing row, so it has no change.
+  CHECK_EQ(duplicates.ScansOf("reactions"), static_cast<std::size_t>(1));
   CHECK_EQ(ChangeCount(first_wins), static_cast<std::size_t>(2));
 
-  // The shop: renaming alice cascades into posts and engagements; affected
-  // counts the selected user only.
+  // The shop: renaming alice cascades into stories and reactions; affected
+  // counts the selected visitor only.
   PlannerTables shop;
   AddShop(&shop);
   Planned alice =
-      PlanSql("UPDATE users SET username = 'alicia' WHERE id = 1", shop);
-  CHECK_EQ(Report(alice),
-           (std::vector<std::string>{
-               "affected 1", "users ~ @1.0 1|alice|Paris => 1|alicia|Paris",
-               "posts ~ @1.0 10|hello world|alice|5 => 10|hello world|alicia|5",
-               "posts ~ @1.1 11|second post|alice|0 => 11|second post|alicia|0",
-               "engagements ~ @1.3 103|12|alice|like|None|1003 => "
-               "103|12|alicia|like|None|1003"}));
+      PlanSql("UPDATE visitors SET username = 'alicia' WHERE id = 1", shop);
+  CHECK_EQ(
+      Report(alice),
+      (std::vector<std::string>{
+          "affected 1", "visitors ~ @1.0 1|alice|Paris => 1|alicia|Paris",
+          "stories ~ @1.0 10|hello world|alice|5 => 10|hello world|alicia|5",
+          "stories ~ @1.1 11|second story|alice|0 => 11|second story|alicia|0",
+          "reactions ~ @1.3 103|12|alice|like|None|1003 => "
+          "103|12|alicia|like|None|1003"}));
   CHECK_EQ(ChangeCount(alice), static_cast<std::size_t>(3));
 
   // A column that nothing references, or an assignment that changes nothing,
   // reads no child table.
   PlannerTables unreferenced;
   AddShop(&unreferenced);
-  Planned moved = PlanSql("UPDATE users SET location = 'Berlin' WHERE id = 1",
-                          unreferenced);
+  Planned moved = PlanSql(
+      "UPDATE visitors SET location = 'Berlin' WHERE id = 1", unreferenced);
   CHECK_EQ(ChangeCount(moved), static_cast<std::size_t>(1));
   Planned same_name =
-      PlanSql("UPDATE users SET username = username", unreferenced);
+      PlanSql("UPDATE visitors SET username = username", unreferenced);
   CHECK_EQ(ChangeCount(same_name), static_cast<std::size_t>(0));
-  CHECK_EQ(unreferenced.ScansOf("posts"), static_cast<std::size_t>(0));
-  CHECK_EQ(unreferenced.ScansOf("engagements"), static_cast<std::size_t>(0));
+  CHECK_EQ(unreferenced.ScansOf("stories"), static_cast<std::size_t>(0));
+  CHECK_EQ(unreferenced.ScansOf("reactions"), static_cast<std::size_t>(0));
 }
 
 TEST(test_planner_update_error_precedence) {
@@ -1045,9 +1050,9 @@ TEST(test_planner_update_error_precedence) {
 }
 
 TEST(test_planner_delete_restrict_and_order) {
-  // users in the order dave, bob, alice, carol: scan order is not primary key
-  // order. dave is referenced by nobody, bob by posts and engagements, alice by
-  // posts and engagements, carol by engagements only.
+  // visitors in the order dave, bob, alice, carol: scan order is not primary
+  // key order. dave is referenced by nobody, bob by stories and reactions,
+  // alice by stories and reactions, carol by reactions only.
   const Rows scrambled{Row{Int(4), Text("dave"), Text("Oslo")},
                        Row{Int(3), Text("bob"), Text("Rome")},
                        Row{Int(1), Text("alice"), Text("Paris")},
@@ -1057,43 +1062,45 @@ TEST(test_planner_delete_restrict_and_order) {
 
   // No WHERE and nothing references the table: every row is deleted, with its
   // Rid and before-image.
-  CHECK_EQ(Report(PlanSql("DELETE FROM engagements", tables)),
+  CHECK_EQ(Report(PlanSql("DELETE FROM reactions", tables)),
            (std::vector<std::string>{
-               "affected 5", "engagements - @1.0 100|10|bob|like|None|1000",
-               "engagements - @1.1 101|10|carol|comment|nice|1001",
-               "engagements - @1.2 102|11|bob|comment|ok|1002",
-               "engagements - @1.3 103|12|alice|like|None|1003",
-               "engagements - @1.4 104|12|carol|like|None|1004"}));
+               "affected 5", "reactions - @1.0 100|10|bob|like|None|1000",
+               "reactions - @1.1 101|10|carol|comment|nice|1001",
+               "reactions - @1.2 102|11|bob|comment|ok|1002",
+               "reactions - @1.3 103|12|alice|like|None|1003",
+               "reactions - @1.4 104|12|carol|like|None|1004"}));
 
   // Nothing is selected: no change, affected 0.
-  Planned none = PlanSql("DELETE FROM users WHERE id = 99", tables);
+  Planned none = PlanSql("DELETE FROM visitors WHERE id = 99", tables);
   CHECK_EQ(Report(none), (std::vector<std::string>{"affected 0"}));
   CHECK_EQ(ChangeCount(none), static_cast<std::size_t>(0));
 
   // A row that nothing references is deleted although the table is referenced.
   CHECK_EQ(
-      Report(PlanSql("DELETE FROM users WHERE id = 4", tables)),
-      (std::vector<std::string>{"affected 1", "users - @1.0 4|dave|Oslo"}));
+      Report(PlanSql("DELETE FROM visitors WHERE id = 4", tables)),
+      (std::vector<std::string>{"affected 1", "visitors - @1.0 4|dave|Oslo"}));
 
   // A referenced row: the message names the child column.
-  CHECK_EQ(Report(PlanSql("DELETE FROM users WHERE id = 2", tables)),
+  CHECK_EQ(Report(PlanSql("DELETE FROM visitors WHERE id = 2", tables)),
            ErrorReport("constraint violation",
-                       "users.id=2 is referenced by engagements.username"));
+                       "visitors.id=2 is referenced by reactions.username"));
 
   // Several violating rows: the first in scan order is reported (bob, which is
   // before alice), and of the two child tables that reference it, the first in
-  // catalog order (posts, which is not first alphabetically).
-  CHECK_EQ(Report(PlanSql("DELETE FROM users", tables)),
+  // catalog order (stories, which is not first alphabetically).
+  CHECK_EQ(Report(PlanSql("DELETE FROM visitors", tables)),
            ErrorReport("constraint violation",
-                       "users.id=3 is referenced by posts.username"));
-  CHECK_EQ(Report(PlanSql("DELETE FROM users WHERE id = 1 OR id = 3", tables)),
-           ErrorReport("constraint violation",
-                       "users.id=3 is referenced by posts.username"));
+                       "visitors.id=3 is referenced by stories.username"));
+  CHECK_EQ(
+      Report(PlanSql("DELETE FROM visitors WHERE id = 1 OR id = 3", tables)),
+      ErrorReport("constraint violation",
+                  "visitors.id=3 is referenced by stories.username"));
 
   // A referenced row is reported even though other selected rows are free.
-  CHECK_EQ(Report(PlanSql("DELETE FROM users WHERE id = 4 OR id = 2", tables)),
-           ErrorReport("constraint violation",
-                       "users.id=2 is referenced by engagements.username"));
+  CHECK_EQ(
+      Report(PlanSql("DELETE FROM visitors WHERE id = 4 OR id = 2", tables)),
+      ErrorReport("constraint violation",
+                  "visitors.id=2 is referenced by reactions.username"));
 
   // Two foreign keys of one child that reference the same parent: the first in
   // declaration order is reported. The foreign key names its table in another
@@ -1104,21 +1111,21 @@ TEST(test_planner_delete_restrict_and_order) {
                           {Column("id", DataType::kInt),
                            Column("sender", DataType::kText),
                            Column("receiver", DataType::kText)},
-                          {domain::ForeignKey{1, "USERS", 1},
-                           domain::ForeignKey{2, "USERS", 1}},
+                          {domain::ForeignKey{1, "VISITORS", 1},
+                           domain::ForeignKey{2, "VISITORS", 1}},
                           {}),
                Rows{Row{Int(1), Text("dave"), Text("dave")},
                     Row{Int(2), Text("bob"), Text("dave")}});
-  CHECK_EQ(Report(PlanSql("DELETE FROM users WHERE id = 4", messages)),
+  CHECK_EQ(Report(PlanSql("DELETE FROM visitors WHERE id = 4", messages)),
            ErrorReport("constraint violation",
-                       "users.id=4 is referenced by msgs.sender"));
+                       "visitors.id=4 is referenced by msgs.sender"));
 
   // Each referencing child table is scanned once, however many rows are
   // selected.
-  CHECK_EQ(messages.ScansOf("posts"), static_cast<std::size_t>(1));
-  CHECK_EQ(messages.ScansOf("engagements"), static_cast<std::size_t>(1));
+  CHECK_EQ(messages.ScansOf("stories"), static_cast<std::size_t>(1));
+  CHECK_EQ(messages.ScansOf("reactions"), static_cast<std::size_t>(1));
   CHECK_EQ(messages.ScansOf("msgs"), static_cast<std::size_t>(2));
-  CHECK_EQ(messages.ScansOf("users"), static_cast<std::size_t>(1));
+  CHECK_EQ(messages.ScansOf("visitors"), static_cast<std::size_t>(1));
 }
 
 TEST(test_planner_rejects_non_write_node_and_unknown_table) {
@@ -1126,10 +1133,10 @@ TEST(test_planner_rejects_non_write_node_and_unknown_table) {
   AddShop(&tables);
 
   // A query node and a DDL node are not write nodes.
-  PlanPtr scan = MakePlan(PlanNode{domain::ScanNode{"users"}});
+  PlanPtr scan = MakePlan(PlanNode{domain::ScanNode{"visitors"}});
   CHECK_EQ(Report(PlanOf(*scan, tables)),
            ErrorReport("unsupported", "not a write plan node"));
-  PlanPtr select = MustBind("SELECT id FROM users", tables.catalog);
+  PlanPtr select = MustBind("SELECT id FROM visitors", tables.catalog);
   if (select == nullptr) {
     return;
   }
@@ -1164,13 +1171,12 @@ TEST(test_planner_rejects_non_write_node_and_unknown_table) {
            ErrorReport("bind", "unknown table: measures"));
 
   // Table names are case-insensitive, and TableChange::table is lowercase.
-  PlanPtr upper =
-      MakePlan(PlanNode{domain::DeleteNode{"ENGAGEMENTS", nullptr}});
+  PlanPtr upper = MakePlan(PlanNode{domain::DeleteNode{"REACTIONS", nullptr}});
   Planned deleted = PlanOf(*upper, tables);
   CHECK_EQ(deleted.error.has_value(), false);
   CHECK_EQ(ChangeCount(deleted), static_cast<std::size_t>(1));
   if (deleted.plan.has_value() && !deleted.plan->changes.empty()) {
-    CHECK_EQ(deleted.plan->changes[0].table, "engagements");
+    CHECK_EQ(deleted.plan->changes[0].table, "reactions");
     CHECK_EQ(deleted.plan->affected, static_cast<std::size_t>(5));
   }
 }

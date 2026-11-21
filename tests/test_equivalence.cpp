@@ -292,26 +292,26 @@ void CheckRunnerComparesTables() {
 // Reads: filters, expressions, functions, LIKE, errors from one source.
 const std::vector<std::string>& ReadCorpus() {
   static const std::vector<std::string> corpus = {
-      "SELECT * FROM users",
-      "SELECT username, location FROM users WHERE location = 'Paris'",
-      "SELECT id, username FROM users WHERE rating >= 3.25 AND location <> "
+      "SELECT * FROM visitors",
+      "SELECT username, location FROM visitors WHERE location = 'Paris'",
+      "SELECT id, username FROM visitors WHERE rating >= 3.25 AND location <> "
       "'Oslo'",
-      "SELECT id FROM posts WHERE views > 3 OR content = ''",
-      "SELECT id, views * 2 + 1, views / 2, views - 10, -views FROM posts "
+      "SELECT id FROM stories WHERE views > 3 OR content = ''",
+      "SELECT id, views * 2 + 1, views / 2, views - 10, -views FROM stories "
       "WHERE id <= 5",
-      "SELECT id, content || '!' FROM posts WHERE content LIKE '%world%'",
-      "SELECT id FROM posts WHERE content LIKE 'h_llo%'",
+      "SELECT id, content || '!' FROM stories WHERE content LIKE '%world%'",
+      "SELECT id FROM stories WHERE content LIKE 'h_llo%'",
       "SELECT UPPER(username), LOWER(content), LENGTH(content), "
-      "SUBSTR(content, 2, 3), TRIM(content) FROM posts",
+      "SUBSTR(content, 2, 3), TRIM(content) FROM stories",
       "SELECT ABS(rating - 5), ROUND(rating, 1), CAST(rating AS INT), "
-      "CAST(id AS TEXT), CAST(rating AS TEXT) FROM users",
-      "SELECT id, CAST(content AS INT) FROM posts WHERE id = 1",
-      "SELECT id, 1 / (views - 7) FROM posts WHERE id < 6",
-      "SELECT id, 10 / views FROM posts WHERE views > 0",
-      "SELECT id FROM posts WHERE username = 'nobody'",
+      "CAST(id AS TEXT), CAST(rating AS TEXT) FROM visitors",
+      "SELECT id, CAST(content AS INT) FROM stories WHERE id = 1",
+      "SELECT id, 1 / (views - 7) FROM stories WHERE id < 6",
+      "SELECT id, 10 / views FROM stories WHERE views > 0",
+      "SELECT id FROM stories WHERE username = 'nobody'",
       "SELECT id FROM nosuch",
-      "SELECT nosuch FROM users",
-      "SELECT id FROM users WHERE username > 5",
+      "SELECT nosuch FROM visitors",
+      "SELECT id FROM visitors WHERE username > 5",
   };
   return corpus;
 }
@@ -319,18 +319,19 @@ const std::vector<std::string>& ReadCorpus() {
 // ORDER BY with ties, LIMIT and OFFSET at the boundaries, on unique keys.
 const std::vector<std::string>& OrderCorpus() {
   static const std::vector<std::string> corpus = {
-      "SELECT id, username FROM users ORDER BY username DESC",
-      "SELECT id, location FROM users ORDER BY location, id DESC",
-      "SELECT id, views FROM posts ORDER BY views DESC, id LIMIT 4",
-      "SELECT id FROM posts ORDER BY id LIMIT 3 OFFSET 2",
-      "SELECT id FROM posts ORDER BY id LIMIT 0",
-      "SELECT id FROM posts ORDER BY id LIMIT 5 OFFSET 20",
-      "SELECT id, rating FROM users ORDER BY rating, id",
-      "SELECT id, views FROM posts ORDER BY 2 DESC, 1 LIMIT 100",
-      "SELECT location, COUNT(*) AS n FROM users GROUP BY location ORDER BY n "
+      "SELECT id, username FROM visitors ORDER BY username DESC",
+      "SELECT id, location FROM visitors ORDER BY location, id DESC",
+      "SELECT id, views FROM stories ORDER BY views DESC, id LIMIT 4",
+      "SELECT id FROM stories ORDER BY id LIMIT 3 OFFSET 2",
+      "SELECT id FROM stories ORDER BY id LIMIT 0",
+      "SELECT id FROM stories ORDER BY id LIMIT 5 OFFSET 20",
+      "SELECT id, rating FROM visitors ORDER BY rating, id",
+      "SELECT id, views FROM stories ORDER BY 2 DESC, 1 LIMIT 100",
+      "SELECT location, COUNT(*) AS n FROM visitors GROUP BY location ORDER BY "
+      "n "
       "DESC, location",
-      "SELECT id, content FROM posts ORDER BY content, id",
-      "SELECT 1 / views FROM posts ORDER BY 1 LIMIT 1",
+      "SELECT id, content FROM stories ORDER BY content, id",
+      "SELECT 1 / views FROM stories ORDER BY 1 LIMIT 1",
   };
   return corpus;
 }
@@ -339,30 +340,37 @@ const std::vector<std::string>& OrderCorpus() {
 // loops, INT against DOUBLE, a self join, an empty side, an ambiguous column.
 const std::vector<std::string>& JoinCorpus() {
   static const std::vector<std::string> corpus = {
-      "SELECT p.id, u.location FROM posts p JOIN users u ON p.username = "
-      "u.username",
-      "SELECT p.id, e.type FROM posts p JOIN engagements e ON e.postid = p.id "
-      "WHERE e.type = 'like'",
-      "SELECT u.username, p.id, e.id FROM users u JOIN posts p ON p.username "
-      "= u.username JOIN engagements e ON e.postid = p.id",
-      "SELECT e.id, e.username, p.username FROM engagements e JOIN posts p ON "
-      "e.postid = p.id AND e.username <> p.username",
-      "SELECT u.id, v.id FROM users u JOIN users v ON u.rating < v.rating",
-      "SELECT u.id, p.id FROM users u JOIN posts p ON u.rating = p.views",
-      "SELECT u.id, p.id FROM users u JOIN posts p ON p.views = u.rating",
-      "SELECT a.id, b.id FROM posts a JOIN posts b ON a.content = b.content "
+      "SELECT s.id, v.location FROM stories s JOIN visitors v ON s.username = "
+      "v.username",
+      "SELECT s.id, r.type FROM stories s JOIN reactions r ON r.storyid = s.id "
+      "WHERE r.type = 'like'",
+      "SELECT v.username, s.id, r.id FROM visitors v JOIN stories s ON "
+      "s.username "
+      "= v.username JOIN reactions r ON r.storyid = s.id",
+      "SELECT r.id, r.username, s.username FROM reactions r JOIN stories s ON "
+      "r.storyid = s.id AND r.username <> s.username",
+      "SELECT v1.id, v2.id FROM visitors v1 JOIN visitors v2 ON v1.rating < "
+      "v2.rating",
+      "SELECT v.id, s.id FROM visitors v JOIN stories s ON v.rating = s.views",
+      "SELECT v.id, s.id FROM visitors v JOIN stories s ON s.views = v.rating",
+      "SELECT a.id, b.id FROM stories a JOIN stories b ON a.content = "
+      "b.content "
       "AND a.id < b.id",
-      "SELECT e.id, u.location, p.content FROM engagements e JOIN users u ON "
-      "e.username = u.username JOIN posts p ON e.postid = p.id ORDER BY e.id "
+      "SELECT r.id, v.location, s.content FROM reactions r JOIN visitors v ON "
+      "r.username = v.username JOIN stories s ON r.storyid = s.id ORDER BY "
+      "r.id "
       "LIMIT 5",
-      "SELECT * FROM users u JOIN posts p ON p.username = u.username",
-      "SELECT p.id FROM posts p JOIN users u ON p.username = u.username WHERE "
-      "u.location = 'Rome' AND p.views > 2",
-      "SELECT p.id FROM posts p JOIN users u ON p.username = u.username WHERE "
-      "u.location = 'Nowhere'",
-      "SELECT id FROM users JOIN posts ON posts.username = users.username",
-      "SELECT e.id, p.id FROM engagements e JOIN posts p ON e.postid = p.id "
-      "ORDER BY p.id DESC, e.id LIMIT 6 OFFSET 3",
+      "SELECT * FROM visitors v JOIN stories s ON s.username = v.username",
+      "SELECT s.id FROM stories s JOIN visitors v ON s.username = v.username "
+      "WHERE "
+      "v.location = 'Rome' AND s.views > 2",
+      "SELECT s.id FROM stories s JOIN visitors v ON s.username = v.username "
+      "WHERE "
+      "v.location = 'Nowhere'",
+      "SELECT id FROM visitors JOIN stories ON stories.username = "
+      "visitors.username",
+      "SELECT r.id, s.id FROM reactions r JOIN stories s ON r.storyid = s.id "
+      "ORDER BY s.id DESC, r.id LIMIT 6 OFFSET 3",
   };
   return corpus;
 }
@@ -371,25 +379,27 @@ const std::vector<std::string>& JoinCorpus() {
 const std::vector<std::string>& AggregateCorpus() {
   static const std::vector<std::string> corpus = {
       "SELECT COUNT(*), SUM(views), MIN(views), MAX(views), AVG(views) FROM "
-      "posts",
-      "SELECT MIN(content), MAX(content), MIN(rating), MAX(rating) FROM posts "
-      "JOIN users ON posts.username = users.username",
-      "SELECT username, COUNT(*), SUM(views) FROM posts GROUP BY username "
+      "stories",
+      "SELECT MIN(content), MAX(content), MIN(rating), MAX(rating) FROM "
+      "stories "
+      "JOIN visitors ON stories.username = visitors.username",
+      "SELECT username, COUNT(*), SUM(views) FROM stories GROUP BY username "
       "ORDER BY username",
       "SELECT type, COUNT(*), SUM(weight), MIN(weight), MAX(timestamp) FROM "
-      "engagements GROUP BY type ORDER BY type",
-      "SELECT COUNT(*), SUM(views) FROM posts WHERE id < 0",
-      "SELECT COUNT(*), AVG(views) FROM posts WHERE id < 0",
-      "SELECT MIN(views) FROM posts WHERE id < 0",
-      "SELECT MAX(content) FROM posts WHERE id < 0",
-      "SELECT username, COUNT(*) FROM posts WHERE id < 0 GROUP BY username",
-      "SELECT 1, COUNT(*) FROM users",
-      "SELECT LENGTH(content), COUNT(*) FROM posts GROUP BY LENGTH(content) "
+      "reactions GROUP BY type ORDER BY type",
+      "SELECT COUNT(*), SUM(views) FROM stories WHERE id < 0",
+      "SELECT COUNT(*), AVG(views) FROM stories WHERE id < 0",
+      "SELECT MIN(views) FROM stories WHERE id < 0",
+      "SELECT MAX(content) FROM stories WHERE id < 0",
+      "SELECT username, COUNT(*) FROM stories WHERE id < 0 GROUP BY username",
+      "SELECT 1, COUNT(*) FROM visitors",
+      "SELECT LENGTH(content), COUNT(*) FROM stories GROUP BY LENGTH(content) "
       "ORDER BY 1",
-      "SELECT u.location, COUNT(*) FROM users u JOIN posts p ON p.username = "
-      "u.username GROUP BY u.location ORDER BY 2 DESC, 1",
-      "SELECT postid, COUNT(*), SUM(timestamp) FROM engagements GROUP BY "
-      "postid ORDER BY postid LIMIT 4",
+      "SELECT v.location, COUNT(*) FROM visitors v JOIN stories s ON "
+      "s.username = "
+      "v.username GROUP BY v.location ORDER BY 2 DESC, 1",
+      "SELECT storyid, COUNT(*), SUM(timestamp) FROM reactions GROUP BY "
+      "storyid ORDER BY storyid LIMIT 4",
   };
   return corpus;
 }
@@ -399,58 +409,58 @@ const std::vector<std::string>& AggregateCorpus() {
 // auto-increment value.
 const std::vector<std::string>& InsertCorpus() {
   static const std::vector<std::string> corpus = {
-      "INSERT INTO users (username, location) VALUES ('fay', 'Rome')",
-      "INSERT INTO users (username, location) VALUES ('gus', 'Lima'), "
+      "INSERT INTO visitors (username, location) VALUES ('fay', 'Rome')",
+      "INSERT INTO visitors (username, location) VALUES ('gus', 'Lima'), "
       "('hal', 'Oslo'), ('ivy', 'Paris')",
-      "INSERT INTO users VALUES (4, 'dup', 'x', 1.0)",
-      "INSERT INTO users (username, location) VALUES ('ann', 'x')",
-      "INSERT INTO users VALUES (50, 'ann', 'x', 1.0)",
-      "INSERT INTO users VALUES (4, 'ann', 'x', 1.0)",
-      "INSERT INTO users (username, location) VALUES ('zed', 'x'), ('zed', "
+      "INSERT INTO visitors VALUES (4, 'dup', 'x', 1.0)",
+      "INSERT INTO visitors (username, location) VALUES ('ann', 'x')",
+      "INSERT INTO visitors VALUES (50, 'ann', 'x', 1.0)",
+      "INSERT INTO visitors VALUES (4, 'ann', 'x', 1.0)",
+      "INSERT INTO visitors (username, location) VALUES ('zed', 'x'), ('zed', "
       "'y')",
-      "INSERT INTO users VALUES (20, 'jo', 'x', 7)",
-      "INSERT INTO users (username) VALUES ('nolocation')",
-      "INSERT INTO posts (content, username) VALUES ('new post', 'ann')",
-      "INSERT INTO posts (content, username) VALUES ('p', 'nobody')",
-      "INSERT INTO posts VALUES (100, 'x', 'ann', 1), (101, 'y', 'ghost', 2)",
-      "INSERT INTO posts (content, username, views) VALUES ('x, \"y\" "
+      "INSERT INTO visitors VALUES (20, 'jo', 'x', 7)",
+      "INSERT INTO visitors (username) VALUES ('nolocation')",
+      "INSERT INTO stories (content, username) VALUES ('new story', 'ann')",
+      "INSERT INTO stories (content, username) VALUES ('p', 'nobody')",
+      "INSERT INTO stories VALUES (100, 'x', 'ann', 1), (101, 'y', 'ghost', 2)",
+      "INSERT INTO stories (content, username, views) VALUES ('x, \"y\" "
       "\xC3\xBCn\xC3\xAF', 'bob', -3), ('', 'cat', 0)",
-      "INSERT INTO engagements VALUES (21, 1, 'bob', 'like', 1, 2000)",
-      "INSERT INTO engagements VALUES (22, 999, 'bob', 'like', 1.0, 1)",
-      "INSERT INTO engagements VALUES (23, 1, 'ghost', 'like', 1.0, 1)",
-      "INSERT INTO engagements VALUES (21, 1, 'bob', 'like', 1.0, 1)",
-      "INSERT INTO engagements VALUES (24, 1, 'bob', 'like', 1.0, "
+      "INSERT INTO reactions VALUES (21, 1, 'bob', 'like', 1, 2000)",
+      "INSERT INTO reactions VALUES (22, 999, 'bob', 'like', 1.0, 1)",
+      "INSERT INTO reactions VALUES (23, 1, 'ghost', 'like', 1.0, 1)",
+      "INSERT INTO reactions VALUES (21, 1, 'bob', 'like', 1.0, 1)",
+      "INSERT INTO reactions VALUES (24, 1, 'bob', 'like', 1.0, "
       "9223372036854775807)",
       // Several violations in one row: the primary key, then UNIQUE columns in
       // column order, then foreign keys in declaration order.
-      "INSERT INTO posts VALUES (1, 'x', 'ghost', 1)",
-      "INSERT INTO engagements VALUES (21, 999, 'ghost', 'like', 1.0, 1)",
-      "INSERT INTO engagements VALUES (30, 999, 'ghost', 'like', 1.0, 1)",
+      "INSERT INTO stories VALUES (1, 'x', 'ghost', 1)",
+      "INSERT INTO reactions VALUES (21, 999, 'ghost', 'like', 1.0, 1)",
+      "INSERT INTO reactions VALUES (30, 999, 'ghost', 'like', 1.0, 1)",
       "CREATE TABLE twin (id INT PRIMARY KEY, a TEXT UNIQUE, b TEXT UNIQUE)",
       "INSERT INTO twin VALUES (1, 'x', 'y')",
       "INSERT INTO twin VALUES (2, 'x', 'y')",
       "INSERT INTO twin VALUES (2, 'z', 'y')",
       "INSERT INTO twin VALUES (1, 'x', 'y')",
       "CREATE TABLE tagged (id INT PRIMARY KEY, tag TEXT UNIQUE, owner TEXT "
-      "REFERENCES users(username))",
+      "REFERENCES visitors(username))",
       "INSERT INTO tagged VALUES (1, 't', 'ann')",
       "INSERT INTO tagged VALUES (2, 't', 'ghost')",
       "INSERT INTO tagged VALUES (2, 'u', 'ghost')",
       // Two INT values above 2^53 share one DOUBLE value: a join on them has
       // to compare the INT values, not only the hash keys.
-      "INSERT INTO engagements VALUES (25, 1, 'bob', 'like', 1.0, "
+      "INSERT INTO reactions VALUES (25, 1, 'bob', 'like', 1.0, "
       "9007199254740992), (26, 1, 'bob', 'like', 1.0, 9007199254740993)",
-      "SELECT a.id, b.id FROM engagements a JOIN engagements b ON a.timestamp "
+      "SELECT a.id, b.id FROM reactions a JOIN reactions b ON a.timestamp "
       "= b.timestamp ORDER BY a.id, b.id",
-      "INSERT INTO posts (content, username, views) VALUES ('o', 'ann', "
+      "INSERT INTO stories (content, username, views) VALUES ('o', 'ann', "
       "9223372036854775807 + 1)",
       // The auto-increment value overflows after the largest INT.
-      "INSERT INTO users VALUES (9223372036854775807, 'big', 'x', 1.0)",
-      "INSERT INTO users (username, location) VALUES ('after', 'y')",
-      "SELECT MAX(id) FROM users",
-      "DELETE FROM users WHERE id = 9223372036854775807",
-      "INSERT INTO users (username, location) VALUES ('after', 'y')",
-      "SELECT id, username FROM users ORDER BY id",
+      "INSERT INTO visitors VALUES (9223372036854775807, 'big', 'x', 1.0)",
+      "INSERT INTO visitors (username, location) VALUES ('after', 'y')",
+      "SELECT MAX(id) FROM visitors",
+      "DELETE FROM visitors WHERE id = 9223372036854775807",
+      "INSERT INTO visitors (username, location) VALUES ('after', 'y')",
+      "SELECT id, username FROM visitors ORDER BY id",
   };
   return corpus;
 }
@@ -473,16 +483,16 @@ const std::vector<std::string>& DefinitionCorpus() {
       "INSERT INTO notes (id, tag) VALUES (2, 't1')",
       "INSERT INTO notes VALUES (3, 'b', 2, 't3')",
       "SELECT id, body, score, tag FROM notes ORDER BY id",
-      "CREATE TABLE users (id INT PRIMARY KEY)",
+      "CREATE TABLE visitors (id INT PRIMARY KEY)",
       "CREATE TABLE bad (id INT PRIMARY KEY, a INT, a TEXT)",
       "CREATE TABLE nopk (a INT)",
-      "CREATE TABLE refs (id INT PRIMARY KEY, uid INT REFERENCES users(id), "
-      "who TEXT REFERENCES users(username))",
+      "CREATE TABLE refs (id INT PRIMARY KEY, uid INT REFERENCES visitors(id), "
+      "who TEXT REFERENCES visitors(username))",
       "INSERT INTO refs VALUES (1, 1, 'ann')",
       "INSERT INTO refs VALUES (2, 999, 'ann')",
       "INSERT INTO refs VALUES (3, 8, 'gus')",
-      "DELETE FROM users WHERE id = 8",
-      "UPDATE users SET username = 'gus2' WHERE id = 8",
+      "DELETE FROM visitors WHERE id = 8",
+      "UPDATE visitors SET username = 'gus2' WHERE id = 8",
       "SELECT id, uid, who FROM refs ORDER BY id",
       "DELETE FROM refs WHERE id > 100",
   };
@@ -491,8 +501,8 @@ const std::vector<std::string>& DefinitionCorpus() {
 
 // ALTER TABLE ADD COLUMN of each type, DROP TABLE of a table that nothing
 // references, a refused DROP of a referenced table, and a table created again
-// under a dropped name. The users table is referenced by posts and
-// engagements.
+// under a dropped name. The visitors table is referenced by stories and
+// reactions.
 const std::vector<std::string>& SchemaChangeCorpus() {
   static const std::vector<std::string> corpus = {
       "CREATE TABLE scratch (id INT PRIMARY KEY, name TEXT, score DOUBLE)",
@@ -505,12 +515,12 @@ const std::vector<std::string>& SchemaChangeCorpus() {
       "UPDATE scratch SET flag = 1, note = 'changed' WHERE id = 2",
       "SELECT id, flag, ratio, note FROM scratch ORDER BY id",
       "SELECT COUNT(*), SUM(flag) FROM scratch",
-      "SELECT s.id, u.username FROM scratch s JOIN users u ON u.id = s.id "
+      "SELECT s.id, v.username FROM scratch s JOIN visitors v ON v.id = s.id "
       "ORDER BY s.id",
       "ALTER TABLE scratch ADD COLUMN flag INT DEFAULT 5",
       "ALTER TABLE missing ADD COLUMN x INT DEFAULT 0",
       "ALTER TABLE scratch ADD COLUMN y INT",
-      "DROP TABLE users",
+      "DROP TABLE visitors",
       "DROP TABLE scratch",
       "SELECT * FROM scratch",
       "CREATE TABLE scratch (id INT PRIMARY KEY, other TEXT)",
@@ -528,58 +538,61 @@ const std::vector<std::string>& SchemaChangeCorpus() {
 // another page.
 const std::vector<std::string>& UpdateCorpus() {
   static const std::vector<std::string> corpus = {
-      "UPDATE users SET rating = rating + 1 WHERE location = 'Paris'",
-      "UPDATE users SET location = 'Berlin' WHERE id = 99",
-      "UPDATE posts SET views = views + 1",
-      "UPDATE posts SET views = views",
-      "UPDATE users SET rating = rating * -1 WHERE id = 4",
-      "SELECT id, rating FROM users WHERE id = 4",
-      "UPDATE users SET rating = 7 WHERE id = 2",
-      "UPDATE users SET rating = 'x'",
-      "UPDATE users SET id = 77 WHERE id = 1",
+      "UPDATE visitors SET rating = rating + 1 WHERE location = 'Paris'",
+      "UPDATE visitors SET location = 'Berlin' WHERE id = 99",
+      "UPDATE stories SET views = views + 1",
+      "UPDATE stories SET views = views",
+      "UPDATE visitors SET rating = rating * -1 WHERE id = 4",
+      "SELECT id, rating FROM visitors WHERE id = 4",
+      "UPDATE visitors SET rating = 7 WHERE id = 2",
+      "UPDATE visitors SET rating = 'x'",
+      "UPDATE visitors SET id = 77 WHERE id = 1",
       // Two columns exchanged; the changed username cascades.
-      "UPDATE users SET location = username, username = location WHERE id = 5",
-      "SELECT id, username, location FROM users WHERE id = 5",
-      "SELECT id, username FROM posts WHERE id = 6",
-      "SELECT id, username FROM engagements WHERE id = 8",
-      "UPDATE users SET location = username, username = location WHERE id = 5",
+      "UPDATE visitors SET location = username, username = location WHERE id = "
+      "5",
+      "SELECT id, username, location FROM visitors WHERE id = 5",
+      "SELECT id, username FROM stories WHERE id = 6",
+      "SELECT id, username FROM reactions WHERE id = 8",
+      "UPDATE visitors SET location = username, username = location WHERE id = "
+      "5",
       // A chain: A becomes B while B becomes C; references follow one step.
-      "UPDATE users SET username = username || 'x' WHERE id = 1 OR id = 6",
-      "SELECT username, COUNT(*) FROM posts GROUP BY username ORDER BY 1",
-      "SELECT username, COUNT(*) FROM engagements GROUP BY username ORDER BY "
+      "UPDATE visitors SET username = username || 'x' WHERE id = 1 OR id = 6",
+      "SELECT username, COUNT(*) FROM stories GROUP BY username ORDER BY 1",
+      "SELECT username, COUNT(*) FROM reactions GROUP BY username ORDER BY "
       "1",
-      "UPDATE users SET username = SUBSTR(username, 1, LENGTH(username) - 1) "
+      "UPDATE visitors SET username = SUBSTR(username, 1, LENGTH(username) - "
+      "1) "
       "WHERE id = 1 OR id = 6",
-      "SELECT username, COUNT(*) FROM posts GROUP BY username ORDER BY 1",
-      "UPDATE users SET username = 'bob' WHERE id = 3",
-      "UPDATE users SET username = username || 'x' WHERE id = 2",
-      "UPDATE users SET username = SUBSTR(username, 1, 3) WHERE id = 2",
-      "UPDATE posts SET username = 'ghost' WHERE id = 1",
-      "UPDATE posts SET username = 'eve' WHERE id = 1",
-      "UPDATE engagements SET postid = 999 WHERE id = 1",
-      "UPDATE engagements SET postid = 2 WHERE id = 1",
-      "UPDATE posts SET views = 100 / (views - views)",
-      "UPDATE posts SET views = 0 WHERE 10 / (views - views) > 1",
-      "UPDATE engagements SET timestamp = timestamp + 1",
-      "UPDATE posts SET views = views * 9223372036854775807 WHERE views > 1",
+      "SELECT username, COUNT(*) FROM stories GROUP BY username ORDER BY 1",
+      "UPDATE visitors SET username = 'bob' WHERE id = 3",
+      "UPDATE visitors SET username = username || 'x' WHERE id = 2",
+      "UPDATE visitors SET username = SUBSTR(username, 1, 3) WHERE id = 2",
+      "UPDATE stories SET username = 'ghost' WHERE id = 1",
+      "UPDATE stories SET username = 'eve' WHERE id = 1",
+      "UPDATE reactions SET storyid = 999 WHERE id = 1",
+      "UPDATE reactions SET storyid = 2 WHERE id = 1",
+      "UPDATE stories SET views = 100 / (views - views)",
+      "UPDATE stories SET views = 0 WHERE 10 / (views - views) > 1",
+      "UPDATE reactions SET timestamp = timestamp + 1",
+      "UPDATE stories SET views = views * 9223372036854775807 WHERE views > 1",
       // Rows that grow from a few bytes to over a thousand, then shrink.
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "UPDATE posts SET content = content || content WHERE LENGTH(content) < "
+      "UPDATE stories SET content = content || content WHERE LENGTH(content) < "
       "1000",
-      "SELECT id, LENGTH(content) FROM posts ORDER BY id",
-      "SELECT username, COUNT(*), MAX(LENGTH(content)) FROM posts GROUP BY "
+      "SELECT id, LENGTH(content) FROM stories ORDER BY id",
+      "SELECT username, COUNT(*), MAX(LENGTH(content)) FROM stories GROUP BY "
       "username ORDER BY 1",
-      "UPDATE posts SET content = SUBSTR(content, 1, 12)",
-      "SELECT id, content FROM posts ORDER BY id",
+      "UPDATE stories SET content = SUBSTR(content, 1, 12)",
+      "SELECT id, content FROM stories ORDER BY id",
   };
   return corpus;
 }
@@ -587,23 +600,23 @@ const std::vector<std::string>& UpdateCorpus() {
 // DELETE: RESTRICT, a delete that frees a slot for the next INSERT.
 const std::vector<std::string>& DeleteCorpus() {
   static const std::vector<std::string> corpus = {
-      "DELETE FROM engagements WHERE type = 'share'",
-      "DELETE FROM users WHERE id = 4",
-      "DELETE FROM posts WHERE id = 5",
-      "DELETE FROM engagements WHERE postid = 5",
-      "DELETE FROM posts WHERE id = 5",
-      "DELETE FROM users WHERE id = 4",
-      "DELETE FROM engagements WHERE username = 'dan'",
-      "DELETE FROM users WHERE id = 4",
-      "DELETE FROM engagements WHERE id = 9999",
-      "DELETE FROM posts WHERE id = 8",
-      "INSERT INTO posts VALUES (8, 'reused', 'bob', 1)",
-      "SELECT * FROM posts ORDER BY id",
+      "DELETE FROM reactions WHERE type = 'share'",
+      "DELETE FROM visitors WHERE id = 4",
+      "DELETE FROM stories WHERE id = 5",
+      "DELETE FROM reactions WHERE storyid = 5",
+      "DELETE FROM stories WHERE id = 5",
+      "DELETE FROM visitors WHERE id = 4",
+      "DELETE FROM reactions WHERE username = 'dan'",
+      "DELETE FROM visitors WHERE id = 4",
+      "DELETE FROM reactions WHERE id = 9999",
+      "DELETE FROM stories WHERE id = 8",
+      "INSERT INTO stories VALUES (8, 'reused', 'bob', 1)",
+      "SELECT * FROM stories ORDER BY id",
       "DELETE FROM nosuch",
-      "DELETE FROM users WHERE username = 1",
-      "SELECT COUNT(*) FROM users",
-      "SELECT COUNT(*), SUM(views) FROM posts",
-      "SELECT COUNT(*) FROM engagements",
+      "DELETE FROM visitors WHERE username = 1",
+      "SELECT COUNT(*) FROM visitors",
+      "SELECT COUNT(*), SUM(views) FROM stories",
+      "SELECT COUNT(*) FROM reactions",
   };
   return corpus;
 }
@@ -808,8 +821,9 @@ void CheckRowLengthDifference(EnginePair* pair) {
   CHECK_EQ(FirstColumn(lengths.paged), std::vector<std::string>({"4050"}));
 }
 
-// The reserved prefix, and the two statements that the paged engine does not
-// support yet (ALTER TABLE ADD COLUMN and DROP TABLE).
+// The reserved prefix, which only the paged engine refuses, and the two
+// statements that both engines run alike (ALTER TABLE ADD COLUMN and DROP
+// TABLE).
 void CheckDdlDifferences(EnginePair* pair) {
   const BothResults reserved =
       RunBoth(pair, "CREATE TABLE sys_x (id INT PRIMARY KEY)");
@@ -963,7 +977,7 @@ void CheckParallelOption() {
 
   const std::vector<std::string> flatfile = RunRepl({open});
   CHECK_EQ(flatfile,
-           std::vector<std::string>{"loaded users=4 posts=3 engagements=5"});
+           std::vector<std::string>{"loaded visitors=4 stories=3 reactions=5"});
 
   const std::vector<std::string> paged = RunRepl({".engine paged", open});
   CHECK(paged.size() >= 2 && paged[0] == "engine paged" &&

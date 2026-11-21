@@ -27,9 +27,11 @@
 //   Scan copies the rows, O(n). Hash join: build O(m), probe O(n + matching
 //   candidates), result memory O(k). Nested loop: O(n * m) predicate
 //   evaluations, result memory O(k). Aggregate: one unordered_map lookup per
-//   row, O(n). Sort: std::stable_sort, O(n log n). INSERT checks scan the
-//   table, O(n); UPDATE and DELETE build one unordered_set per checked column,
-//   O(n + m).
+//   row, O(n). Sort: std::stable_sort, O(n log n). INSERT of k rows into a
+//   table of n rows with u UNIQUE columns and a parent of m rows: O((1 + u) * n
+//   + k * m), because each foreign key value is looked up by a linear scan of
+//   its parent (design document 2.16); UPDATE and DELETE build one
+//   unordered_set per checked column, O(n + m).
 
 namespace strata::infrastructure {
 

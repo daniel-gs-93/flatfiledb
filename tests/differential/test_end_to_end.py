@@ -1,4 +1,4 @@
-"""The differential corpus against the built strata_cli (DE-01 and DE-02).
+"""The differential corpus against the built strata_cli.
 
 Skipped unless the environment variable STRATA_CLI_PATH names the executable.
 """

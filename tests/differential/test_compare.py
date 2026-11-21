@@ -1,4 +1,4 @@
-"""Unit tests of the comparison and the parsing in differential.py (DU-01 to DU-06).
+"""Unit tests of the comparison and the parsing in differential.py.
 
 They run neither strata_cli nor a corpus; only test_compare_error_classes opens an
 in-memory SQLite database, to get the exceptions that SQLite really raises.
@@ -6,7 +6,9 @@ in-memory SQLite database, to get the exceptions that SQLite really raises.
 
 from __future__ import annotations
 
+import pathlib
 import sqlite3
+import tempfile
 import unittest
 
 import differential
@@ -103,6 +105,19 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(differential.outcome_from_cli([]).kind, "done")
         with self.assertRaises(differential.HarnessError):
             differential.split_cli_output("engine paged\nid\n1\n")
+
+
+class RunStrataTest(unittest.TestCase):
+    def test_run_strata_refuses_a_nonzero_exit_status(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="strata-fake-cli-") as work:
+            fake_cli = pathlib.Path(work) / "fake_cli.sh"
+            script = f"#!/bin/sh\necho '{differential.MARKER_LINE}'\nexit 1\n"
+            fake_cli.write_text(script)
+            fake_cli.chmod(0o755)
+            with self.assertRaises(differential.HarnessError):
+                differential.run_strata(
+                    fake_cli, "flatfile", pathlib.Path(work), "SELECT 1"
+                )
 
 
 class CorpusTest(unittest.TestCase):

@@ -86,10 +86,14 @@ std::string StripTrailingCarriageReturn(std::string line) {
 }
 
 // `.open <directory> [--parallel]`; std::nullopt when the arguments do not
-// match.
+// match, including a directory that starts with "--" (an option typed where the
+// directory belongs, as `strata_cli` also refuses).
 std::optional<OpenArguments> ParseOpenArguments(
     const std::vector<std::string>& tokens) {
   if (tokens.size() != 2 && tokens.size() != 3) {
+    return std::nullopt;
+  }
+  if (tokens[1].starts_with("--")) {
     return std::nullopt;
   }
   if (tokens.size() == 3 && tokens[2] != "--parallel") {
@@ -145,7 +149,7 @@ std::string RenderResult(const domain::ExecutionResult& result) {
          error.message + "\n";
 }
 
-// `users=10000 posts=10000`, or `no tables`.
+// `instructors=6 students=30`, or `no tables`.
 std::string DescribeTables(const std::vector<bootstrap::TableCount>& tables) {
   if (tables.empty()) {
     return "no tables";
@@ -164,7 +168,7 @@ std::string DescribeTables(const std::vector<bootstrap::TableCount>& tables) {
   return text;
 }
 
-// One line per table that rejected rows: `users.csv: rejected lines 12, 17`,
+// One line per table that rejected rows: `students.csv: rejected lines 12, 17`,
 // at most kMaxListedLines numbers each.
 std::string DescribeRejectedLines(
     const std::vector<bootstrap::TableCount>& tables) {
@@ -396,8 +400,8 @@ CommandOutcome HandleEngineCommand(const std::vector<std::string>& tokens,
 }
 
 // Runs the line when its first token is a command; otherwise reports that it is
-// not one, so that the line is read as SQL (an unknown ".foo" is then a syntax
-// error from the parser).
+// not one, so that the caller reads the line as SQL or, when it starts with
+// '.', rejects it as an unknown command.
 CommandOutcome HandleCommand(const std::string& line, Database& database,
                              EngineKind& engine, bool is_interactive) {
   std::vector<std::string> tokens = SplitWhitespace(line);
@@ -627,6 +631,13 @@ void RunRepl(std::istream& input, std::ostream& output, bool is_interactive,
         if (command.should_quit) {
           break;
         }
+        continue;
+      }
+      // No SQL statement starts with '.', so the line is a mistyped command.
+      // Reading it as SQL would absorb the lines up to the next ';'.
+      if (trimmed.starts_with('.')) {
+        output << "error: unknown command " << SplitWhitespace(trimmed)[0]
+               << "; .help lists the commands\n";
         continue;
       }
     } else if (!buffer.IsInString() && TrimSqlWhitespace(line) == ".cancel") {

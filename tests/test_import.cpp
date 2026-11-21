@@ -212,7 +212,7 @@ TEST(test_import_validates_table_and_column_names) {
   key.primary_key = "a";
 
   Inferred existing =
-      Infer(Request("users.csv"), Table({"id", "name"}, {{"1", "a"}}));
+      Infer(Request("visitors.csv"), Table({"id", "name"}, {{"1", "a"}}));
   Inferred fine = Infer(key, Table({"a", "b"}, {{"1", "x"}}));
   Inferred spaced =
       Infer(Request("my notes.csv"), Table({"id", "name"}, {{"1", "a"}}));
@@ -228,7 +228,7 @@ TEST(test_import_validates_table_and_column_names) {
   Inferred empty_name = Infer(key, Table({"a", ""}, {{"1", "x"}}));
 
   CHECK(!existing.plan.has_value());
-  CHECK(Contains(existing.error, "table users already exists"));
+  CHECK(Contains(existing.error, "table visitors already exists"));
   CHECK(fine.plan.has_value());
   if (fine.plan) {
     CHECK_EQ(fine.plan->schema.name, std::string("notes"));
@@ -345,7 +345,7 @@ TEST(test_import_strict_rejects_bad_rows_and_skip_reports_them) {
 TEST(test_import_type_overrides_convert_or_reject) {
   const Cells header = {"id", "score", "name"};
   std::vector<domain::CsvLine> lines = Table(
-      header, {{"007", "10", "x"}, {"+5", "2.5", "y"}, {"1s0", "1", "z"}});
+      header, {{"007", "10", "x"}, {"+5", "2.5", "y"}, {"12x", "1", "z"}});
   domain::ImportRequest declared = Request("t.csv");
   declared.column_types = {{"ID", domain::DataType::kInt},
                            {"score", domain::DataType::kDouble},
@@ -363,7 +363,7 @@ TEST(test_import_type_overrides_convert_or_reject) {
   Inferred repeated = Infer(twice, lines);
 
   CHECK(!strict.plan.has_value());
-  CHECK_EQ(strict.error, std::string("line 4: id '1s0' is not INT"));
+  CHECK_EQ(strict.error, std::string("line 4: id '12x' is not INT"));
   CHECK(skipped.plan.has_value());
   if (skipped.plan) {
     CHECK_EQ(skipped.plan->rows.size(), std::size_t{2});
@@ -372,7 +372,7 @@ TEST(test_import_type_overrides_convert_or_reject) {
     CHECK_EQ(domain::FormatValue(skipped.plan->rows[0][1]),
              std::string("10.0"));
     CHECK_EQ(skipped.plan->notes,
-             std::vector<std::string>({"skipped line 4: id '1s0' is not INT"}));
+             std::vector<std::string>({"skipped line 4: id '12x' is not INT"}));
   }
   CHECK(!bad_column.plan.has_value());
   CHECK(Contains(bad_column.error, "unknown column 'nosuch'"));
@@ -490,7 +490,7 @@ TEST(test_service_import_failures_leave_the_database_unchanged) {
   TempDir db;
   WriteFixtureA(db.path());
   TempDir source_dir;
-  WriteFile(source_dir.path() / "users.csv", "id,name\n1,a\n");
+  WriteFile(source_dir.path() / "visitors.csv", "id,name\n1,a\n");
   WriteFile(source_dir.path() / "bad.csv", "id,name\n1,a\n2\n");
   WriteFile(source_dir.path() / "dup.csv", "id,name\n1,a\n1,b\n");
   WriteFile(source_dir.path() / "fine.csv", "id,name\n1,a\n");
@@ -505,7 +505,7 @@ TEST(test_service_import_failures_leave_the_database_unchanged) {
   domain::ExecutionResult missing =
       service->ImportCsv(Request(path + "missing.csv"));
   domain::ExecutionResult existing =
-      service->ImportCsv(Request(path + "users.csv"));
+      service->ImportCsv(Request(path + "visitors.csv"));
   domain::ExecutionResult bad_row =
       service->ImportCsv(Request(path + "bad.csv"));
   domain::ExecutionResult duplicate =
@@ -518,7 +518,7 @@ TEST(test_service_import_failures_leave_the_database_unchanged) {
       AsError(missing), AsError(existing), AsError(bad_row), AsError(duplicate),
       AsError(commit_failure)};
   const char* kinds[] = {"io", "bind", "bind", "bind", "io"};
-  const char* fragments[] = {"cannot read ", "table users already exists",
+  const char* fragments[] = {"cannot read ", "table visitors already exists",
                              "line 3: expected 2 fields, found 1",
                              "duplicate value '1'", "injected commit failure"};
   for (std::size_t i = 0; i < 5; ++i) {
@@ -535,33 +535,33 @@ TEST(test_service_import_failures_leave_the_database_unchanged) {
 }
 
 TEST(test_service_import_refuses_an_existing_target_file) {
-  // users.csv lies in the database directory and is the source itself; a
-  // directory takes the place of posts.csv.
+  // visitors.csv lies in the database directory and is the source itself; a
+  // directory takes the place of stories.csv.
   TempDir db;
-  const std::string users_text = "id,name\n1,a\n2,b\nx,bad\n";
-  WriteFile(db.path() / "users.csv", users_text);
-  std::filesystem::create_directory(db.path() / "posts.csv");
+  const std::string visitors_text = "id,name\n1,a\n2,b\nx,bad\n";
+  WriteFile(db.path() / "visitors.csv", visitors_text);
+  std::filesystem::create_directory(db.path() / "stories.csv");
   TempDir source_dir;
-  WriteFile(source_dir.path() / "posts.csv", "id,body\n1,x\n");
+  WriteFile(source_dir.path() / "stories.csv", "id,body\n1,x\n");
   auto service = MakeLoadedService(db.path());
   if (!service) {
     return;
   }
   const std::map<std::string, std::string> before = Snapshot(db.path());
-  domain::ImportRequest itself = Request((db.path() / "users.csv").string());
+  domain::ImportRequest itself = Request((db.path() / "visitors.csv").string());
   itself.primary_key = "id";
   itself.column_types = {{"id", domain::DataType::kInt}};
   itself.should_skip_bad_rows = true;
 
   domain::ExecutionResult source_in_place = service->ImportCsv(itself);
   domain::ExecutionResult directory_in_place =
-      service->ImportCsv(Request((source_dir.path() / "posts.csv").string()));
+      service->ImportCsv(Request((source_dir.path() / "stories.csv").string()));
 
   const domain::ExecutionError* errors[] = {AsError(source_in_place),
                                             AsError(directory_in_place)};
   const char* messages[] = {
-      "users.csv already exists; use CREATE TABLE to adopt it",
-      "posts.csv already exists and is not a regular file"};
+      "visitors.csv already exists; use CREATE TABLE to adopt it",
+      "stories.csv already exists and is not a regular file"};
   for (std::size_t i = 0; i < 2; ++i) {
     CHECK(errors[i] != nullptr);
     if (errors[i] == nullptr) {
@@ -572,18 +572,19 @@ TEST(test_service_import_refuses_an_existing_target_file) {
     CHECK_EQ(errors[i]->message, std::string(messages[i]));
   }
   CHECK(Snapshot(db.path()) == before);
-  CHECK_EQ(ReadFile(db.path() / "users.csv"), users_text);
+  CHECK_EQ(ReadFile(db.path() / "visitors.csv"), visitors_text);
   CHECK(service->DescribeCatalog().empty());
 
   // The alternative the message names: adoption keeps the file as it is.
   const domain::ExecutionResult create = ExecuteSql(
-      *service, "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)");
+      *service, "CREATE TABLE visitors (id INT PRIMARY KEY, name TEXT)");
   const domain::CommandComplete* adopted = AsCommandComplete(create);
   CHECK(adopted != nullptr);
   if (adopted != nullptr) {
-    CHECK_EQ(adopted->tag, std::string("CREATE TABLE users (adopted 2 rows)"));
+    CHECK_EQ(adopted->tag,
+             std::string("CREATE TABLE visitors (adopted 2 rows)"));
   }
-  CHECK_EQ(ReadFile(db.path() / "users.csv"), users_text);
+  CHECK_EQ(ReadFile(db.path() / "visitors.csv"), visitors_text);
 }
 
 TEST(test_service_import_skip_bad_rows_reports_notes) {

@@ -1,10 +1,12 @@
 // Binder tests: name resolution, type checks and plan shapes of
 // docs/DesignDocument.md section 2.4.
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -267,30 +269,31 @@ TEST(test_binder_unknown_table_returns_bind_error) {
 }
 
 TEST(test_binder_unknown_column_returns_bind_error) {
-  EXPECT_BIND_FAILURE("SELECT nosuch FROM users", domain::ErrorKind::kBind,
+  EXPECT_BIND_FAILURE("SELECT nosuch FROM visitors", domain::ErrorKind::kBind,
                       "nosuch");
 }
 
 TEST(test_binder_ambiguous_column_returns_bind_error) {
   EXPECT_BIND_FAILURE(
-      "SELECT username FROM users u JOIN posts p ON u.username = p.username",
+      "SELECT username FROM visitors v JOIN stories s ON v.username = "
+      "s.username",
       domain::ErrorKind::kBind, "ambiguous");
 }
 
 TEST(test_binder_table_name_rejected_when_alias_declared) {
-  EXPECT_BIND_FAILURE("SELECT users.id FROM users u", domain::ErrorKind::kBind,
-                      "users");
+  EXPECT_BIND_FAILURE("SELECT visitors.id FROM visitors v",
+                      domain::ErrorKind::kBind, "visitors");
 
-  domain::PlanPtr plan = BindOrFail("SELECT u.id FROM users u");
+  domain::PlanPtr plan = BindOrFail("SELECT v.id FROM visitors v");
 
   CHECK(plan != nullptr);
 }
 
 TEST(test_binder_type_mismatch_returns_bind_error) {
   const std::vector<std::string> statements = {
-      "SELECT id FROM users WHERE username = 1",
-      "SELECT username + 1 FROM users",
-      "SELECT SUM(username) FROM users",
+      "SELECT id FROM visitors WHERE username = 1",
+      "SELECT username + 1 FROM visitors",
+      "SELECT SUM(username) FROM visitors",
   };
 
   for (const std::string& sql : statements) {
@@ -299,29 +302,96 @@ TEST(test_binder_type_mismatch_returns_bind_error) {
 }
 
 TEST(test_binder_non_boolean_where_returns_bind_error) {
-  EXPECT_BIND_ERROR("SELECT id FROM users WHERE id + 1");
-  EXPECT_BIND_ERROR("SELECT id FROM users WHERE id");
+  EXPECT_BIND_ERROR("SELECT id FROM visitors WHERE id + 1");
+  EXPECT_BIND_ERROR("SELECT id FROM visitors WHERE id");
 }
 
 TEST(test_binder_boolean_value_outside_condition_returns_bind_error) {
   const std::vector<std::string> statements = {
-      "SELECT id = 1 FROM users",
-      "UPDATE users SET location = id < 2",
-      "INSERT INTO users VALUES (9, 'zed', 1 < 2)",
-      "SELECT id FROM users GROUP BY id = 1",
-      "SELECT id FROM users ORDER BY id = 1",
-      "SELECT u.id FROM users u JOIN posts p ON u.id + 1",
+      "SELECT id = 1 FROM visitors",
+      "UPDATE visitors SET location = id < 2",
+      "INSERT INTO visitors VALUES (9, 'zed', 1 < 2)",
+      "SELECT id FROM visitors GROUP BY id = 1",
+      "SELECT id FROM visitors ORDER BY id = 1",
   };
 
+  // Each of these fails for other reasons too (an unmatched ORDER BY item, a
+  // column that is not a group key, a type that cannot be assigned), so the
+  // message names the rule under test.
   for (const std::string& sql : statements) {
-    EXPECT_BIND_ERROR(sql);
+    EXPECT_BIND_FAILURE(sql, domain::ErrorKind::kBind,
+                        "a boolean expression is not allowed in");
   }
+  EXPECT_BIND_FAILURE("SELECT v.id FROM visitors v JOIN stories s ON v.id + 1",
+                      domain::ErrorKind::kBind, "must be a boolean expression");
+}
+
+namespace {
+
+// `id = first AND ... AND id = last - 1` as a balanced, parenthesized tree,
+// which the parser accepts at any size: its depth is about log2(last - first).
+std::string BalancedConjunction(int first, int last) {
+  if (last - first == 1) {
+    return "id = " + std::to_string(first);
+  }
+  const int middle = first + (last - first) / 2;
+  return "(" + BalancedConjunction(first, middle) + " AND " +
+         BalancedConjunction(middle, last) + ")";
+}
+
+// The depth of an expression and its INT literals from left to right, found
+// with an explicit stack so that a deep tree cannot overflow this test.
+struct TreeShape {
+  std::size_t depth = 0;
+  std::vector<std::int64_t> literals;
+};
+
+TreeShape MeasureTree(const domain::BoundExpr& root) {
+  TreeShape shape;
+  std::vector<std::pair<const domain::BoundExpr*, std::size_t>> pending;
+  pending.emplace_back(&root, 1);
+  while (!pending.empty()) {
+    const auto [expr, depth] = pending.back();
+    pending.pop_back();
+    shape.depth = std::max(shape.depth, depth);
+    if (const auto* literal = std::get_if<domain::BoundLiteral>(&expr->node)) {
+      shape.literals.push_back(std::get<std::int64_t>(literal->value));
+    }
+    if (const auto* binary = std::get_if<domain::BoundBinary>(&expr->node)) {
+      pending.emplace_back(binary->rhs.get(), depth + 1);
+      pending.emplace_back(binary->lhs.get(), depth + 1);
+    }
+  }
+  return shape;
+}
+
+}  // namespace
+
+TEST(test_binder_where_with_many_terms_binds_to_a_shallow_predicate) {
+  constexpr int kTermCount = 1024;
+  domain::PlanPtr plan = BindOrFail("SELECT id FROM visitors WHERE " +
+                                    BalancedConjunction(0, kTermCount));
+
+  const auto* project = NodeAs<domain::ProjectNode>(plan);
+  const auto* filter = ChildAs<domain::FilterNode>(project);
+
+  CHECK(filter != nullptr);
+  if (filter == nullptr) {
+    return;
+  }
+  const TreeShape shape = MeasureTree(*filter->predicate);
+  std::vector<std::int64_t> expected_literals;
+  for (int i = 0; i < kTermCount; ++i) {
+    expected_literals.push_back(i);
+  }
+  CHECK(shape.depth <= std::size_t{16});
+  CHECK(shape.literals == expected_literals);
 }
 
 TEST(test_binder_star_expands_columns_in_schema_order) {
-  domain::PlanPtr single = BindOrFail("SELECT * FROM users");
+  domain::PlanPtr single = BindOrFail("SELECT * FROM visitors");
   domain::PlanPtr joined = BindOrFail(
-      "SELECT * FROM users u JOIN posts p ON u.username = p.username");
+      "SELECT * FROM visitors v JOIN stories s ON v.username = s.username");
 
   const auto* single_project = NodeAs<domain::ProjectNode>(single);
   const auto* joined_project = NodeAs<domain::ProjectNode>(joined);
@@ -339,13 +409,13 @@ TEST(test_binder_star_expands_columns_in_schema_order) {
 }
 
 TEST(test_binder_ungrouped_column_with_aggregate_returns_bind_error) {
-  EXPECT_BIND_ERROR("SELECT username, COUNT(*) FROM users");
-  EXPECT_BIND_ERROR("SELECT *, COUNT(*) FROM users");
+  EXPECT_BIND_ERROR("SELECT username, COUNT(*) FROM visitors");
+  EXPECT_BIND_ERROR("SELECT *, COUNT(*) FROM visitors");
 }
 
 TEST(test_binder_group_by_builds_aggregate_node) {
   domain::PlanPtr plan =
-      BindOrFail("SELECT type, COUNT(*) FROM engagements GROUP BY type");
+      BindOrFail("SELECT type, COUNT(*) FROM reactions GROUP BY type");
 
   const auto* project = NodeAs<domain::ProjectNode>(plan);
   const auto* aggregate = ChildAs<domain::AggregateNode>(project);
@@ -357,16 +427,16 @@ TEST(test_binder_group_by_builds_aggregate_node) {
   if (aggregate == nullptr || scan == nullptr) {
     return;
   }
-  CHECK_EQ(scan->table, "engagements");
+  CHECK_EQ(scan->table, "reactions");
   CHECK_EQ(aggregate->group_keys.size(), 1u);
   CHECK_EQ(aggregate->aggregates.size(), 1u);
 }
 
 TEST(test_binder_group_key_matching_uses_bound_expressions) {
   const std::vector<std::string> statements = {
-      "SELECT u.username, COUNT(*) FROM users u GROUP BY username",
-      "SELECT views + 1, COUNT(*) FROM posts GROUP BY views",
-      "SELECT 1, COUNT(*) FROM posts",
+      "SELECT v.username, COUNT(*) FROM visitors v GROUP BY username",
+      "SELECT views + 1, COUNT(*) FROM stories GROUP BY views",
+      "SELECT 1, COUNT(*) FROM stories",
   };
 
   for (const std::string& sql : statements) {
@@ -376,7 +446,7 @@ TEST(test_binder_group_key_matching_uses_bound_expressions) {
 
 TEST(test_binder_order_by_resolves_against_select_list) {
   const std::string select =
-      "SELECT id, username AS name, location FROM users ORDER BY ";
+      "SELECT id, username AS name, location FROM visitors ORDER BY ";
 
   CHECK_EQ(FIRST_SORT_COLUMN(select + "name"), 1u);
   CHECK_EQ(FIRST_SORT_COLUMN(select + "1"), 0u);
@@ -384,19 +454,20 @@ TEST(test_binder_order_by_resolves_against_select_list) {
   CHECK_EQ(FIRST_SORT_COLUMN(select + "location"), 2u);
   EXPECT_BIND_ERROR(select + "0");
   EXPECT_BIND_ERROR(select + "4");
-  EXPECT_BIND_ERROR("SELECT id, content FROM posts ORDER BY views");
-  CHECK_EQ(FIRST_SORT_COLUMN(
-               "SELECT id AS username, username FROM users ORDER BY username"),
-           0u);
+  EXPECT_BIND_ERROR("SELECT id, content FROM stories ORDER BY views");
+  CHECK_EQ(
+      FIRST_SORT_COLUMN(
+          "SELECT id AS username, username FROM visitors ORDER BY username"),
+      0u);
 }
 
 TEST(test_binder_insert_validates_and_orders_values) {
   const std::vector<std::string> rejected = {
-      "INSERT INTO users (id, username) VALUES (9, 'zed')",
-      "INSERT INTO users (id, id, username, location) VALUES (9, 10, 'zed', "
+      "INSERT INTO visitors (id, username) VALUES (9, 'zed')",
+      "INSERT INTO visitors (id, id, username, location) VALUES (9, 10, 'zed', "
       "'Rome')",
-      "INSERT INTO users VALUES (id, 'zed', 'Rome')",
-      "INSERT INTO users VALUES ('x', 'zed', 'Rome')",
+      "INSERT INTO visitors VALUES (id, 'zed', 'Rome')",
+      "INSERT INTO visitors VALUES ('x', 'zed', 'Rome')",
   };
   for (const std::string& sql : rejected) {
     EXPECT_BIND_ERROR(sql);
@@ -404,7 +475,8 @@ TEST(test_binder_insert_validates_and_orders_values) {
 
   domain::PlanPtr widened = BindOrFail("INSERT INTO measures VALUES (1, 2)");
   domain::PlanPtr reordered = BindOrFail(
-      "INSERT INTO users (location, id, username) VALUES ('Rome', 9, 'zed')");
+      "INSERT INTO visitors (location, id, username) VALUES ('Rome', 9, "
+      "'zed')");
 
   const auto* widened_insert = NodeAs<domain::InsertNode>(widened);
   const auto* reordered_insert = NodeAs<domain::InsertNode>(reordered);
@@ -425,9 +497,9 @@ TEST(test_binder_insert_validates_and_orders_values) {
 }
 
 TEST(test_binder_update_primary_key_returns_unsupported) {
-  EXPECT_BIND_FAILURE("UPDATE users SET id = 9 WHERE id = 1",
+  EXPECT_BIND_FAILURE("UPDATE visitors SET id = 9 WHERE id = 1",
                       domain::ErrorKind::kUnsupported, "");
-  EXPECT_BIND_FAILURE("UPDATE users SET id = 'x'",
+  EXPECT_BIND_FAILURE("UPDATE visitors SET id = 'x'",
                       domain::ErrorKind::kUnsupported, "");
 }
 
@@ -436,9 +508,9 @@ TEST(test_binder_update_primary_key_returns_unsupported) {
 // converts it, so this test checks kInt for the value and kDouble for the
 // target column.
 TEST(test_binder_update_assignment_rules) {
-  EXPECT_BIND_ERROR("UPDATE users SET location = 5");
-  EXPECT_BIND_ERROR("UPDATE users SET location = 'a', location = 'b'");
-  EXPECT_BIND_ERROR("UPDATE users SET nosuch = 'a'");
+  EXPECT_BIND_ERROR("UPDATE visitors SET location = 5");
+  EXPECT_BIND_ERROR("UPDATE visitors SET location = 'a', location = 'b'");
+  EXPECT_BIND_ERROR("UPDATE visitors SET nosuch = 'a'");
 
   domain::PlanPtr plan = BindOrFail("UPDATE measures SET score = 3");
 
@@ -461,53 +533,53 @@ TEST(test_binder_update_assignment_rules) {
 
 TEST(test_binder_predicate_pushdown_places_filters_lowest) {
   domain::PlanPtr plan = BindOrFail(
-      "SELECT * FROM users u JOIN posts p ON u.username = p.username "
-      "WHERE u.id = 1 AND p.views > 0 AND u.id < p.views AND 1 = 1");
+      "SELECT * FROM visitors v JOIN stories s ON v.username = s.username "
+      "WHERE v.id = 1 AND s.views > 0 AND v.id < s.views AND 1 = 1");
 
   const auto* project = NodeAs<domain::ProjectNode>(plan);
   const auto* top_filter = ChildAs<domain::FilterNode>(project);
   const auto* join = ChildAs<domain::JoinNode>(top_filter);
-  const auto* users_filter = LeftAs<domain::FilterNode>(join);
-  const auto* posts_filter = RightAs<domain::FilterNode>(join);
-  const auto* users_scan = ChildAs<domain::ScanNode>(users_filter);
-  const auto* posts_scan = ChildAs<domain::ScanNode>(posts_filter);
+  const auto* visitors_filter = LeftAs<domain::FilterNode>(join);
+  const auto* stories_filter = RightAs<domain::FilterNode>(join);
+  const auto* visitors_scan = ChildAs<domain::ScanNode>(visitors_filter);
+  const auto* stories_scan = ChildAs<domain::ScanNode>(stories_filter);
 
   CHECK(project != nullptr);
   CHECK(top_filter != nullptr);
   CHECK(join != nullptr);
-  CHECK(users_filter != nullptr);
-  CHECK(posts_filter != nullptr);
-  CHECK(users_scan != nullptr);
-  CHECK(posts_scan != nullptr);
-  if (join == nullptr || users_scan == nullptr || posts_scan == nullptr) {
+  CHECK(visitors_filter != nullptr);
+  CHECK(stories_filter != nullptr);
+  CHECK(visitors_scan != nullptr);
+  CHECK(stories_scan != nullptr);
+  if (join == nullptr || visitors_scan == nullptr || stories_scan == nullptr) {
     return;
   }
-  CHECK_EQ(users_scan->table, "users");
-  CHECK_EQ(posts_scan->table, "posts");
-  // u.id < p.views sits above the join, over the joined row (views is column
+  CHECK_EQ(visitors_scan->table, "visitors");
+  CHECK_EQ(stories_scan->table, "stories");
+  // v.id < s.views sits above the join, over the joined row (views is column
   // 6).
   CHECK(IsColumnVsColumn(top_filter->predicate, domain::BinaryOp::kLt, 0, 6));
-  // u.id = 1 and the constant 1 = 1 are merged on the first table's scan.
+  // v.id = 1 and the constant 1 = 1 are merged on the first table's scan.
   const domain::BoundBinary* merged =
-      AsBinary(users_filter->predicate, domain::BinaryOp::kAnd);
+      AsBinary(visitors_filter->predicate, domain::BinaryOp::kAnd);
   CHECK(merged != nullptr);
   if (merged != nullptr) {
     CHECK(IsColumnVsInt(merged->lhs, domain::BinaryOp::kEq, 0, 1));
     CHECK(IsIntVsInt(merged->rhs, domain::BinaryOp::kEq, 1, 1));
   }
-  // p.views > 0 is rebased to the posts row (views is column 3).
-  CHECK(IsColumnVsInt(posts_filter->predicate, domain::BinaryOp::kGt, 3, 0));
+  // s.views > 0 is rebased to the stories row (views is column 3).
+  CHECK(IsColumnVsInt(stories_filter->predicate, domain::BinaryOp::kGt, 3, 0));
   // The ON condition stays on the join over the joined row.
   CHECK(IsColumnVsColumn(join->condition, domain::BinaryOp::kEq, 1, 5));
 }
 
 TEST(test_binder_join_builds_left_deep_tree) {
-  domain::PlanPtr scan_only_plan = BindOrFail("SELECT * FROM users");
+  domain::PlanPtr scan_only_plan = BindOrFail("SELECT * FROM visitors");
   domain::PlanPtr single_join_plan = BindOrFail(
-      "SELECT * FROM users u JOIN posts p ON u.username = p.username");
+      "SELECT * FROM visitors v JOIN stories s ON v.username = s.username");
   domain::PlanPtr double_join_plan = BindOrFail(
-      "SELECT * FROM users u JOIN posts p ON u.username = p.username "
-      "JOIN engagements e ON e.postId = p.id");
+      "SELECT * FROM visitors v JOIN stories s ON v.username = s.username "
+      "JOIN reactions r ON r.storyId = s.id");
 
   const auto* scan_only_project = NodeAs<domain::ProjectNode>(scan_only_plan);
   const auto* single_join_project =
@@ -537,18 +609,18 @@ TEST(test_binder_join_builds_left_deep_tree) {
       inner_right == nullptr) {
     return;
   }
-  CHECK_EQ(inner_left->table, "users");
-  CHECK_EQ(inner_right->table, "posts");
-  CHECK_EQ(outer_right->table, "engagements");
-  // e.postId is column 8 of the joined row (users 3, posts 4, then e.id,
-  // e.postId).
+  CHECK_EQ(inner_left->table, "visitors");
+  CHECK_EQ(inner_right->table, "stories");
+  CHECK_EQ(outer_right->table, "reactions");
+  // r.storyId is column 8 of the joined row (visitors 3, stories 4, then r.id,
+  // r.storyId).
   CHECK(IsColumnVsColumn(outer->condition, domain::BinaryOp::kEq, 8, 3));
 }
 
 TEST(test_binder_identifiers_are_case_insensitive) {
   const std::vector<std::string> statements = {
-      "SELECT POSTID FROM Engagements",
-      "SELECT postId FROM engagements",
+      "SELECT STORYID FROM Reactions",
+      "SELECT storyId FROM reactions",
   };
 
   for (const std::string& sql : statements) {
@@ -560,14 +632,14 @@ TEST(test_binder_identifiers_are_case_insensitive) {
     if (project == nullptr || scan == nullptr) {
       continue;
     }
-    CHECK_EQ(scan->table, "engagements");
-    CHECK_EQ(JoinNames(*project), "postId");
+    CHECK_EQ(scan->table, "reactions");
+    CHECK_EQ(JoinNames(*project), "storyId");
   }
 }
 
 TEST(test_binder_output_column_names_follow_naming_rule) {
   domain::PlanPtr plan =
-      BindOrFail("SELECT id AS key, u.username, id + 1 FROM users u");
+      BindOrFail("SELECT id AS key, v.username, id + 1 FROM visitors v");
 
   const auto* project = NodeAs<domain::ProjectNode>(plan);
 
@@ -580,12 +652,12 @@ TEST(test_binder_output_column_names_follow_naming_rule) {
 
 TEST(test_binder_aggregate_outside_select_list_returns_bind_error) {
   const std::vector<std::string> statements = {
-      "SELECT id FROM users WHERE COUNT(*) > 1",
-      "SELECT u.id FROM users u JOIN posts p ON COUNT(*) = 1",
-      "SELECT id FROM users GROUP BY COUNT(*)",
-      "UPDATE posts SET views = COUNT(*)",
-      "INSERT INTO users VALUES (COUNT(*), 'a', 'b')",
-      "SELECT SUM(COUNT(*)) FROM users",
+      "SELECT id FROM visitors WHERE COUNT(*) > 1",
+      "SELECT v.id FROM visitors v JOIN stories s ON COUNT(*) = 1",
+      "SELECT id FROM visitors GROUP BY COUNT(*)",
+      "UPDATE stories SET views = COUNT(*)",
+      "INSERT INTO visitors VALUES (COUNT(*), 'a', 'b')",
+      "SELECT SUM(COUNT(*)) FROM visitors",
   };
 
   for (const std::string& sql : statements) {
@@ -595,19 +667,20 @@ TEST(test_binder_aggregate_outside_select_list_returns_bind_error) {
 
 TEST(test_binder_on_referencing_later_table_returns_bind_error) {
   EXPECT_BIND_ERROR(
-      "SELECT * FROM users u JOIN posts p ON u.username = e.username "
-      "JOIN engagements e ON e.postId = p.id");
+      "SELECT * FROM visitors v JOIN stories s ON v.username = r.username "
+      "JOIN reactions r ON r.storyId = s.id");
 }
 
 TEST(test_binder_duplicate_table_name_returns_bind_error) {
-  EXPECT_BIND_ERROR("SELECT * FROM users u JOIN posts u ON u.id = u.id");
-  EXPECT_BIND_ERROR("SELECT * FROM users JOIN users ON users.id = users.id");
+  EXPECT_BIND_ERROR("SELECT * FROM visitors u JOIN stories u ON u.id = u.id");
+  EXPECT_BIND_ERROR(
+      "SELECT * FROM visitors JOIN visitors ON visitors.id = visitors.id");
 }
 
 // A constant INSERT value whose evaluation overflows is kRuntime (binder.h).
 TEST(test_binder_insert_constant_overflow_returns_runtime_error) {
   EXPECT_BIND_FAILURE(
-      "INSERT INTO users VALUES (9223372036854775807 + 1, 'a', 'b')",
+      "INSERT INTO visitors VALUES (9223372036854775807 + 1, 'a', 'b')",
       domain::ErrorKind::kRuntime, "numeric overflow");
 }
 
@@ -615,8 +688,8 @@ TEST(test_binder_insert_constant_overflow_returns_runtime_error) {
 // never reaches the plan.
 TEST(test_binder_aggregate_items_are_rewritten_over_aggregate_output) {
   domain::PlanPtr plan = BindOrFail(
-      "SELECT u.username, COUNT(*) + 1, SUM(p.views) FROM users u "
-      "JOIN posts p ON u.username = p.username GROUP BY u.username");
+      "SELECT v.username, COUNT(*) + 1, SUM(s.views) FROM visitors v "
+      "JOIN stories s ON v.username = s.username GROUP BY v.username");
 
   const auto* project = NodeAs<domain::ProjectNode>(plan);
   const auto* aggregate = ChildAs<domain::AggregateNode>(project);
@@ -650,14 +723,14 @@ TEST(test_binder_aggregate_items_are_rewritten_over_aggregate_output) {
     CHECK(IsIntLiteral(count_plus_one->rhs, 1));
   }
   CHECK(IsColumn(project->exprs[2], 2));
-  CHECK_EQ(JoinNames(*project), "username,COUNT(*) + 1,SUM(p.views)");
+  CHECK_EQ(JoinNames(*project), "username,COUNT(*) + 1,SUM(s.views)");
 }
 
 // ORDER BY case (3) compares bound expressions, which for an aggregate query
 // includes the aggregate itself.
 TEST(test_binder_order_by_matches_aggregate_select_item) {
   const std::string select =
-      "SELECT type, COUNT(*) FROM engagements GROUP BY type ORDER BY ";
+      "SELECT type, COUNT(*) FROM reactions GROUP BY type ORDER BY ";
 
   CHECK_EQ(FIRST_SORT_COLUMN(select + "COUNT(*) DESC"), 1u);
   EXPECT_BIND_ERROR(select + "SUM(timestamp)");
@@ -677,7 +750,7 @@ TEST(test_binder_create_table_builds_schema) {
   domain::PlanPtr plan = BindOrFail(
       "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body "
       "VARCHAR(40) NOT NULL, owner TEXT UNIQUE DEFAULT 'none', score DOUBLE "
-      "DEFAULT 1, user_id INT REFERENCES users(id))");
+      "DEFAULT 1, visitor_id INT REFERENCES visitors(id))");
 
   const auto* create = NodeAs<domain::CreateTableNode>(plan);
   CHECK(create != nullptr);
@@ -696,7 +769,7 @@ TEST(test_binder_create_table_builds_schema) {
     return;
   }
   CHECK_EQ(schema.foreign_keys[0].column_index, std::size_t{4});
-  CHECK_EQ(schema.foreign_keys[0].ref_table, std::string("users"));
+  CHECK_EQ(schema.foreign_keys[0].ref_table, std::string("visitors"));
   CHECK_EQ(schema.foreign_keys[0].ref_column_index, std::size_t{0});
   CHECK(schema.columns[1].type == domain::DataType::kText);
   CHECK(schema.columns[2].default_value.has_value());
@@ -711,9 +784,10 @@ TEST(test_binder_create_table_builds_schema) {
 }
 
 TEST(test_binder_create_table_rejects_invalid_definitions) {
-  EXPECT_BIND_FAILURE("CREATE TABLE users (id INT PRIMARY KEY)",
-                      domain::ErrorKind::kBind, "table users already exists");
-  EXPECT_BIND_FAILURE("CREATE TABLE USERS (id INT PRIMARY KEY)",
+  EXPECT_BIND_FAILURE("CREATE TABLE visitors (id INT PRIMARY KEY)",
+                      domain::ErrorKind::kBind,
+                      "table visitors already exists");
+  EXPECT_BIND_FAILURE("CREATE TABLE VISITORS (id INT PRIMARY KEY)",
                       domain::ErrorKind::kBind, "already exists");
   EXPECT_BIND_FAILURE("CREATE TABLE catalog (id INT PRIMARY KEY)",
                       domain::ErrorKind::kBind,
@@ -732,9 +806,10 @@ TEST(test_binder_create_table_rejects_invalid_definitions) {
       "CREATE TABLE t (a INT PRIMARY KEY, b INT DEFAULT COUNT(*))",
       "CREATE TABLE t (a INT PRIMARY KEY, b INT DEFAULT 1 < 2)",
       "CREATE TABLE t (a INT PRIMARY KEY, b INT REFERENCES nosuch(id))",
-      "CREATE TABLE t (a INT PRIMARY KEY, b INT REFERENCES users(nosuch))",
-      "CREATE TABLE t (a INT PRIMARY KEY, b TEXT REFERENCES users(location))",
-      "CREATE TABLE t (a INT PRIMARY KEY, b TEXT REFERENCES users(id))",
+      "CREATE TABLE t (a INT PRIMARY KEY, b INT REFERENCES visitors(nosuch))",
+      ("CREATE TABLE t (a INT PRIMARY KEY, b TEXT REFERENCES "
+       "visitors(location))"),
+      "CREATE TABLE t (a INT PRIMARY KEY, b TEXT REFERENCES visitors(id))",
       "CREATE TABLE t (a INT PRIMARY KEY, b INT REFERENCES t(a))",
   };
   for (const char* sql : statements) {
@@ -751,22 +826,22 @@ TEST(test_binder_create_table_default_overflow_returns_runtime_error) {
 
 TEST(test_binder_add_column_builds_node_and_applies_rules) {
   domain::PlanPtr plan =
-      BindOrFail("ALTER TABLE users ADD COLUMN age INT DEFAULT 0");
+      BindOrFail("ALTER TABLE visitors ADD COLUMN age INT DEFAULT 0");
   const char* const statements[] = {
       "ALTER TABLE nosuch ADD COLUMN a INT DEFAULT 0",
-      "ALTER TABLE users ADD COLUMN USERNAME TEXT DEFAULT 'x'",
-      "ALTER TABLE users ADD COLUMN a INT",
-      "ALTER TABLE users ADD COLUMN a INT PRIMARY KEY",
-      "ALTER TABLE users ADD COLUMN a INT UNIQUE DEFAULT 0",
-      "ALTER TABLE users ADD COLUMN a INT REFERENCES users(id) DEFAULT 0",
-      "ALTER TABLE users ADD COLUMN a INT PRIMARY KEY AUTOINCREMENT",
-      "ALTER TABLE users ADD COLUMN a INT DEFAULT 'x'",
+      "ALTER TABLE visitors ADD COLUMN USERNAME TEXT DEFAULT 'x'",
+      "ALTER TABLE visitors ADD COLUMN a INT",
+      "ALTER TABLE visitors ADD COLUMN a INT PRIMARY KEY",
+      "ALTER TABLE visitors ADD COLUMN a INT UNIQUE DEFAULT 0",
+      "ALTER TABLE visitors ADD COLUMN a INT REFERENCES visitors(id) DEFAULT 0",
+      "ALTER TABLE visitors ADD COLUMN a INT PRIMARY KEY AUTOINCREMENT",
+      "ALTER TABLE visitors ADD COLUMN a INT DEFAULT 'x'",
   };
 
   const auto* add_column = NodeAs<domain::AddColumnNode>(plan);
   CHECK(add_column != nullptr);
   if (add_column != nullptr) {
-    CHECK_EQ(add_column->table, std::string("users"));
+    CHECK_EQ(add_column->table, std::string("visitors"));
     CHECK_EQ(add_column->column.name, std::string("age"));
     CHECK(add_column->column.default_value.has_value());
     if (add_column->column.default_value) {
@@ -787,10 +862,10 @@ TEST(test_binder_drop_table_checks_references) {
   if (drop != nullptr) {
     CHECK_EQ(drop->table, std::string("measures"));
   }
-  EXPECT_BIND_FAILURE("DROP TABLE users", domain::ErrorKind::kBind,
-                      "table users is referenced by posts.username");
-  EXPECT_BIND_FAILURE("DROP TABLE posts", domain::ErrorKind::kBind,
-                      "table posts is referenced by engagements.postId");
+  EXPECT_BIND_FAILURE("DROP TABLE visitors", domain::ErrorKind::kBind,
+                      "table visitors is referenced by stories.username");
+  EXPECT_BIND_FAILURE("DROP TABLE stories", domain::ErrorKind::kBind,
+                      "table stories is referenced by reactions.storyId");
   EXPECT_BIND_ERROR("DROP TABLE nosuch");
 }
 
@@ -843,23 +918,23 @@ TEST(test_binder_insert_omitted_column_without_default_returns_bind_error) {
 
 TEST(test_binder_multiplication_and_division_types) {
   CHECK_EQ(OutputTypes("SELECT id * 2, id * 2.0, id / 2, id / 2.0, 1.5 / 2 "
-                       "FROM users"),
+                       "FROM visitors"),
            std::string("INT,DOUBLE,INT,DOUBLE,DOUBLE"));
-  EXPECT_BIND_FAILURE("SELECT username * 2 FROM users",
+  EXPECT_BIND_FAILURE("SELECT username * 2 FROM visitors",
                       domain::ErrorKind::kBind,
                       "operator * cannot be applied to TEXT and INT");
-  EXPECT_BIND_FAILURE("SELECT id / username FROM users",
+  EXPECT_BIND_FAILURE("SELECT id / username FROM visitors",
                       domain::ErrorKind::kBind,
                       "operator / cannot be applied to INT and TEXT");
-  EXPECT_BIND_FAILURE("SELECT (id = 1) * 2 FROM users",
+  EXPECT_BIND_FAILURE("SELECT (id = 1) * 2 FROM visitors",
                       domain::ErrorKind::kBind, "BOOL");
 }
 
 TEST(test_binder_concat_and_like_typing) {
-  CHECK_EQ(OutputTypes("SELECT username || location FROM users"),
+  CHECK_EQ(OutputTypes("SELECT username || location FROM visitors"),
            std::string("TEXT"));
   domain::PlanPtr plan =
-      BindOrFail("SELECT id FROM users WHERE username LIKE 'a%'");
+      BindOrFail("SELECT id FROM visitors WHERE username LIKE 'a%'");
   const auto* project = NodeAs<domain::ProjectNode>(plan);
   const auto* filter = ChildAs<domain::FilterNode>(project);
   CHECK(filter != nullptr);
@@ -867,15 +942,15 @@ TEST(test_binder_concat_and_like_typing) {
     CHECK(filter->predicate->type == domain::ExprType::kBool);
     CHECK(AsBinary(filter->predicate, domain::BinaryOp::kLike) != nullptr);
   }
-  EXPECT_BIND_FAILURE("SELECT username || id FROM users",
+  EXPECT_BIND_FAILURE("SELECT username || id FROM visitors",
                       domain::ErrorKind::kBind,
                       "operator || cannot be applied to TEXT and INT");
-  EXPECT_BIND_FAILURE("SELECT id FROM users WHERE id LIKE 1",
+  EXPECT_BIND_FAILURE("SELECT id FROM visitors WHERE id LIKE 1",
                       domain::ErrorKind::kBind,
                       "operator LIKE cannot be applied to INT and INT");
-  EXPECT_BIND_FAILURE("SELECT username LIKE 'a' FROM users",
+  EXPECT_BIND_FAILURE("SELECT username LIKE 'a' FROM visitors",
                       domain::ErrorKind::kBind, "boolean");
-  EXPECT_BIND_FAILURE("SELECT id FROM users WHERE username || 'x'",
+  EXPECT_BIND_FAILURE("SELECT id FROM visitors WHERE username || 'x'",
                       domain::ErrorKind::kBind, "boolean");
 }
 
@@ -902,7 +977,7 @@ TEST(test_binder_function_arguments_are_checked) {
   };
   for (const ResultCase& result_case : results) {
     CHECK_EQ(OutputTypes(std::string("SELECT ") + result_case.expression +
-                         " FROM users"),
+                         " FROM visitors"),
              std::string(result_case.types));
   }
 
@@ -927,7 +1002,7 @@ TEST(test_binder_function_arguments_are_checked) {
   };
   for (const ErrorCase& error_case : errors) {
     EXPECT_BIND_FAILURE(
-        std::string("SELECT ") + error_case.expression + " FROM users",
+        std::string("SELECT ") + error_case.expression + " FROM visitors",
         domain::ErrorKind::kBind, error_case.fragment);
   }
 }
@@ -936,35 +1011,35 @@ TEST(test_binder_avg_min_max_types) {
   CHECK_EQ(OutputTypes("SELECT AVG(id), AVG(score), MIN(id), MAX(score) FROM "
                        "measures"),
            std::string("DOUBLE,DOUBLE,INT,DOUBLE"));
-  CHECK_EQ(OutputTypes("SELECT MIN(username), MAX(username) FROM users"),
+  CHECK_EQ(OutputTypes("SELECT MIN(username), MAX(username) FROM visitors"),
            std::string("TEXT,TEXT"));
-  EXPECT_BIND_FAILURE("SELECT AVG(username) FROM users",
+  EXPECT_BIND_FAILURE("SELECT AVG(username) FROM visitors",
                       domain::ErrorKind::kBind,
                       "AVG requires a numeric argument, got TEXT");
-  EXPECT_BIND_FAILURE("SELECT SUM(username) FROM users",
+  EXPECT_BIND_FAILURE("SELECT SUM(username) FROM visitors",
                       domain::ErrorKind::kBind,
                       "SUM requires a numeric argument, got TEXT");
-  EXPECT_BIND_FAILURE("SELECT id FROM users WHERE MAX(id) > 1",
+  EXPECT_BIND_FAILURE("SELECT id FROM visitors WHERE MAX(id) > 1",
                       domain::ErrorKind::kBind, "aggregate");
-  EXPECT_BIND_FAILURE("SELECT MIN(MAX(id)) FROM users",
+  EXPECT_BIND_FAILURE("SELECT MIN(MAX(id)) FROM visitors",
                       domain::ErrorKind::kBind, "nested");
-  EXPECT_BIND_FAILURE("SELECT username, MAX(id) FROM users",
+  EXPECT_BIND_FAILURE("SELECT username, MAX(id) FROM visitors",
                       domain::ErrorKind::kBind, "must appear in GROUP BY");
   domain::PlanPtr grouped =
-      BindOrFail("SELECT username, MAX(id) FROM users GROUP BY username");
+      BindOrFail("SELECT username, MAX(id) FROM visitors GROUP BY username");
   CHECK(grouped != nullptr);
   CHECK(!PlanHasAggregateForm(grouped));
 }
 
 TEST(test_binder_limit_builds_limit_node_above_sort) {
-  domain::PlanPtr plain = BindOrFail("SELECT id FROM users LIMIT 5");
+  domain::PlanPtr plain = BindOrFail("SELECT id FROM visitors LIMIT 5");
   domain::PlanPtr sorted =
-      BindOrFail("SELECT id FROM users ORDER BY id LIMIT 5 OFFSET 2");
-  domain::PlanPtr zero = BindOrFail("SELECT id FROM users LIMIT 0");
+      BindOrFail("SELECT id FROM visitors ORDER BY id LIMIT 5 OFFSET 2");
+  domain::PlanPtr zero = BindOrFail("SELECT id FROM visitors LIMIT 0");
   domain::PlanPtr grouped = BindOrFail(
-      "SELECT username, COUNT(*) FROM users GROUP BY username ORDER BY "
+      "SELECT username, COUNT(*) FROM visitors GROUP BY username ORDER BY "
       "username LIMIT 3");
-  domain::PlanPtr unlimited = BindOrFail("SELECT id FROM users ORDER BY id");
+  domain::PlanPtr unlimited = BindOrFail("SELECT id FROM visitors ORDER BY id");
 
   const auto* plain_limit = NodeAs<domain::LimitNode>(plain);
   const auto* sorted_limit = NodeAs<domain::LimitNode>(sorted);
@@ -995,27 +1070,27 @@ TEST(test_binder_limit_builds_limit_node_above_sort) {
 
 TEST(test_binder_function_in_group_by_and_order_by_matches_structurally) {
   domain::PlanPtr grouped = BindOrFail(
-      "SELECT UPPER(username), COUNT(*) FROM users GROUP BY UPPER(username) "
+      "SELECT UPPER(username), COUNT(*) FROM visitors GROUP BY UPPER(username) "
       "ORDER BY UPPER(username)");
   domain::PlanPtr by_column =
-      BindOrFail("SELECT UPPER(username) FROM users GROUP BY username");
+      BindOrFail("SELECT UPPER(username) FROM visitors GROUP BY username");
   CHECK(grouped != nullptr);
   CHECK(by_column != nullptr);
   CHECK(!PlanHasAggregateForm(grouped));
-  CHECK_EQ(FIRST_SORT_COLUMN("SELECT LENGTH(username) FROM users ORDER BY "
+  CHECK_EQ(FIRST_SORT_COLUMN("SELECT LENGTH(username) FROM visitors ORDER BY "
                              "LENGTH(username)"),
            0u);
   CHECK_EQ(
-      FIRST_SORT_COLUMN("SELECT UPPER(username), COUNT(*) FROM users GROUP "
+      FIRST_SORT_COLUMN("SELECT UPPER(username), COUNT(*) FROM visitors GROUP "
                         "BY UPPER(username) ORDER BY UPPER(username)"),
       0u);
-  EXPECT_BIND_FAILURE("SELECT LOWER(location) FROM users GROUP BY username",
+  EXPECT_BIND_FAILURE("SELECT LOWER(location) FROM visitors GROUP BY username",
                       domain::ErrorKind::kBind, "must appear in GROUP BY");
-  EXPECT_BIND_FAILURE("SELECT username FROM users ORDER BY LENGTH(username)",
+  EXPECT_BIND_FAILURE("SELECT username FROM visitors ORDER BY LENGTH(username)",
                       domain::ErrorKind::kBind,
                       "does not match any SELECT list item");
   EXPECT_BIND_FAILURE(
-      "SELECT UPPER(username) FROM users ORDER BY LOWER(username)",
+      "SELECT UPPER(username) FROM visitors ORDER BY LOWER(username)",
       domain::ErrorKind::kBind, "does not match any SELECT list item");
 }
 
@@ -1102,42 +1177,43 @@ TEST(test_binder_functions_in_constants_and_default) {
 
 TEST(test_binder_predicate_pushdown_handles_function_arguments) {
   domain::PlanPtr plan = BindOrFail(
-      "SELECT u.id FROM users u JOIN posts p ON p.username = u.username WHERE "
-      "LOWER(u.username) = 'a' AND LENGTH(p.content) > 1 AND "
-      "LENGTH(u.username || p.content) > 3");
+      "SELECT v.id FROM visitors v JOIN stories s ON s.username = v.username "
+      "WHERE "
+      "LOWER(v.username) = 'a' AND LENGTH(s.content) > 1 AND "
+      "LENGTH(v.username || s.content) > 3");
 
   const auto* project = NodeAs<domain::ProjectNode>(plan);
   const auto* above_join = ChildAs<domain::FilterNode>(project);
   const auto* join = above_join == nullptr
                          ? nullptr
                          : NodeAs<domain::JoinNode>(above_join->child);
-  const auto* users_filter = LeftAs<domain::FilterNode>(join);
-  const auto* posts_filter = RightAs<domain::FilterNode>(join);
+  const auto* visitors_filter = LeftAs<domain::FilterNode>(join);
+  const auto* stories_filter = RightAs<domain::FilterNode>(join);
   CHECK(above_join != nullptr);
-  CHECK(users_filter != nullptr);
-  CHECK(posts_filter != nullptr);
-  if (above_join == nullptr || users_filter == nullptr ||
-      posts_filter == nullptr) {
+  CHECK(visitors_filter != nullptr);
+  CHECK(stories_filter != nullptr);
+  if (above_join == nullptr || visitors_filter == nullptr ||
+      stories_filter == nullptr) {
     return;
   }
-  CHECK(NodeAs<domain::ScanNode>(users_filter->child) != nullptr);
-  CHECK(NodeAs<domain::ScanNode>(posts_filter->child) != nullptr);
+  CHECK(NodeAs<domain::ScanNode>(visitors_filter->child) != nullptr);
+  CHECK(NodeAs<domain::ScanNode>(stories_filter->child) != nullptr);
 
-  // users.username is position 1 of a users row; posts.content is position 1
-  // of a posts row, and position 4 (3 + 1) of the joined row.
-  const domain::BoundBinary* users_predicate =
-      AsBinary(users_filter->predicate, domain::BinaryOp::kEq);
-  const domain::BoundBinary* posts_predicate =
-      AsBinary(posts_filter->predicate, domain::BinaryOp::kGt);
-  CHECK(users_predicate != nullptr);
-  CHECK(posts_predicate != nullptr);
-  if (users_predicate == nullptr || posts_predicate == nullptr) {
+  // visitors.username is position 1 of a visitors row; stories.content is
+  // position 1 of a stories row, and position 4 (3 + 1) of the joined row.
+  const domain::BoundBinary* visitors_predicate =
+      AsBinary(visitors_filter->predicate, domain::BinaryOp::kEq);
+  const domain::BoundBinary* stories_predicate =
+      AsBinary(stories_filter->predicate, domain::BinaryOp::kGt);
+  CHECK(visitors_predicate != nullptr);
+  CHECK(stories_predicate != nullptr);
+  if (visitors_predicate == nullptr || stories_predicate == nullptr) {
     return;
   }
   const auto* lower =
-      std::get_if<domain::BoundFunction>(&users_predicate->lhs->node);
+      std::get_if<domain::BoundFunction>(&visitors_predicate->lhs->node);
   const auto* length =
-      std::get_if<domain::BoundFunction>(&posts_predicate->lhs->node);
+      std::get_if<domain::BoundFunction>(&stories_predicate->lhs->node);
   CHECK(lower != nullptr && lower->fn == domain::ScalarFn::kLower);
   CHECK(length != nullptr && length->fn == domain::ScalarFn::kLength);
   if (lower != nullptr && length != nullptr) {
@@ -1150,21 +1226,22 @@ TEST(test_binder_predicate_pushdown_handles_function_arguments) {
 }
 
 TEST(test_binder_suggests_close_names_for_unknown_tables_and_columns) {
-  EXPECT_BIND_FAILURE("SELECT id FROM user", domain::ErrorKind::kBind,
-                      "unknown table 'user'; did you mean users?");
-  EXPECT_BIND_FAILURE("SELECT usrname FROM users", domain::ErrorKind::kBind,
+  EXPECT_BIND_FAILURE("SELECT id FROM visitor", domain::ErrorKind::kBind,
+                      "unknown table 'visitor'; did you mean visitors?");
+  EXPECT_BIND_FAILURE("SELECT usrname FROM visitors", domain::ErrorKind::kBind,
                       "; did you mean username?");
-  EXPECT_BIND_FAILURE("INSERT INTO users (usernam) VALUES ('a')",
+  EXPECT_BIND_FAILURE("INSERT INTO visitors (usernam) VALUES ('a')",
                       domain::ErrorKind::kBind, "; did you mean username?");
-  EXPECT_BIND_FAILURE("UPDATE users SET locaton = 'x'",
+  EXPECT_BIND_FAILURE("UPDATE visitors SET locaton = 'x'",
                       domain::ErrorKind::kBind, "; did you mean location?");
-  EXPECT_BIND_FAILURE("SELECT u.usrname FROM users u", domain::ErrorKind::kBind,
-                      "unknown column 'u.usrname'; did you mean username?");
+  EXPECT_BIND_FAILURE("SELECT v.usrname FROM visitors v",
+                      domain::ErrorKind::kBind,
+                      "unknown column 'v.usrname'; did you mean username?");
   // The comparison ignores case.
-  EXPECT_BIND_FAILURE("SELECT USRNAME FROM users", domain::ErrorKind::kBind,
+  EXPECT_BIND_FAILURE("SELECT USRNAME FROM visitors", domain::ErrorKind::kBind,
                       "; did you mean username?");
   // Edit distance 2 still suggests; edit distance 3 does not.
-  EXPECT_BIND_FAILURE("SELECT usrnme FROM users", domain::ErrorKind::kBind,
+  EXPECT_BIND_FAILURE("SELECT usrnme FROM visitors", domain::ErrorKind::kBind,
                       "; did you mean username?");
 
   // Too far from every name, or an exact match of another table's column.
@@ -1177,7 +1254,7 @@ TEST(test_binder_suggests_close_names_for_unknown_tables_and_columns) {
     CHECK(error->message.find("did you mean") == std::string::npos);
   }
   domain::BindResult three_edits =
-      domain::Bind(MustParse("SELECT usrnm FROM users"), catalog);
+      domain::Bind(MustParse("SELECT usrnm FROM visitors"), catalog);
   const auto* three_edits_error =
       std::get_if<domain::ExecutionError>(&three_edits);
   CHECK(three_edits_error != nullptr);

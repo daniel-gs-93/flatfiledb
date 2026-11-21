@@ -21,28 +21,28 @@ namespace testing = strata::testing;
 using Lines = std::vector<std::string>;
 
 const char* const kNoDatabaseLine = "error: no database open; run .open first";
-const char* const kFixtureALoaded = "loaded users=4 posts=3 engagements=5";
+const char* const kFixtureALoaded = "loaded visitors=4 stories=3 reactions=5";
 const char* const kIncompleteLine =
     "error: incomplete statement at end of input";
 
-const char* const kUsersCreate =
-    "CREATE TABLE users (\n"
+const char* const kVisitorsCreate =
+    "CREATE TABLE visitors (\n"
     "  id INT PRIMARY KEY,\n"
     "  username TEXT UNIQUE,\n"
     "  location TEXT\n"
     ");";
-const char* const kPostsCreate =
-    "CREATE TABLE posts (\n"
+const char* const kStoriesCreate =
+    "CREATE TABLE stories (\n"
     "  id INT PRIMARY KEY,\n"
     "  content TEXT,\n"
-    "  username TEXT REFERENCES users(username),\n"
+    "  username TEXT REFERENCES visitors(username),\n"
     "  views INT\n"
     ");";
-const char* const kEngagementsCreate =
-    "CREATE TABLE engagements (\n"
+const char* const kReactionsCreate =
+    "CREATE TABLE reactions (\n"
     "  id INT PRIMARY KEY,\n"
-    "  postId INT REFERENCES posts(id),\n"
-    "  username TEXT REFERENCES users(username),\n"
+    "  storyId INT REFERENCES stories(id),\n"
+    "  username TEXT REFERENCES visitors(username),\n"
     "  type TEXT,\n"
     "  comment TEXT,\n"
     "  timestamp INT\n"
@@ -147,10 +147,10 @@ TEST(test_repl_parse_error_position_is_reported_per_line) {
 TEST(test_repl_format_create_table_renders_every_constraint) {
   const std::vector<domain::TableSchema> schemas = FakeSchemas();
 
-  CHECK_EQ(cli::FormatCreateTable(SchemaNamed(schemas, "users"), schemas),
-           std::string(kUsersCreate));
-  CHECK_EQ(cli::FormatCreateTable(SchemaNamed(schemas, "posts"), schemas),
-           std::string(kPostsCreate));
+  CHECK_EQ(cli::FormatCreateTable(SchemaNamed(schemas, "visitors"), schemas),
+           std::string(kVisitorsCreate));
+  CHECK_EQ(cli::FormatCreateTable(SchemaNamed(schemas, "stories"), schemas),
+           std::string(kStoriesCreate));
   CHECK_EQ(cli::FormatCreateTable(SchemaNamed(schemas, "drafts"), schemas),
            std::string("CREATE TABLE drafts (\n"
                        "  id INT PRIMARY KEY,\n"
@@ -179,8 +179,8 @@ TEST(test_repl_multi_line_statement_executes_once_complete) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
 
-  Lines output = Run(
-      {OpenLine(dir.path()), "SELECT username", "FROM users", "WHERE id = 1;"});
+  Lines output = Run({OpenLine(dir.path()), "SELECT username", "FROM visitors",
+                      "WHERE id = 1;"});
 
   CHECK_EQ(output, Lines({kFixtureALoaded, "username", "alice"}));
 }
@@ -210,7 +210,7 @@ TEST(test_repl_commands_start_only_at_the_beginning_of_a_statement) {
   CHECK_EQ(output[0], std::string(kFixtureALoaded));
   CHECK(StartsWith(output[1], "syntax error at line 2, column 1: "));
   CHECK_EQ(Lines(output.begin() + 2, output.end()),
-           Lines({"users", "posts", "engagements"}));
+           Lines({"visitors", "stories", "reactions"}));
 }
 
 TEST(test_repl_tables_lists_tables_in_catalog_order) {
@@ -222,7 +222,7 @@ TEST(test_repl_tables_lists_tables_in_catalog_order) {
   Lines without_tables = Run({OpenLine(empty.path()), ".tables"});
 
   CHECK_EQ(with_tables,
-           Lines({kFixtureALoaded, "users", "posts", "engagements"}));
+           Lines({kFixtureALoaded, "visitors", "stories", "reactions"}));
   CHECK_EQ(without_tables, Lines({"loaded no tables"}));
 }
 
@@ -230,20 +230,20 @@ TEST(test_repl_schema_prints_executable_statements) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
 
-  Lines lower = Run({OpenLine(dir.path()), ".schema posts"});
-  Lines upper = Run({OpenLine(dir.path()), ".schema POSTS"});
+  Lines lower = Run({OpenLine(dir.path()), ".schema stories"});
+  Lines upper = Run({OpenLine(dir.path()), ".schema STORIES"});
   Lines every = Run({OpenLine(dir.path()), ".schema"});
   Lines missing = Run({OpenLine(dir.path()), ".schema nosuch"});
 
-  const Lines posts_lines = SplitLines(std::string(kPostsCreate) + "\n");
-  Lines expected_posts = {kFixtureALoaded};
-  expected_posts.insert(expected_posts.end(), posts_lines.begin(),
-                        posts_lines.end());
-  CHECK_EQ(lower, expected_posts);
-  CHECK_EQ(upper, expected_posts);
+  const Lines stories_lines = SplitLines(std::string(kStoriesCreate) + "\n");
+  Lines expected_stories = {kFixtureALoaded};
+  expected_stories.insert(expected_stories.end(), stories_lines.begin(),
+                          stories_lines.end());
+  CHECK_EQ(lower, expected_stories);
+  CHECK_EQ(upper, expected_stories);
 
   Lines expected_every = {kFixtureALoaded};
-  for (const char* text : {kUsersCreate, kPostsCreate, kEngagementsCreate}) {
+  for (const char* text : {kVisitorsCreate, kStoriesCreate, kReactionsCreate}) {
     const Lines table_lines = SplitLines(std::string(text) + "\n");
     expected_every.insert(expected_every.end(), table_lines.begin(),
                           table_lines.end());
@@ -257,7 +257,7 @@ TEST(test_repl_schema_round_trip_recreates_the_same_schema) {
   testing::WriteFixtureA(original.path());
   Run({OpenLine(original.path()),
        "CREATE TABLE jobs (id INT PRIMARY KEY AUTOINCREMENT, title TEXT UNIQUE "
-       "DEFAULT 'it''s; new', owner TEXT REFERENCES users(username), ratio "
+       "DEFAULT 'it''s; new', owner TEXT REFERENCES visitors(username), ratio "
        "DOUBLE DEFAULT 1.5);"});
   Lines first = Run({OpenLine(original.path()), ".schema"});
   CHECK(!first.empty());
@@ -277,7 +277,7 @@ TEST(test_repl_schema_round_trip_recreates_the_same_schema) {
     return;
   }
   CHECK_EQ(second[0], std::string("loaded no tables"));
-  CHECK_EQ(second[1], std::string("OK CREATE TABLE users"));
+  CHECK_EQ(second[1], std::string("OK CREATE TABLE visitors"));
   CHECK_EQ(second[4], std::string("OK CREATE TABLE jobs"));
   CHECK_EQ(Lines(second.begin() + 5, second.end()), first);
 }
@@ -286,7 +286,7 @@ TEST(test_repl_prompts_are_printed_only_when_interactive) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
   const Lines input = {OpenLine(dir.path()), "SELECT username",
-                       "FROM users WHERE id = 1;"};
+                       "FROM visitors WHERE id = 1;"};
 
   std::string plain = RunText(input, false);
   std::string prompted = RunText(input, true);
@@ -322,7 +322,7 @@ TEST(test_repl_help_lists_commands_and_quit_stops_reading) {
 }
 
 TEST(test_repl_commands_without_open_print_error) {
-  Lines output = Run({".tables", ".schema", ".schema users"});
+  Lines output = Run({".tables", ".schema", ".schema visitors"});
 
   CHECK_EQ(output, Lines({kNoDatabaseLine, kNoDatabaseLine, kNoDatabaseLine}));
 }
@@ -344,7 +344,7 @@ TEST(test_repl_command_with_extra_arguments_prints_usage) {
 }
 
 TEST(test_repl_commands_without_open_still_parse_sql_first) {
-  Lines output = Run({"SELEC 1;", "SELECT username FROM users;"});
+  Lines output = Run({"SELEC 1;", "SELECT username FROM visitors;"});
 
   CHECK_EQ(output.size(), std::size_t{2});
   if (output.size() != 2) {
@@ -377,7 +377,7 @@ TEST(test_repl_cancel_discards_pending_statement_but_not_string_content) {
   testing::WriteFixtureA(dir.path());
 
   Lines pending = Run({OpenLine(dir.path()), "SELECT username", ".cancel",
-                       "SELECT username FROM users WHERE id = 1;"});
+                       "SELECT username FROM visitors WHERE id = 1;"});
   Lines in_string = Run({OpenLine(dir.path()), "SELECT 'a", ".cancel", "';"});
   Lines idle = Run({OpenLine(dir.path()), ".cancel", ".cancel x"});
 
@@ -419,6 +419,37 @@ TEST(test_repl_missing_dot_command_names_print_hint_and_are_not_executed) {
   }
 }
 
+TEST(test_repl_unknown_dot_command_prints_error_and_is_not_executed) {
+  testing::TempDir dir;
+  testing::WriteFixtureA(dir.path());
+
+  Lines output =
+      Run({OpenLine(dir.path()), ".tbles",
+           "INSERT INTO visitors (id, username, location) VALUES (9, 'zed', "
+           "'Bern');",
+           "SELECT username FROM visitors WHERE username = 'zed';",
+           ".foo extra words"});
+  Lines inside_statement =
+      Run({OpenLine(dir.path()), "SELECT 1", ".tbles", ";"});
+
+  CHECK_EQ(output.size(), std::size_t{6});
+  if (output.size() == 6) {
+    CHECK_EQ(output[1],
+             std::string("error: unknown command .tbles; .help lists the "
+                         "commands"));
+    CHECK_EQ(output[2], std::string("OK affected=1"));
+    CHECK_EQ(output[3], std::string("username"));
+    CHECK_EQ(output[4], std::string("zed"));
+    CHECK_EQ(output[5],
+             std::string("error: unknown command .foo; .help lists the "
+                         "commands"));
+  }
+  CHECK_EQ(inside_statement.size(), std::size_t{2});
+  if (inside_statement.size() == 2) {
+    CHECK(StartsWith(inside_statement[1], "syntax error"));
+  }
+}
+
 TEST(test_repl_string_continuation_prompt_is_distinct) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
@@ -427,8 +458,8 @@ TEST(test_repl_string_continuation_prompt_is_distinct) {
   const std::string pending = "   ...> ";
 
   const std::string prompted = RunText(
-      {OpenLine(dir.path()), "SELECT username FROM users WHERE username = 'a",
-       "b';", "SELECT 1"},
+      {OpenLine(dir.path()),
+       "SELECT username FROM visitors WHERE username = 'a", "b';", "SELECT 1"},
       true);
 
   CHECK_EQ(idle.size(), std::size_t{8});
@@ -446,10 +477,10 @@ TEST(test_repl_full_width_semicolon_prints_hint_and_drops_the_line) {
 
   Lines output =
       Run({OpenLine(dir.path()), "SELECT 1" + full_width, "SELECT username",
-           "FROM users" + full_width, "FROM users WHERE id = 1;"});
-  Lines literal = Run(
-      {OpenLine(dir.path()),
-       "SELECT username FROM users WHERE username = 'x" + full_width + "';"});
+           "FROM visitors" + full_width, "FROM visitors WHERE id = 1;"});
+  Lines literal = Run({OpenLine(dir.path()),
+                       "SELECT username FROM visitors WHERE username = 'x" +
+                           full_width + "';"});
 
   CHECK_EQ(output, Lines({kFixtureALoaded, kFullWidthError, kFullWidthError,
                           "username", "alice"}));
@@ -463,9 +494,9 @@ TEST(test_repl_comment_lines_and_trailing_comments_are_ignored) {
 
   Lines output =
       Run({OpenLine(dir.path()), "-- a comment",
-           "SELECT username FROM users WHERE id = 1; -- trailing",
-           "SELECT username -- c", "FROM users WHERE id = 2;",
-           "  " + ideographic_space, "SELECT 1 FROM users LIMIT 0;"});
+           "SELECT username FROM visitors WHERE id = 1; -- trailing",
+           "SELECT username -- c", "FROM visitors WHERE id = 2;",
+           "  " + ideographic_space, "SELECT 1 FROM visitors LIMIT 0;"});
 
   CHECK_EQ(output, Lines({kFixtureALoaded, "username", "alice", "username",
                           "carol", "1"}));
@@ -485,28 +516,29 @@ TEST(test_repl_open_reports_created_database_and_rejected_rows) {
 
   CHECK_EQ(created, Lines({"created new database " + fresh}));
   CHECK(std::filesystem::is_directory(fresh));
-  CHECK_EQ(
-      with_rejects,
-      Lines({"loaded users=2 (rejected 2) posts=1 (rejected 1) "
-             "engagements=4",
-             "users.csv: rejected lines 3, 4", "posts.csv: rejected lines 3"}));
+  CHECK_EQ(with_rejects,
+           Lines({"loaded visitors=2 (rejected 2) stories=1 (rejected 1) "
+                  "reactions=4",
+                  "visitors.csv: rejected lines 3, 4",
+                  "stories.csv: rejected lines 3"}));
   CHECK_EQ(without, Lines({kFixtureALoaded}));
 
   // Twelve rejected lines (2 to 13): ten are listed, then an ellipsis.
   testing::TempDir many;
   testing::WriteFixtureA(many.path());
-  std::string users = "id,username,location\n";
+  std::string visitors = "id,username,location\n";
   for (int line = 2; line <= 13; ++line) {
-    users += "bad\n";
+    visitors += "bad\n";
   }
-  testing::WriteFile(many.path() / "users.csv", users);
+  testing::WriteFile(many.path() / "visitors.csv", visitors);
 
   Lines truncated = Run({OpenLine(many.path())});
 
-  CHECK_EQ(truncated,
-           Lines({"loaded users=0 (rejected 12) posts=3 engagements=5",
-                  "users.csv: rejected lines 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "
-                  "..."}));
+  CHECK_EQ(
+      truncated,
+      Lines({"loaded visitors=0 (rejected 12) stories=3 reactions=5",
+             "visitors.csv: rejected lines 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, "
+             "..."}));
 }
 
 TEST(test_repl_import_command_runs_import_and_prints_notes) {
@@ -557,7 +589,8 @@ TEST(test_repl_initial_open_acts_like_dot_open) {
   Lines failed = RunWithInitialOpen({missing_parent, false}, {".tables"});
   Lines created = RunWithInitialOpen({fresh, true}, {".tables"});
 
-  CHECK_EQ(existing, Lines({kFixtureALoaded, "users", "posts", "engagements"}));
+  CHECK_EQ(existing,
+           Lines({kFixtureALoaded, "visitors", "stories", "reactions"}));
   CHECK_EQ(failed, Lines({"error: could not open " + missing_parent +
                               ": no such directory",
                           kNoDatabaseLine}));

@@ -91,6 +91,8 @@ add_executable(strata_tests
         tests/test_query_service.cpp
         tests/test_query_service_lock.cpp
         tests/test_repl.cpp
+        tests/test_scale_data.cpp
+        tests/test_scale_data_support.cpp
         tests/test_sql_parser.cpp
         tests/test_statement_buffer.cpp
         )

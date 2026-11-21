@@ -151,27 +151,41 @@ std::optional<Value> Substr(const std::string& text, int64_t start,
   return Value(CharRange(text, begin, end));
 }
 
+// Rounds magnitude * scale to an integer by the binary value of magnitude:
+// above half rounds up, below half down, an exact half up. std::fma returns the
+// rounding error of magnitude * scale, which tells an exact half from a product
+// that only rounded up to one. Needs magnitude * scale below 2^52.
+double RoundScaledHalfUp(double magnitude, double scale) {
+  const double scaled = magnitude * scale;
+  const double residual = std::fma(magnitude, scale, -scaled);
+  const double lower = std::floor(scaled);
+  const double fraction = scaled - lower;
+  const bool is_round_up =
+      fraction > 0.5 || (fraction == 0.5 && residual >= 0.0);
+  return is_round_up ? lower + 1.0 : lower;
+}
+
 // Rounds to `digits` decimal places by the binary value of value: above half
 // rounds away from zero, below half toward zero, an exact half away from zero.
-// std::fma returns the rounding error of value * scale, which tells an exact
-// half from a product that only rounded up to one.
 double RoundHalfAwayFromZero(double value, int digits) {
   const double magnitude = std::fabs(value);
   if (magnitude >= kTwoPow52) {
     return value;
   }  // already an integer
   const double scale = kPowersOfTen[digits];
-  const double scaled = magnitude * scale;
-  if (scaled >= kTwoPow52) {
-    return value;
+  if (magnitude * scale >= kTwoPow52) {
+    // The product is too large for the fma test, but a double of this size can
+    // still have a fractional part. The integer part is exact and the
+    // fractional part times scale is below 2^52, so round the fraction alone.
+    // The final addition rounds a second time; it differs from the nearest
+    // DOUBLE only when the decimal result lies within 2^-54 of a midpoint
+    // between two DOUBLEs.
+    const double integer_part = std::floor(magnitude);
+    const double rounded_fraction =
+        RoundScaledHalfUp(magnitude - integer_part, scale);
+    return std::copysign(integer_part + rounded_fraction / scale, value);
   }
-  const double residual = std::fma(magnitude, scale, -scaled);
-  const double lower = std::floor(scaled);
-  const double fraction = scaled - lower;
-  const bool is_round_up =
-      fraction > 0.5 || (fraction == 0.5 && residual >= 0.0);
-  const double rounded = is_round_up ? lower + 1.0 : lower;
-  return std::copysign(rounded / scale, value);
+  return std::copysign(RoundScaledHalfUp(magnitude, scale) / scale, value);
 }
 
 std::optional<Value> Abs(const Value& argument, std::string* failure) {

@@ -60,7 +60,7 @@ struct AffectedRows {
 };
 
 // The outcome of a DDL statement. tag is the text printed after "OK", for
-// example "CREATE TABLE users".
+// example "CREATE TABLE visitors".
 struct CommandComplete {
   std::string tag;
   // Lines printed after it (for example the rows an import skipped).

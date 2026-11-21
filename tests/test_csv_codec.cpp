@@ -49,22 +49,22 @@ domain::TableSchema MixedSchema() {
                              {}};
 }
 
-// users, posts and a table with an auto-increment key and defaults.
+// visitors, stories and a table with an auto-increment key and defaults.
 std::vector<domain::TableSchema> CatalogSchemas() {
-  domain::TableSchema users{"users",
-                            {Column("id", domain::DataType::kInt),
-                             Column("username", domain::DataType::kText),
-                             Column("location", domain::DataType::kText)},
-                            0,
-                            {},
-                            {1}};
-  domain::TableSchema posts{"posts",
-                            {Column("id", domain::DataType::kInt),
-                             Column("content", domain::DataType::kText),
-                             Column("username", domain::DataType::kText),
-                             Column("views", domain::DataType::kInt)},
-                            0,
-                            {domain::ForeignKey{2, "users", 1}}};
+  domain::TableSchema visitors{"visitors",
+                               {Column("id", domain::DataType::kInt),
+                                Column("username", domain::DataType::kText),
+                                Column("location", domain::DataType::kText)},
+                               0,
+                               {},
+                               {1}};
+  domain::TableSchema stories{"stories",
+                              {Column("id", domain::DataType::kInt),
+                               Column("content", domain::DataType::kText),
+                               Column("username", domain::DataType::kText),
+                               Column("views", domain::DataType::kInt)},
+                              0,
+                              {domain::ForeignKey{2, "visitors", 1}}};
   domain::ColumnDef name = Column("name", domain::DataType::kText);
   name.default_value = domain::Value(std::string("a,b"));
   domain::ColumnDef ratio = Column("ratio", domain::DataType::kDouble);
@@ -75,7 +75,7 @@ std::vector<domain::TableSchema> CatalogSchemas() {
       "jobs", {Column("id", domain::DataType::kInt), name, ratio, count},
       0,      {},
       {},     std::optional<std::size_t>(0)};
-  return {users, posts, jobs};
+  return {visitors, stories, jobs};
 }
 
 bool SameForeignKey(const domain::ForeignKey& lhs,
@@ -187,6 +187,7 @@ TEST(test_csv_parse_row_applies_column_types) {
       {"1", "abc", "x"},      {"1", "inf", "x"},
       {"1", "nan", "x"},      {"1", "2.5"},
       {"1", "2.5", "x", "y"}, {"1", " 2", "x"},
+      {"1", "1e-400", "x"},   {"1", "1e999", "x"},
   };
 
   std::optional<domain::Row> largest = infrastructure::ParseRow(
@@ -231,40 +232,47 @@ TEST(test_catalog_round_trip_preserves_schema_fields) {
 
 TEST(test_catalog_parse_rejects_invalid_files) {
   const std::string header = kCatalogHeader;
-  const std::string users =
-      "users,0,id,INT,1,0,0,0,,,\nusers,1,username,TEXT,0,1,0,0,,,\n"
-      "users,2,location,TEXT,0,0,0,0,,,\n";
+  const std::string visitors =
+      "visitors,0,id,INT,1,0,0,0,,,\nvisitors,1,username,TEXT,0,1,0,0,,,\n"
+      "visitors,2,location,TEXT,0,0,0,0,,,\n";
   struct Case {
     std::string text;
     std::string mentions;  // a name the description must contain
   };
   const std::vector<Case> cases = {
-      {header + users + "posts,0,id,INT,1,0,0,0,,,\n" + users, "users"},
-      {header + "users,0,id,INT,1,0,0,0,,,\nusers,1,ID,TEXT,0,0,0,0,,,\n",
+      {header + "../victim,0,id,INT,1,0,0,0,,,\n", "../victim"},
+      {header +
+           "visitors,0,id,INT,1,0,0,0,,,\nvisitors,1,\"a,b\",TEXT,0,0,0,0,,,\n",
+       "a,b"},
+      {header + visitors + "stories,0,id,INT,1,0,0,0,,,\n" + visitors,
+       "visitors"},
+      {header + "visitors,0,id,INT,1,0,0,0,,,\nvisitors,1,ID,TEXT,0,0,0,0,,,\n",
        "ID"},
-      {header + "users,0,id,INT,1,0,0,0,,,\nusers,2,name,TEXT,0,0,0,0,,,\n",
-       "users"},
-      {header + "users,0,id,BIGINT,1,0,0,0,,,\n", "BIGINT"},
-      {header + "users,0,id,INT,0,0,0,0,,,\n", "users"},
-      {header + "users,0,id,INT,1,0,0,0,,,\nusers,1,b,INT,1,0,0,0,,,\n",
-       "users"},
-      {header + "users,0,id,TEXT,1,0,1,0,,,\n", "id"},
-      {header + "users,0,id,INT,1,0,0,0,,,\nusers,1,n,INT,0,0,0,1,abc,,\n",
+      {header +
+           "visitors,0,id,INT,1,0,0,0,,,\nvisitors,2,name,TEXT,0,0,0,0,,,\n",
+       "visitors"},
+      {header + "visitors,0,id,BIGINT,1,0,0,0,,,\n", "BIGINT"},
+      {header + "visitors,0,id,INT,0,0,0,0,,,\n", "visitors"},
+      {header + "visitors,0,id,INT,1,0,0,0,,,\nvisitors,1,b,INT,1,0,0,0,,,\n",
+       "visitors"},
+      {header + "visitors,0,id,TEXT,1,0,1,0,,,\n", "id"},
+      {header +
+           "visitors,0,id,INT,1,0,0,0,,,\nvisitors,1,n,INT,0,0,0,1,abc,,\n",
        "n"},
-      {header + users + "posts,0,id,INT,1,0,0,0,,,\n" +
-           "posts,1,owner,TEXT,0,0,0,0,,nosuch,name\n",
+      {header + visitors + "stories,0,id,INT,1,0,0,0,,,\n" +
+           "stories,1,owner,TEXT,0,0,0,0,,nosuch,name\n",
        "nosuch"},
-      {header + users + "posts,0,id,INT,1,0,0,0,,,\n" +
-           "posts,1,owner,TEXT,0,0,0,0,,users,missing\n",
+      {header + visitors + "stories,0,id,INT,1,0,0,0,,,\n" +
+           "stories,1,owner,TEXT,0,0,0,0,,visitors,missing\n",
        "missing"},
-      {header + users + "posts,0,id,INT,1,0,0,0,,,\n" +
-           "posts,1,place,TEXT,0,0,0,0,,users,location\n",
+      {header + visitors + "stories,0,id,INT,1,0,0,0,,,\n" +
+           "stories,1,place,TEXT,0,0,0,0,,visitors,location\n",
        "location"},
-      {header + users + "posts,0,id,INT,1,0,0,0,,,\n" +
-           "posts,1,owner,INT,0,0,0,0,,users,username\n",
+      {header + visitors + "stories,0,id,INT,1,0,0,0,,,\n" +
+           "stories,1,owner,INT,0,0,0,0,,visitors,username\n",
        "username"},
       {header + "catalog,0,id,INT,1,0,0,0,,,\n", "catalog"},
-      {header + "users,0,id,INT,1,0,0,0,,\n", "fields"},
+      {header + "visitors,0,id,INT,1,0,0,0,,\n", "fields"},
   };
 
   for (const Case& test_case : cases) {

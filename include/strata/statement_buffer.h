@@ -17,8 +17,8 @@ class StatementBuffer {
   // completed, in order, each including its ';'. A statement that continues
   // after the line stays buffered. Statements made of only ';' are dropped, and
   // so are text that is only white space or a comment. Leading white space of a
-  // statement is kept, so that error columns count from where the user began
-  // typing.
+  // statement is kept, so that error columns count from the start of the line,
+  // or from the end of the previous statement's ';' on the same line.
   std::vector<std::string> AddLine(const std::string& line);
 
   // True when no statement is in progress: nothing is buffered but white space

@@ -91,8 +91,8 @@ std::string BuildAppendText(const FileFormat& format, bool is_line_open,
   return text;
 }
 
-// "users.csv" for a table named Users: the file name is the lower-case table
-// name, whatever the declared spelling.
+// "visitors.csv" for a table named Visitors: the file name is the lower-case
+// table name, whatever the declared spelling.
 std::string TableFileName(const std::string& table_name) {
   return domain::ToLower(table_name) + ".csv";
 }
@@ -474,7 +474,7 @@ struct StagedFile {
   StagedKind kind = StagedKind::kTable;
   const TableWrite* write = nullptr;  // kTable; not owned
   const std::vector<domain::TableSchema>* catalog = nullptr;  // kCatalog
-  std::string display_name;  // "users.csv", as the descriptions name it
+  std::string display_name;  // "visitors.csv", as the descriptions name it
   std::string path;
   std::string temp_path;
   std::string orig_path;
@@ -686,9 +686,9 @@ std::optional<std::string> SwapFiles(std::vector<StagedFile>& staged) {
   return std::nullopt;
 }
 
-// A failed removal leaves an .orig that the next commit reports as a leftover;
-// it does not change the result of this commit. For a dropped table this is the
-// step that deletes its data.
+// A failed removal leaves an .orig that fails the next load and that the next
+// commit reports as a leftover; it does not change the result of this commit.
+// For a dropped table this is the step that deletes its data.
 void RemoveBackups(const std::vector<StagedFile>& staged) {
   for (const auto& file : staged) {
     if (file.is_backed_up) {

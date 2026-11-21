@@ -30,9 +30,12 @@
 // node, needs the exclusive lock.
 //
 // Durability (design document 2.15). After a write node (INSERT, UPDATE,
-// DELETE, CREATE TABLE, import) was applied, Execute calls
-// BufferManager::WriteBackAll before it returns, so a completed statement is
-// in the file. A query and a failed statement never call it.
+// DELETE, CREATE TABLE, ALTER TABLE ADD COLUMN, DROP TABLE, import) was
+// applied, Execute calls BufferManager::WriteBackAll before it returns, so a
+// completed statement is in the file. A query and a failed statement never call
+// it; neither does an ADD COLUMN or DROP TABLE whose old pages could not be
+// released (the statement is applied and the error says its pages were not
+// reclaimed).
 
 namespace strata::paged {
 
@@ -63,10 +66,10 @@ class PagedEngine : public domain::IEngine {
   // in pull order). InsertNode, UpdateNode and DeleteNode yield AffectedRows
   // and change no page when a check fails. CreateTableNode yields
   // CommandComplete "CREATE TABLE <name>"; ImportTableNode yields
-  // CommandComplete "IMPORT <name> (imported <n> rows)". AddColumnNode and
-  // DropTableNode yield kUnsupported ("paged engine does not support ALTER
-  // TABLE ADD COLUMN", "paged engine does not support DROP TABLE") and change
-  // no page. A write that was applied but could not be written out yields kIo
+  // CommandComplete "IMPORT <name> (imported <n> rows)". AddColumnNode yields
+  // CommandComplete "ALTER TABLE <name>" and DropTableNode yields
+  // CommandComplete "DROP TABLE <name>". A write that was applied but could not
+  // be written out yields kIo
   // "<message>; statement was applied but not saved"; the dirty pages stay in
   // the pool and the next successful write, Flush or Close writes them out.
   domain::ExecutionResult Execute(const domain::PlanNode& plan) override;

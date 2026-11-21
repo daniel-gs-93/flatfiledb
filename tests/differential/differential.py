@@ -407,6 +407,10 @@ def run_strata(
         timeout=PROCESS_TIMEOUT_SECONDS,
         check=False,
     )
+    if completed.returncode != 0:
+        raise HarnessError(
+            f"strata_cli exited with status {completed.returncode} on: {text}"
+        )
     return split_cli_output(completed.stdout)
 
 

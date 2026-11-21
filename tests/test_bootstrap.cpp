@@ -84,11 +84,11 @@ TEST(test_bootstrap_opens_database_and_reports_counts) {
     }
     CHECK_EQ(opened->tables.size(), std::size_t{3});
     if (opened->tables.size() == 3) {
-      CHECK_EQ(opened->tables[0].name, std::string("users"));
+      CHECK_EQ(opened->tables[0].name, std::string("visitors"));
       CHECK_EQ(opened->tables[0].row_count, std::size_t{4});
-      CHECK_EQ(opened->tables[1].name, std::string("posts"));
+      CHECK_EQ(opened->tables[1].name, std::string("stories"));
       CHECK_EQ(opened->tables[1].row_count, std::size_t{3});
-      CHECK_EQ(opened->tables[2].name, std::string("engagements"));
+      CHECK_EQ(opened->tables[2].name, std::string("reactions"));
       CHECK_EQ(opened->tables[2].row_count, std::size_t{5});
     }
     CHECK_EQ(opened->directory,
@@ -98,7 +98,7 @@ TEST(test_bootstrap_opens_database_and_reports_counts) {
       continue;
     }
     domain::ExecutionResult result = testing::ExecuteSql(
-        *opened->service, "SELECT username FROM users WHERE id = 1");
+        *opened->service, "SELECT username FROM visitors WHERE id = 1");
     const domain::ResultSet* result_set = testing::AsResultSet(result);
     CHECK(result_set != nullptr);
     if (result_set == nullptr) {
@@ -114,14 +114,14 @@ TEST(test_bootstrap_missing_file_returns_description) {
   testing::TempDir dir;
   testing::WriteFixtureA(dir.path());
   std::error_code error;
-  std::filesystem::remove(dir.path() / "posts.csv", error);
+  std::filesystem::remove(dir.path() / "stories.csv", error);
   CHECK(!error);
 
   // Act
   const std::string reason = OpenFailure(dir.path().string());
 
   // Assert
-  CHECK_EQ(reason, std::string("cannot read posts.csv"));
+  CHECK_EQ(reason, std::string("cannot read stories.csv"));
 }
 
 TEST(test_bootstrap_missing_directory_returns_description) {
@@ -193,7 +193,7 @@ TEST(test_bootstrap_open_reports_rejected_lines) {
   if (opened == nullptr || opened->tables.size() != 3) {
     return;
   }
-  CHECK_EQ(opened->tables[0].name, std::string("users"));
+  CHECK_EQ(opened->tables[0].name, std::string("visitors"));
   CHECK_EQ(opened->tables[0].row_count, std::size_t{2});
   CHECK_EQ(opened->tables[0].rejected_lines, std::vector<std::size_t>({3, 4}));
   CHECK_EQ(opened->tables[1].rejected_lines, std::vector<std::size_t>({3}));
@@ -244,7 +244,7 @@ TEST(test_bootstrap_failed_open_keeps_current_lock_and_releases_new_one) {
   testing::TempDir broken_dir;
   testing::WriteFixtureA(broken_dir.path());
   std::error_code error;
-  std::filesystem::remove(broken_dir.path() / "posts.csv", error);
+  std::filesystem::remove(broken_dir.path() / "stories.csv", error);
   std::unique_ptr<bootstrap::OpenedDatabase> current =
       MustOpen(good_dir.path(), false);
   CHECK(current != nullptr);
@@ -255,7 +255,7 @@ TEST(test_bootstrap_failed_open_keeps_current_lock_and_releases_new_one) {
   const std::string reason =
       OpenFailure(broken_dir.path().string(), current.get());
 
-  CHECK_EQ(reason, std::string("cannot read posts.csv"));
+  CHECK_EQ(reason, std::string("cannot read stories.csv"));
   CHECK(IsLockHeld(good_dir.path()));
   CHECK(!IsLockHeld(broken_dir.path()));
 }
@@ -352,7 +352,8 @@ void MustExecute(strata::application::QueryService& service,
   }
 }
 
-// `users=2 posts=0`: the tables of an opened database as the CLI lists them.
+// `visitors=2 stories=0`: the tables of an opened database as the CLI lists
+// them.
 std::string TablesText(const bootstrap::OpenedDatabase& opened) {
   std::string text;
   for (const bootstrap::TableCount& table : opened.tables) {
@@ -364,22 +365,23 @@ std::string TablesText(const bootstrap::OpenedDatabase& opened) {
   return text;
 }
 
-// A paged database in `directory` with users (2 rows) and posts (no row),
-// closed again. Returns the first page of users, or 0 after a failure.
+// A paged database in `directory` with visitors (2 rows) and stories (no row),
+// closed again. Returns the first page of visitors, or 0 after a failure.
 strata::paged::PageId WritePagedFixture(
     const std::filesystem::path& directory) {
   std::unique_ptr<bootstrap::OpenedDatabase> opened = MustOpenPaged(directory);
   if (opened == nullptr) {
     return 0;
   }
+  MustExecute(
+      *opened->service,
+      "CREATE TABLE visitors (id INT PRIMARY KEY, username TEXT UNIQUE)");
   MustExecute(*opened->service,
-              "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE)");
+              "CREATE TABLE stories (id INT PRIMARY KEY, body TEXT)");
   MustExecute(*opened->service,
-              "CREATE TABLE posts (id INT PRIMARY KEY, body TEXT)");
-  MustExecute(*opened->service,
-              "INSERT INTO users VALUES (1, 'ann'), (2, 'bob')");
+              "INSERT INTO visitors VALUES (1, 'ann'), (2, 'bob')");
   const std::optional<strata::paged::PageId> first_page =
-      opened->paged_engine->database().catalog().FirstPage("users");
+      opened->paged_engine->database().catalog().FirstPage("visitors");
   CHECK(first_page.has_value());
   return first_page.value_or(0);
 }
@@ -454,12 +456,12 @@ void CheckOpenLoadsRowCounts() {
     return;
   }
   CHECK(!opened->is_created);
-  CHECK_EQ(TablesText(*opened), std::string("users=2 posts=0"));
+  CHECK_EQ(TablesText(*opened), std::string("visitors=2 stories=0"));
   for (const bootstrap::TableCount& table : opened->tables) {
     CHECK(table.rejected_lines.empty());
   }
   domain::ExecutionResult result = testing::ExecuteSql(
-      *opened->service, "SELECT id, username FROM users ORDER BY id");
+      *opened->service, "SELECT id, username FROM visitors ORDER BY id");
   const domain::ResultSet* result_set = testing::AsResultSet(result);
   CHECK(result_set != nullptr);
   if (result_set == nullptr) {
@@ -496,7 +498,7 @@ void CheckReopenReusesLockAndFlushesCurrent() {
   CHECK(first->lock != nullptr);
   CHECK(second->lock == first->lock);
   CHECK(second->paged_engine != first->paged_engine);
-  CHECK_EQ(TablesText(*second), std::string("users=2 posts=0 extra=0"));
+  CHECK_EQ(TablesText(*second), std::string("visitors=2 stories=0 extra=0"));
   first.reset();
   CHECK(IsLockHeld(dir.path()));
   second.reset();
@@ -562,9 +564,9 @@ void CheckCorruptFileFailsWholeOpen() {
   CHECK(IsLockHeld(good_dir.path()));
   CHECK(!IsLockHeld(header_dir.path()));
   CHECK(!IsLockHeld(page_dir.path()));
-  CHECK_EQ(TablesText(*current), std::string("users=2 posts=0"));
+  CHECK_EQ(TablesText(*current), std::string("visitors=2 stories=0"));
   domain::ExecutionResult result =
-      testing::ExecuteSql(*current->service, "SELECT COUNT(*) FROM users");
+      testing::ExecuteSql(*current->service, "SELECT COUNT(*) FROM visitors");
   const domain::ResultSet* result_set = testing::AsResultSet(result);
   CHECK(result_set != nullptr);
   if (result_set == nullptr) {

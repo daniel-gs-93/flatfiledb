@@ -19,72 +19,96 @@
 #endif
 
 // Environment tier: runs the strata_cli executable against a copy of the
-// real data/ directory. Each test owns a work directory containing data/.
+// sample database sample_my_db/. Each test owns a work directory. Most of them
+// hold a copy of sample_my_db/ whose students.csv has three lines that the
+// schema rejects (see StudentsCsvWithRejectedLines); the sample database tests
+// copy it unchanged, and a few tests use an empty directory.
 
 namespace {
 
 namespace testing = strata::testing;
 
-const char* const kDataFiles[] = {"users.csv", "posts.csv", "engagements.csv"};
-const char* const kOpenLine = ".open data";
-// data/users.csv has three rows the schema rejects (lines 12, 17 and 18), which
-// `.open` reports.
+const char* const kTableFiles[] = {"instructors.csv", "students.csv",
+                                   "courses.csv", "enrollments.csv"};
+const char* const kOpenLine = ".open sample_my_db";
+// `.open` reports the rejected lines of students.csv.
 const char* const kLoadedLine =
-    "loaded users=10000 (rejected 3) posts=10000 engagements=10000";
-const char* const kRejectedLine = "users.csv: rejected lines 12, 17, 18";
-
-std::filesystem::path SourceData() {
-  return std::filesystem::path(STRATA_SOURCE_DIR) / "data";
-}
+    "loaded instructors=6 students=30 (rejected 3) courses=12 enrollments=144";
+const char* const kRejectedLine = "students.csv: rejected lines 12, 17, 18";
 
 // The sample database that ships with the repository (README, Quick Start).
 std::filesystem::path SampleDatabase() {
   return std::filesystem::path(STRATA_SOURCE_DIR) / "sample_my_db";
 }
 
-bool HasSourceData() {
-  for (const char* name : kDataFiles) {
-    std::error_code error;
-    if (!std::filesystem::exists(SourceData() / name, error)) {
+std::vector<std::string> SplitLines(const std::string& text);
+
+std::string JoinLines(const std::vector<std::string>& lines) {
+  std::string text;
+  for (const std::string& line : lines) {
+    text += line + "\n";
+  }
+  return text;
+}
+
+// The students.csv of the repository with three lines added. `lines[0]` is the
+// header and `lines[k]` the student in row k, so a line number is its index
+// + 1. Line 12 is row 10 with an id that is not a number, and lines 17 and 18
+// are row 15 with a semicolon in place of its last comma (4 fields where the
+// schema has 5) and with a sixth field.
+std::string StudentsCsvWithRejectedLines() {
+  std::vector<std::string> lines =
+      SplitLines(testing::ReadFile(SampleDatabase() / "students.csv"));
+  if (lines.size() < 16) {
+    return "";
+  }
+  const std::string bad_id = "x" + lines[10];
+  std::string four_fields = lines[15];
+  four_fields[four_fields.rfind(',')] = ';';
+  const std::string six_fields = lines[15] + ",spare";
+  lines.insert(lines.begin() + 11, bad_id);
+  lines.insert(lines.begin() + 16, four_fields);
+  lines.insert(lines.begin() + 17, six_fields);
+  return JoinLines(lines);
+}
+
+// The bytes a table file has before a test touches it.
+std::string ExpectedContent(const std::string& name) {
+  if (name == "students.csv") {
+    return StudentsCsvWithRejectedLines();
+  }
+  return testing::ReadFile(SampleDatabase() / name);
+}
+
+// Whether the table files in work_dir/sample_my_db still have their original
+// bytes.
+bool DataFilesUnchanged(const std::filesystem::path& work_dir) {
+  for (const char* name : kTableFiles) {
+    if (ExpectedContent(name) !=
+        testing::ReadFile(work_dir / "sample_my_db" / name)) {
       return false;
     }
   }
   return true;
 }
 
-// Copies data/ to work_dir/data and checks that the copy matches byte for byte.
-// should_write_catalog adds the catalog.csv of the `data/` example, so that
-// `.open data` loads the three tables; without it the copy is a directory of
-// bare CSV files.
+// Copies sample_my_db/ to work_dir/sample_my_db, puts the students.csv with the
+// rejected lines in it, and checks the copy. should_keep_catalog false removes
+// catalog.csv, so that the copy is a directory of bare CSV files.
 bool PrepareWorkDir(const std::filesystem::path& work_dir,
-                    bool should_write_catalog = true) {
+                    bool should_keep_catalog = true) {
   std::error_code error;
-  std::filesystem::copy(SourceData(), work_dir / "data",
+  std::filesystem::copy(SampleDatabase(), work_dir / "sample_my_db",
                         std::filesystem::copy_options::recursive, error);
   if (error) {
     return false;
   }
-  for (const char* name : kDataFiles) {
-    if (testing::ReadFile(SourceData() / name) !=
-        testing::ReadFile(work_dir / "data" / name)) {
-      return false;
-    }
+  testing::WriteFile(work_dir / "sample_my_db" / "students.csv",
+                     StudentsCsvWithRejectedLines());
+  if (!should_keep_catalog) {
+    std::filesystem::remove(work_dir / "sample_my_db" / "catalog.csv", error);
   }
-  if (should_write_catalog) {
-    testing::WriteCatalogFixture(work_dir / "data");
-  }
-  return true;
-}
-
-// Whether the three data files in work_dir/data are still the bytes of data/.
-bool DataFilesUnchanged(const std::filesystem::path& work_dir) {
-  for (const char* name : kDataFiles) {
-    if (testing::ReadFile(SourceData() / name) !=
-        testing::ReadFile(work_dir / "data" / name)) {
-      return false;
-    }
-  }
-  return true;
+  return !error && DataFilesUnchanged(work_dir);
 }
 
 std::vector<std::string> SplitLines(const std::string& text) {
@@ -167,27 +191,21 @@ std::vector<std::string> Sorted(std::vector<std::string> lines) {
   return lines;
 }
 
-const char* const kCommentQuery =
-    "SELECT e.postId, e.comment FROM engagements e JOIN users u ON e.username "
-    "= u.username "
-    "WHERE u.id = 5805 AND e.type = 'comment' ORDER BY e.postId, e.comment;";
-const char* const kLocationQuery =
-    "SELECT e.type, COUNT(*) FROM engagements e JOIN users u ON e.username = "
-    "u.username "
-    "WHERE u.location = 'Patriciashire' GROUP BY e.type;";
-const char* const kLocationFilteredQuery =
-    "SELECT e.type, COUNT(*) FROM engagements e JOIN users u ON e.username = "
-    "u.username "
-    "WHERE u.location = 'Patriciashire' AND (e.type = 'like' OR e.type = "
-    "'comment') "
-    "GROUP BY e.type;";
+const char* const kFilteredJoinQuery =
+    "SELECT e.course_id, e.score FROM enrollments e JOIN students s ON "
+    "e.student_id = s.id "
+    "WHERE s.id = 1001 AND e.status = 'completed' ORDER BY e.course_id, "
+    "e.score;";
+const char* const kGroupedJoinQuery =
+    "SELECT e.status, COUNT(*) FROM enrollments e JOIN students s ON "
+    "e.student_id = s.id "
+    "WHERE s.major = 'ART' AND (e.status = 'completed' OR e.status = "
+    "'enrolled') "
+    "GROUP BY e.status;";
 
 }  // namespace
 
 TEST(test_cli_open_prints_loaded_counts) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
@@ -196,166 +214,136 @@ TEST(test_cli_open_prints_loaded_counts) {
 }
 
 TEST(test_cli_select_prints_header_and_rows) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output = RunAfterOpen(
-      work.path(), {"SELECT username, location FROM users WHERE id = 1;"});
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"username\tlocation", "knorman\tGrahamside"}));
+      work.path(), {"SELECT name, major FROM students WHERE id = 1001;"});
+  CHECK_EQ(output,
+           std::vector<std::string>({"name\tmajor", "Alice Johnson\tART"}));
 }
 
-TEST(test_cli_comment_query_prints_example_rows) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
-  testing::TempDir work;
-  CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output = RunAfterOpen(work.path(), {kCommentQuery});
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"postId\tcomment",
-                        "7689\tOf lawyer rest design game large prove."}));
-}
-
-TEST(test_cli_location_query_prints_example_groups) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
+TEST(test_cli_filtered_join_prints_example_rows) {
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
-      RunAfterOpen(work.path(), {kLocationFilteredQuery});
+      RunAfterOpen(work.path(), {kFilteredJoinQuery});
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"course_id\tscore", "4\t73", "9\t81", "12\t83"}));
+}
+
+TEST(test_cli_group_by_prints_example_groups) {
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+  std::vector<std::string> output =
+      RunAfterOpen(work.path(), {kGroupedJoinQuery});
   CHECK_EQ(output.size(), std::size_t{3});
   if (output.size() != 3) {
     return;
   }
-  CHECK_EQ(output[0], std::string("type\tCOUNT(*)"));
-  CHECK_EQ(Sorted({output[1], output[2]}), Sorted({"like\t3", "comment\t1"}));
+  CHECK_EQ(output[0], std::string("status\tCOUNT(*)"));
+  CHECK_EQ(Sorted({output[1], output[2]}),
+           Sorted({"completed\t14", "enrolled\t18"}));
 }
 
 TEST(test_cli_empty_text_group_prints_empty_field) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
-  testing::TempDir work;
-  CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output = RunAfterOpen(work.path(), {kLocationQuery});
-  CHECK_EQ(output.size(), std::size_t{4});
-  if (output.size() != 4) {
-    return;
-  }
-  CHECK_EQ(output[0], std::string("type\tCOUNT(*)"));
-  CHECK_EQ(Sorted({output[1], output[2], output[3]}),
-           Sorted({"like\t3", "comment\t1", "\t1"}));
-}
-
-TEST(test_cli_write_statements_print_affected_rows) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
-  testing::TempDir work;
-  CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output = RunAfterOpen(
-      work.path(), {"INSERT INTO engagements (id, postId, username, type, "
-                    "comment, timestamp) VALUES "
-                    "(99999999, 1, 'ptaylor', 'like', 'None', 123456);",
-                    "UPDATE posts SET views = views + 1 WHERE id = 1;",
-                    "DELETE FROM engagements WHERE id = 99999999;"});
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"OK affected=1", "OK affected=1", "OK affected=1"}));
-}
-
-TEST(test_cli_delete_referenced_user_prints_constraint_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
-  testing::TempDir work;
-  CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"DELETE FROM users WHERE id = 5805;"});
-  CHECK_EQ(output,
-           std::vector<std::string>(
-               {"error: constraint violation: users.id=5805 is referenced by "
-                "posts.username"}));
-}
-
-TEST(test_cli_three_table_join_prints_rows) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT u.username, COUNT(*) FROM users u JOIN posts p ON p.username = "
-       "u.username JOIN engagements e ON e.postId = p.id WHERE u.id = 5715 "
-       "GROUP BY u.username;"});
-  CHECK_EQ(output,
-           std::vector<std::string>({"username\tCOUNT(*)", "kbrown\t9"}));
+      {"INSERT INTO instructors (name, dept) VALUES ('Dr. Blank', '');",
+       "SELECT dept, COUNT(*) FROM instructors WHERE dept = '' OR dept = "
+       "'CS' GROUP BY dept;"});
+  CHECK_EQ(output.size(), std::size_t{4});
+  if (output.size() != 4) {
+    return;
+  }
+  CHECK_EQ(output[0], std::string("OK affected=1"));
+  CHECK_EQ(output[1], std::string("dept\tCOUNT(*)"));
+  CHECK_EQ(Sorted({output[2], output[3]}), Sorted({"CS\t1", "\t1"}));
 }
 
-TEST(test_cli_syntax_error_prints_column_and_description) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
+TEST(test_cli_write_statements_print_affected_rows) {
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"INSERT INTO enrollments (student_id, course_id, semester) VALUES "
+       "(1002, 1, '2026-Spring');",
+       "UPDATE courses SET capacity = capacity + 1 WHERE id = 1;",
+       "DELETE FROM enrollments WHERE id = 145;"});
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"OK affected=1", "OK affected=1", "OK affected=1"}));
+}
+
+TEST(test_cli_delete_referenced_student_prints_constraint_error) {
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"SELEC username FROM users;"});
+      RunAfterOpen(work.path(), {"DELETE FROM students WHERE id = 1001;"});
+  CHECK_EQ(output,
+           std::vector<std::string>(
+               {"error: constraint violation: students.id=1001 is referenced "
+                "by enrollments.student_id"}));
+}
+
+TEST(test_cli_three_table_join_prints_rows) {
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+  std::vector<std::string> output = RunAfterOpen(
+      work.path(),
+      {"SELECT s.name, COUNT(*) FROM students s JOIN enrollments e ON "
+       "e.student_id = s.id JOIN courses c ON e.course_id = c.id WHERE s.id = "
+       "1005 GROUP BY s.name;"});
+  CHECK_EQ(output,
+           std::vector<std::string>({"name\tCOUNT(*)", "Emma Brown\t6"}));
+}
+
+TEST(test_cli_syntax_error_prints_column_and_description) {
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path()));
+  std::vector<std::string> output =
+      RunAfterOpen(work.path(), {"SELEC name FROM students;"});
   CHECK_EQ(output, std::vector<std::string>(
                        {"syntax error at column 1: unrecognized statement"}));
 }
 
 TEST(test_cli_sql_before_open_prints_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
-      RunCli(work.path(), {"SELECT username FROM users WHERE id = 1;"});
+      RunCli(work.path(), {"SELECT name FROM students WHERE id = 1001;"});
   CHECK_EQ(output, std::vector<std::string>(
                        {"error: no database open; run .open first"}));
 }
 
 TEST(test_cli_failed_open_keeps_previous_connection) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
       RunCli(work.path(), {kOpenLine, ".open nosuch/db",
-                           "SELECT username FROM users WHERE id = 1;"});
+                           "SELECT name FROM students WHERE id = 1001;"});
   CHECK_EQ(output, std::vector<std::string>(
                        {kLoadedLine, kRejectedLine,
                         "error: could not open nosuch/db: no such directory",
-                        "username", "knorman"}));
+                        "name", "Alice Johnson"}));
 }
 
 TEST(test_cli_formats_double_empty_result_and_blank_line) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output = RunAfterOpen(
-      work.path(), {"SELECT id, id + 0.5, id + 1.0 FROM users WHERE id = 1;",
-                    "", "SELECT id FROM users WHERE id = 0;"});
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"id\tid + 0.5\tid + 1.0", "1\t1.5\t2.0", "id"}));
+      work.path(),
+      {"SELECT id, id + 0.5, id + 1.0 FROM students WHERE id = 1001;", "",
+       "SELECT id FROM students WHERE id = 0;"});
+  CHECK_EQ(output, std::vector<std::string>({"id\tid + 0.5\tid + 1.0",
+                                             "1001\t1001.5\t1002.0", "id"}));
 }
 
 TEST(test_cli_bind_error_prints_bind_kind) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"SELECT nosuch FROM users;"});
+      RunAfterOpen(work.path(), {"SELECT nosuch FROM students;"});
   CHECK_EQ(output.size(), std::size_t{1});
   if (output.empty()) {
     return;
@@ -364,9 +352,6 @@ TEST(test_cli_bind_error_prints_bind_kind) {
 }
 
 TEST(test_cli_write_failure_prints_io_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   if (::geteuid() == 0) {
     SKIP("running as root: directory permissions do not apply");
   }
@@ -374,74 +359,71 @@ TEST(test_cli_write_failure_prints_io_error) {
   CHECK(PrepareWorkDir(work.path()));
   std::error_code permission_error;
   std::filesystem::permissions(
-      work.path() / "data",
+      work.path() / "sample_my_db",
       std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec,
       std::filesystem::perm_options::replace, permission_error);
   CHECK(!permission_error);
   std::vector<std::string> output = RunAfterOpen(
-      work.path(), {"UPDATE posts SET views = views + 1 WHERE id = 1;"});
-  CHECK_EQ(output,
-           std::vector<std::string>({"error: io: could not write posts.csv"}));
-  CHECK(testing::ReadFile(work.path() / "data" / "posts.csv") ==
-        testing::ReadFile(SourceData() / "posts.csv"));
+      work.path(),
+      {"UPDATE courses SET capacity = capacity + 1 WHERE id = 1;"});
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"error: io: could not write courses.csv"}));
+  CHECK(testing::ReadFile(work.path() / "sample_my_db" / "courses.csv") ==
+        testing::ReadFile(SampleDatabase() / "courses.csv"));
 }
 
 TEST(test_cli_integer_overflow_prints_runtime_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT id + 9223372036854775807 FROM users WHERE id = 1;"});
+      {"SELECT id + 9223372036854775807 FROM students WHERE id = 1001;"});
   CHECK_EQ(output,
            std::vector<std::string>({"error: runtime: numeric overflow"}));
 }
 
 TEST(test_cli_open_with_wrong_arguments_prints_usage) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
-  std::vector<std::string> output = RunCli(work.path(), {".open"});
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"syntax error at column 1: usage: .open <directory> "
-                        "[--parallel]"}));
+  std::vector<std::string> output =
+      RunCli(work.path(), {".open", ".open --parallel", ".open --other"});
+  const std::string usage =
+      "syntax error at column 1: usage: .open <directory> [--parallel]";
+  CHECK_EQ(output, std::vector<std::string>({usage, usage, usage}));
 }
 
-TEST(test_cli_create_tables_adopts_data_csvs) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
+TEST(test_cli_create_tables_adopts_existing_csvs) {
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path(), false));
 
   std::vector<std::string> first = RunCli(
       work.path(),
-      {".open data",
-       "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location "
-       "TEXT);",
-       "CREATE TABLE posts (id INT PRIMARY KEY, content TEXT, username TEXT "
-       "REFERENCES users(username), views INT);",
-       "CREATE TABLE engagements (id INT PRIMARY KEY, postId INT REFERENCES "
-       "posts(id), username TEXT REFERENCES users(username), type TEXT, "
-       "comment TEXT, timestamp INT);",
-       "SELECT username, location FROM users WHERE id = 1;"});
-  std::vector<std::string> second = RunCli(
-      work.path(),
-      {".open data", "SELECT username, location FROM users WHERE id = 1;"});
+      {".open sample_my_db",
+       "CREATE TABLE instructors (id INT PRIMARY KEY AUTOINCREMENT, name TEXT, "
+       "dept TEXT);",
+       "CREATE TABLE students (id INT PRIMARY KEY, name TEXT, major TEXT, year "
+       "INT, email TEXT UNIQUE);",
+       "CREATE TABLE courses (id INT PRIMARY KEY AUTOINCREMENT, code TEXT "
+       "UNIQUE, title TEXT, credits INT, dept TEXT, capacity INT, "
+       "instructor_id INT REFERENCES instructors(id));",
+       "CREATE TABLE enrollments (id INT PRIMARY KEY AUTOINCREMENT, student_id "
+       "INT REFERENCES students(id), course_id INT REFERENCES courses(id), "
+       "semester TEXT, status TEXT DEFAULT 'enrolled', score INT DEFAULT 0);",
+       "SELECT name, major FROM students WHERE id = 1001;"});
+  std::vector<std::string> second =
+      RunCli(work.path(),
+             {kOpenLine, "SELECT name, major FROM students WHERE id = 1001;"});
 
   CHECK_EQ(first, std::vector<std::string>(
                       {"loaded no tables",
-                       "OK CREATE TABLE users (adopted 10000 rows)",
-                       "OK CREATE TABLE posts (adopted 10000 rows)",
-                       "OK CREATE TABLE engagements (adopted 10000 rows)",
-                       "username\tlocation", "knorman\tGrahamside"}));
-  CHECK_EQ(second, std::vector<std::string>({kLoadedLine, kRejectedLine,
-                                             "username\tlocation",
-                                             "knorman\tGrahamside"}));
+                       "OK CREATE TABLE instructors (adopted 6 rows)",
+                       "OK CREATE TABLE students (adopted 30 rows)",
+                       "OK CREATE TABLE courses (adopted 12 rows)",
+                       "OK CREATE TABLE enrollments (adopted 144 rows)",
+                       "name\tmajor", "Alice Johnson\tART"}));
+  CHECK_EQ(second,
+           std::vector<std::string>({kLoadedLine, kRejectedLine, "name\tmajor",
+                                     "Alice Johnson\tART"}));
   CHECK(DataFilesUnchanged(work.path()));
 }
 
@@ -466,41 +448,36 @@ TEST(test_cli_ddl_statements_print_command_complete) {
 }
 
 TEST(test_cli_ddl_errors_print_bind_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"CREATE TABLE users (id INT PRIMARY KEY);",
+      RunAfterOpen(work.path(), {"CREATE TABLE students (id INT PRIMARY KEY);",
                                  "CREATE TABLE catalog (id INT PRIMARY KEY);",
-                                 "DROP TABLE users;",
-                                 "ALTER TABLE users ADD COLUMN x INT;"});
+                                 "DROP TABLE students;",
+                                 "ALTER TABLE students ADD COLUMN x INT;"});
 
   CHECK_EQ(output.size(), std::size_t{4});
   if (output.size() != 4) {
     return;
   }
-  CHECK_EQ(output[0], std::string("error: bind: table users already exists"));
+  CHECK_EQ(output[0],
+           std::string("error: bind: table students already exists"));
   CHECK_EQ(output[1],
            std::string("error: bind: table name catalog is reserved"));
-  CHECK_EQ(output[2], std::string("error: bind: table users is referenced by "
-                                  "posts.username"));
+  CHECK_EQ(output[2], std::string("error: bind: table students is referenced "
+                                  "by enrollments.student_id"));
   CHECK(output[3].starts_with("error: bind:"));
 }
 
 TEST(test_cli_open_locked_directory_prints_error) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::vector<std::string> while_locked;
   {
     strata::infrastructure::LockOutcome held =
         strata::infrastructure::DirectoryLock::Acquire(
-            (work.path() / "data").string());
+            (work.path() / "sample_my_db").string());
     CHECK(held.lock != nullptr);
     while_locked = RunCli(work.path(), {kOpenLine});
   }
@@ -509,75 +486,56 @@ TEST(test_cli_open_locked_directory_prints_error) {
 
   CHECK_EQ(while_locked,
            std::vector<std::string>(
-               {"error: could not open data: database is locked by another "
-                "process"}));
+               {"error: could not open sample_my_db: database is locked by "
+                "another process"}));
   CHECK_EQ(after_release,
            std::vector<std::string>({kLoadedLine, kRejectedLine}));
 }
 
 TEST(test_cli_open_same_directory_twice_succeeds) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunCli(
       work.path(),
-      {kOpenLine, kOpenLine, "SELECT username FROM users WHERE id = 1;"});
+      {kOpenLine, kOpenLine, "SELECT name FROM students WHERE id = 1001;"});
 
   CHECK_EQ(output,
            std::vector<std::string>({kLoadedLine, kRejectedLine, kLoadedLine,
-                                     kRejectedLine, "username", "knorman"}));
+                                     kRejectedLine, "name", "Alice Johnson"}));
 }
 
 TEST(test_cli_text_with_comma_and_quote_round_trips) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> first = RunAfterOpen(
       work.path(),
-      {"INSERT INTO posts (id, content, username, views) VALUES (99999999, "
-       "'Hello, \"world\"', 'ptaylor', 1);",
-       "SELECT content FROM posts WHERE id = 99999999;"});
+      {"INSERT INTO instructors (name, dept) VALUES ('Dr. \"Q\", Jr.', "
+       "'CS');",
+       "SELECT name FROM instructors WHERE name LIKE 'Dr. \"Q\"%';"});
   std::vector<std::string> second = RunAfterOpen(
-      work.path(), {"SELECT content FROM posts WHERE id = 99999999;"});
+      work.path(), {"SELECT name FROM instructors WHERE name LIKE 'Dr. "
+                    "\"Q\"%';"});
 
   CHECK_EQ(first, std::vector<std::string>(
-                      {"OK affected=1", "content", "Hello, \"world\""}));
-  CHECK_EQ(second, std::vector<std::string>({"content", "Hello, \"world\""}));
+                      {"OK affected=1", "name", "Dr. \"Q\", Jr."}));
+  CHECK_EQ(second, std::vector<std::string>({"name", "Dr. \"Q\", Jr."}));
 }
 
 TEST(test_cli_multi_line_statement_prints_result) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT username,", "  location", "FROM users", "WHERE id = 1;"});
+      {"SELECT name,", "  major", "FROM students", "WHERE id = 1001;"});
 
-  CHECK_EQ(output, std::vector<std::string>(
-                       {"username\tlocation", "knorman\tGrahamside"}));
-}
-
-std::string JoinLines(const std::vector<std::string>& lines) {
-  std::string text;
-  for (const std::string& line : lines) {
-    text += line + "\n";
-  }
-  return text;
+  CHECK_EQ(output,
+           std::vector<std::string>({"name\tmajor", "Alice Johnson\tART"}));
 }
 
 TEST(test_cli_schema_output_can_be_replayed) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
   std::filesystem::create_directory(work.path() / "fresh");
@@ -591,15 +549,16 @@ TEST(test_cli_schema_output_can_be_replayed) {
   replay_input.push_back(".schema");
   std::vector<std::string> replay = RunCli(work.path(), replay_input);
 
-  const std::size_t table_count = 3;
+  const std::size_t table_count = 4;
   CHECK_EQ(replay.size(), 1 + table_count + original_schema.size());
   if (replay.size() != 1 + table_count + original_schema.size()) {
     return;
   }
   CHECK_EQ(replay[0], std::string("loaded no tables"));
-  CHECK_EQ(replay[1], std::string("OK CREATE TABLE users"));
-  CHECK_EQ(replay[2], std::string("OK CREATE TABLE posts"));
-  CHECK_EQ(replay[3], std::string("OK CREATE TABLE engagements"));
+  CHECK_EQ(replay[1], std::string("OK CREATE TABLE instructors"));
+  CHECK_EQ(replay[2], std::string("OK CREATE TABLE students"));
+  CHECK_EQ(replay[3], std::string("OK CREATE TABLE courses"));
+  CHECK_EQ(replay[4], std::string("OK CREATE TABLE enrollments"));
   CHECK_EQ(
       std::vector<std::string>(replay.begin() + 1 + table_count, replay.end()),
       original_schema);
@@ -607,107 +566,89 @@ TEST(test_cli_schema_output_can_be_replayed) {
 }
 
 TEST(test_cli_piped_input_prints_no_prompt) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output =
-      RunAfterOpen(work.path(), {"SELECT username FROM users WHERE id = 1;"});
+      RunAfterOpen(work.path(), {"SELECT name FROM students WHERE id = 1001;"});
   std::string raw = testing::ReadFile(work.path() / "output.txt");
 
-  CHECK_EQ(output, std::vector<std::string>({"username", "knorman"}));
+  CHECK_EQ(output, std::vector<std::string>({"name", "Alice Johnson"}));
   CHECK_EQ(raw, std::string(kLoadedLine) + "\n" + kRejectedLine +
-                    "\nusername\nknorman\n");
+                    "\nname\nAlice Johnson\n");
   CHECK(raw.find("strata>") == std::string::npos);
 }
 
 TEST(test_cli_quit_stops_reading_with_status_zero) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   // RunCli reports a failure when the exit status is not 0.
-  std::vector<std::string> output =
-      RunCli(work.path(),
-             {kOpenLine, ".quit", "SELECT username FROM users WHERE id = 1;"});
+  std::vector<std::string> output = RunCli(
+      work.path(),
+      {kOpenLine, ".quit", "SELECT name FROM students WHERE id = 1001;"});
 
   CHECK_EQ(output, std::vector<std::string>({kLoadedLine, kRejectedLine}));
 }
 
 TEST(test_cli_limit_offset_prints_window) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT id, username FROM users ORDER BY id LIMIT 3 OFFSET 1;"});
+      {"SELECT id, name FROM students ORDER BY id LIMIT 3 OFFSET 1;"});
 
-  CHECK_EQ(output, std::vector<std::string>({"id\tusername", "2\tthomas90",
-                                             "3\tjblair", "4\tjohn04"}));
+  CHECK_EQ(output,
+           std::vector<std::string>({"id\tname", "1002\tBob Smith",
+                                     "1003\tCarol Davis", "1004\tDavid Kim"}));
 }
 
 TEST(test_cli_aggregates_print_min_max_avg) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT COUNT(*), MIN(timestamp), MAX(timestamp), AVG(timestamp) FROM "
-       "engagements;"});
+      {"SELECT COUNT(*), MIN(capacity), MAX(capacity), AVG(capacity) FROM "
+       "courses;"});
 
-  CHECK_EQ(output,
-           std::vector<std::string>(
-               {"COUNT(*)\tMIN(timestamp)\tMAX(timestamp)\tAVG(timestamp)",
-                "10000\t1690823929\t1722355167\t1706505303.6826"}));
+  CHECK_EQ(output, std::vector<std::string>(
+                       {"COUNT(*)\tMIN(capacity)\tMAX(capacity)\tAVG(capacity)",
+                        "12\t4\t10\t6.916666666666667"}));
 }
 
 TEST(test_cli_like_and_functions_print_example_rows) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT id, UPPER(username), LENGTH(username) FROM users WHERE "
-       "username LIKE 'kn%' ORDER BY id LIMIT 2;"});
+      {"SELECT id, UPPER(name), LENGTH(name) FROM students WHERE name LIKE "
+       "'s%' ORDER BY id LIMIT 2;"});
 
-  CHECK_EQ(output,
-           std::vector<std::string>({"id\tUPPER(username)\tLENGTH(username)",
-                                     "1\tKNORMAN\t7", "66\tKNIGHTLAURA\t11"}));
+  CHECK_EQ(output, std::vector<std::string>({"id\tUPPER(name)\tLENGTH(name)",
+                                             "1019\tSAMUEL INGRAM\t13",
+                                             "1028\tSOPHIE RIVERA\t13"}));
 }
 
 TEST(test_cli_new_syntax_errors_print_messages) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path()));
 
   std::vector<std::string> output = RunAfterOpen(
       work.path(),
-      {"SELECT 1 / 0 FROM users WHERE id = 1;",
-       "SELECT AVG(id) FROM users WHERE id = 0;",
-       "SELECT CAST(username AS INT) FROM users WHERE id = 1;",
-       "SELECT id FROM users LIMIT -1;", "SELECT FOO(1) FROM users;"});
+      {"SELECT 1 / 0 FROM students WHERE id = 1001;",
+       "SELECT AVG(id) FROM students WHERE id = 0;",
+       "SELECT CAST(name AS INT) FROM students WHERE id = 1001;",
+       "SELECT id FROM students LIMIT -1;", "SELECT FOO(1) FROM students;"});
 
   CHECK_EQ(output,
            std::vector<std::string>(
                {"error: runtime: division by zero",
                 "error: runtime: AVG over no rows",
-                "error: runtime: cannot cast 'knorman' to INT",
-                "syntax error at column 28: LIMIT requires a non-negative "
+                "error: runtime: cannot cast 'Alice Johnson' to INT",
+                "syntax error at column 31: LIMIT requires a non-negative "
                 "integer literal",
                 "syntax error at column 8: unknown function FOO"}));
 }
@@ -868,51 +809,46 @@ TEST(test_cli_bad_arguments_print_usage_and_exit_with_status_two) {
   CHECK(!std::filesystem::exists(work.path() / "a"));
 }
 
-TEST(test_cli_import_loads_posts_and_engagements) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
-  testing::TempDir work;
-  CHECK(PrepareWorkDir(work.path(), false));
-
-  std::vector<std::string> output =
-      RunCli(work.path(),
-             {".open fresh", ".import data/posts.csv",
-              ".import data/engagements.csv", "SELECT COUNT(*) FROM posts;",
-              "SELECT COUNT(*) FROM engagements;", ".schema posts"});
-
-  CHECK_EQ(
-      output,
-      std::vector<std::string>(
-          {"created new database fresh",
-           "OK IMPORT posts (imported 10000 rows)",
-           "OK IMPORT engagements (imported 10000 rows)", "COUNT(*)", "10000",
-           "COUNT(*)", "10000", "CREATE TABLE posts (", "  id INT PRIMARY KEY,",
-           "  content TEXT,", "  username TEXT,", "  views INT", ");"}));
-  CHECK(DataFilesUnchanged(work.path()));
-}
-
-TEST(test_cli_import_users_needs_type_and_skip_options) {
-  if (!HasSourceData()) {
-    SKIP("data/ is not present");
-  }
+TEST(test_cli_import_loads_courses_and_enrollments) {
   testing::TempDir work;
   CHECK(PrepareWorkDir(work.path(), false));
 
   std::vector<std::string> output = RunCli(
       work.path(),
-      {".open fresh", ".import data/users.csv",
-       ".import data/users.csv users --pk id --type id=INT --skip-bad-rows",
-       "SELECT COUNT(*) FROM users;",
-       "SELECT username FROM users WHERE id = 1;"});
+      {".open fresh", ".import sample_my_db/courses.csv",
+       ".import sample_my_db/enrollments.csv", "SELECT COUNT(*) FROM courses;",
+       "SELECT COUNT(*) FROM enrollments;", ".schema courses"});
+
+  CHECK_EQ(
+      output,
+      std::vector<std::string>(
+          {"created new database fresh", "OK IMPORT courses (imported 12 rows)",
+           "OK IMPORT enrollments (imported 144 rows)", "COUNT(*)", "12",
+           "COUNT(*)", "144", "CREATE TABLE courses (", "  id INT PRIMARY KEY,",
+           "  code TEXT,", "  title TEXT,", "  credits INT,", "  dept TEXT,",
+           "  capacity INT,", "  instructor_id INT", ");"}));
+  CHECK(DataFilesUnchanged(work.path()));
+}
+
+TEST(test_cli_import_students_needs_type_and_skip_options) {
+  testing::TempDir work;
+  CHECK(PrepareWorkDir(work.path(), false));
+
+  std::vector<std::string> output = RunCli(
+      work.path(),
+      {".open fresh", ".import sample_my_db/students.csv",
+       ".import sample_my_db/students.csv students --pk id --type id=INT "
+       "--skip-bad-rows",
+       "SELECT COUNT(*) FROM students;",
+       "SELECT name FROM students WHERE id = 1001;"});
 
   CHECK_EQ(output, std::vector<std::string>(
                        {"created new database fresh",
-                        "error: bind: line 17: expected 3 fields, found 2",
-                        "OK IMPORT users (imported 10000 rows, skipped 3)",
-                        "skipped line 12: id '1s0' is not INT",
-                        "skipped line 17: expected 3 fields, found 2",
-                        "skipped line 18: expected 3 fields, found 4",
-                        "COUNT(*)", "10000", "username", "knorman"}));
+                        "error: bind: line 17: expected 5 fields, found 4",
+                        "OK IMPORT students (imported 30 rows, skipped 3)",
+                        "skipped line 12: id 'x1010' is not INT",
+                        "skipped line 17: expected 5 fields, found 4",
+                        "skipped line 18: expected 5 fields, found 6",
+                        "COUNT(*)", "30", "name", "Alice Johnson"}));
   CHECK(DataFilesUnchanged(work.path()));
 }

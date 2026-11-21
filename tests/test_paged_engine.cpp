@@ -265,80 +265,82 @@ void ExpectNoPins(PagedEngine& engine) {
 }
 
 // ----------------------------------------------------------------------------
-// The data set: the users, posts and engagements of the `data/` example, with
-// padded text so that every table spans several pages.
+// The data set: the three tables of the catalog fixture (visitors, stories and
+// reactions), with padded text so that every table spans several pages.
 // ----------------------------------------------------------------------------
 
-constexpr const char* kCreateUsers =
-    "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location "
+constexpr const char* kCreateVisitors =
+    "CREATE TABLE visitors (id INT PRIMARY KEY, username TEXT UNIQUE, location "
     "TEXT)";
-constexpr const char* kCreatePosts =
-    "CREATE TABLE posts (id INT PRIMARY KEY, content TEXT, username TEXT "
-    "REFERENCES users(username), views INT)";
-constexpr const char* kCreateEngagements =
-    "CREATE TABLE engagements (id INT PRIMARY KEY, postId INT REFERENCES "
-    "posts(id), username TEXT REFERENCES users(username), type TEXT, comment "
+constexpr const char* kCreateStories =
+    "CREATE TABLE stories (id INT PRIMARY KEY, content TEXT, username TEXT "
+    "REFERENCES visitors(username), views INT)";
+constexpr const char* kCreateReactions =
+    "CREATE TABLE reactions (id INT PRIMARY KEY, storyId INT REFERENCES "
+    "stories(id), username TEXT REFERENCES visitors(username), type TEXT, "
+    "comment "
     "TEXT)";
 
-const char* const kEngagementTypes[] = {"like", "comment", "share"};
+const char* const kReactionTypes[] = {"like", "comment", "share"};
 
 struct Dataset {
-  std::int64_t user_count;
-  std::int64_t post_count;
-  std::int64_t engagement_count;
-  std::size_t padding;  // bytes of posts.content and engagements.comment
+  std::int64_t visitor_count;
+  std::int64_t story_count;
+  std::int64_t reaction_count;
+  std::size_t padding;  // bytes of stories.content and reactions.comment
 
-  static std::string UserName(std::int64_t user_id) {
-    return "u" + std::to_string(user_id);
+  static std::string UserName(std::int64_t visitor_id) {
+    return "u" + std::to_string(visitor_id);
   }
-  std::int64_t AuthorOf(std::int64_t post_id) const {
-    return post_id % user_count + 1;
+  std::int64_t AuthorOf(std::int64_t story_id) const {
+    return story_id % visitor_count + 1;
   }
-  std::int64_t PostOf(std::int64_t engagement_id) const {
-    return engagement_id % post_count + 1;
+  std::int64_t StoryOf(std::int64_t reaction_id) const {
+    return reaction_id % story_count + 1;
   }
-  std::int64_t ReactorOf(std::int64_t engagement_id) const {
-    return (engagement_id * 7) % user_count + 1;
+  std::int64_t ReactorOf(std::int64_t reaction_id) const {
+    return (reaction_id * 7) % visitor_count + 1;
   }
-  static std::int64_t ViewsOf(std::int64_t post_id) { return post_id % 10; }
-  static std::string TypeOf(std::int64_t engagement_id) {
-    return kEngagementTypes[engagement_id % 3];
+  static std::int64_t ViewsOf(std::int64_t story_id) { return story_id % 10; }
+  static std::string TypeOf(std::int64_t reaction_id) {
+    return kReactionTypes[reaction_id % 3];
   }
 
-  Row User(std::int64_t user_id) const {
-    return Row{Value(user_id), Value(UserName(user_id)),
-               Value("city-" + std::to_string(user_id % 7))};
+  Row Visitor(std::int64_t visitor_id) const {
+    return Row{Value(visitor_id), Value(UserName(visitor_id)),
+               Value("city-" + std::to_string(visitor_id % 7))};
   }
-  Row Post(std::int64_t post_id) const {
-    return Row{Value(post_id),
-               Value("post-" + std::to_string(post_id) + "-" +
+  Row Story(std::int64_t story_id) const {
+    return Row{Value(story_id),
+               Value("story-" + std::to_string(story_id) + "-" +
                      std::string(padding, 'c')),
-               Value(UserName(AuthorOf(post_id))), Value(ViewsOf(post_id))};
+               Value(UserName(AuthorOf(story_id))), Value(ViewsOf(story_id))};
   }
-  Row Engagement(std::int64_t engagement_id) const {
-    return Row{Value(engagement_id), Value(PostOf(engagement_id)),
-               Value(UserName(ReactorOf(engagement_id))),
-               Value(TypeOf(engagement_id)), Value(std::string(padding, 'm'))};
+  Row Reaction(std::int64_t reaction_id) const {
+    return Row{Value(reaction_id), Value(StoryOf(reaction_id)),
+               Value(UserName(ReactorOf(reaction_id))),
+               Value(TypeOf(reaction_id)), Value(std::string(padding, 'm'))};
   }
 
-  std::vector<Row> Users() const {
+  std::vector<Row> Visitors() const {
     std::vector<Row> rows;
-    for (std::int64_t user_id = 1; user_id <= user_count; ++user_id) {
-      rows.push_back(User(user_id));
+    for (std::int64_t visitor_id = 1; visitor_id <= visitor_count;
+         ++visitor_id) {
+      rows.push_back(Visitor(visitor_id));
     }
     return rows;
   }
-  std::vector<Row> Posts() const {
+  std::vector<Row> Stories() const {
     std::vector<Row> rows;
-    for (std::int64_t post_id = 1; post_id <= post_count; ++post_id) {
-      rows.push_back(Post(post_id));
+    for (std::int64_t story_id = 1; story_id <= story_count; ++story_id) {
+      rows.push_back(Story(story_id));
     }
     return rows;
   }
-  std::vector<Row> Engagements() const {
+  std::vector<Row> Reactions() const {
     std::vector<Row> rows;
-    for (std::int64_t id = 1; id <= engagement_count; ++id) {
-      rows.push_back(Engagement(id));
+    for (std::int64_t id = 1; id <= reaction_count; ++id) {
+      rows.push_back(Reaction(id));
     }
     return rows;
   }
@@ -346,23 +348,23 @@ struct Dataset {
 
 // Creates the three tables and fills them.
 void LoadDataset(PagedEngine& engine, const Dataset& dataset) {
-  for (const char* sql : {kCreateUsers, kCreatePosts, kCreateEngagements}) {
+  for (const char* sql : {kCreateVisitors, kCreateStories, kCreateReactions}) {
     ExecutionResult created = Run(engine, sql);
     CHECK(AsCommandComplete(created) != nullptr);
   }
-  ExpectAffected(RunInsert(engine, "users", dataset.Users()),
-                 static_cast<std::size_t>(dataset.user_count));
-  ExpectAffected(RunInsert(engine, "posts", dataset.Posts()),
-                 static_cast<std::size_t>(dataset.post_count));
-  ExpectAffected(RunInsert(engine, "engagements", dataset.Engagements()),
-                 static_cast<std::size_t>(dataset.engagement_count));
+  ExpectAffected(RunInsert(engine, "visitors", dataset.Visitors()),
+                 static_cast<std::size_t>(dataset.visitor_count));
+  ExpectAffected(RunInsert(engine, "stories", dataset.Stories()),
+                 static_cast<std::size_t>(dataset.story_count));
+  ExpectAffected(RunInsert(engine, "reactions", dataset.Reactions()),
+                 static_cast<std::size_t>(dataset.reaction_count));
 }
 
 // The multiset of rows of the three tables, as sorted lines prefixed with the
 // table name. Equal snapshots mean equal contents whatever the Rids are.
 std::vector<std::string> SnapshotOf(PagedEngine& engine) {
   std::vector<std::string> snapshot;
-  for (const char* table : {"users", "posts", "engagements"}) {
+  for (const char* table : {"visitors", "stories", "reactions"}) {
     const std::vector<std::string> lines =
         SortedQueryText(engine, std::string("SELECT * FROM ") + table);
     for (const std::string& line : lines) {
@@ -387,7 +389,7 @@ std::string MappingLabel(const MappingCase& test_case) {
 void CheckMappingCase(const MappingCase& test_case) {
   const paged::PageError error{test_case.code, "m"};
   const ExecutionError mapped =
-      paged::ToExecutionError(error, ErrorContext{test_case.site, "Users"});
+      paged::ToExecutionError(error, ErrorContext{test_case.site, "Visitors"});
   CHECK_EQ(
       MappingLabel(test_case) + " kind " + domain::ErrorKindName(mapped.kind),
       MappingLabel(test_case) + " kind " +
@@ -400,7 +402,7 @@ void CheckMappingCase(const MappingCase& test_case) {
 
 TEST(test_heap_access_error_mapping) {
   const std::string too_long =
-      "paged engine cannot store a row longer than 4060 bytes in Users";
+      "paged engine cannot store a row longer than 4060 bytes in Visitors";
   const ErrorSite open = ErrorSite::kOpenTable;
   const ErrorSite create = ErrorSite::kCreateTable;
   const ErrorSite add_column = ErrorSite::kAddColumn;
@@ -419,7 +421,7 @@ TEST(test_heap_access_error_mapping) {
       {PageErrorCode::kClosed, access, ErrorKind::kIo, "database is closed"},
       {PageErrorCode::kClosed, open, ErrorKind::kIo, "database is closed"},
       {PageErrorCode::kNotFound, open, ErrorKind::kBind,
-       "unknown table: Users"},
+       "unknown table: Visitors"},
       {PageErrorCode::kNotFound, access, ErrorKind::kIo, "internal error: m"},
       {PageErrorCode::kNotFound, create, ErrorKind::kIo, "internal error: m"},
       {PageErrorCode::kTooLarge, access, ErrorKind::kUnsupported, too_long},
@@ -430,13 +432,13 @@ TEST(test_heap_access_error_mapping) {
       {PageErrorCode::kInvalidArgument, open, ErrorKind::kIo,
        "internal error: m"},
       {PageErrorCode::kAlreadyExists, create, ErrorKind::kBind,
-       "table Users already exists"},
+       "table Visitors already exists"},
       {PageErrorCode::kAlreadyExists, access, ErrorKind::kIo,
        "internal error: m"},
       {PageErrorCode::kInvalidArgument, add_column, ErrorKind::kUnsupported,
        "m"},
       {PageErrorCode::kNotFound, add_column, ErrorKind::kBind,
-       "unknown table: Users"},
+       "unknown table: Visitors"},
       {PageErrorCode::kAlreadyExists, add_column, ErrorKind::kIo,
        "internal error: m"},
   };
@@ -449,17 +451,17 @@ namespace {
 
 std::vector<Row> ExpectedJoinRows(const Dataset& dataset) {
   std::vector<Row> rows;
-  for (std::int64_t id = 1; id <= dataset.engagement_count; ++id) {
-    const std::int64_t post_id = dataset.PostOf(id);
-    rows.push_back(Row{Value(Dataset::UserName(dataset.AuthorOf(post_id))),
-                       Value(post_id), Value(id)});
+  for (std::int64_t id = 1; id <= dataset.reaction_count; ++id) {
+    const std::int64_t story_id = dataset.StoryOf(id);
+    rows.push_back(Row{Value(Dataset::UserName(dataset.AuthorOf(story_id))),
+                       Value(story_id), Value(id)});
   }
   return rows;
 }
 
 std::vector<Row> ExpectedTypeCounts(const Dataset& dataset) {
   std::map<std::string, std::int64_t> counts;
-  for (std::int64_t id = 1; id <= dataset.engagement_count; ++id) {
+  for (std::int64_t id = 1; id <= dataset.reaction_count; ++id) {
     ++counts[Dataset::TypeOf(id)];
   }
   std::vector<Row> rows;
@@ -478,9 +480,9 @@ bool ViewsDescendingThenId(const std::pair<std::int64_t, std::int64_t>& left,
   return left.second < right.second;
 }
 
-std::vector<std::string> ExpectedPostsByViews(const Dataset& dataset) {
+std::vector<std::string> ExpectedStoriesByViews(const Dataset& dataset) {
   std::vector<std::pair<std::int64_t, std::int64_t>> views_and_ids;
-  for (std::int64_t id = 1; id <= dataset.post_count; ++id) {
+  for (std::int64_t id = 1; id <= dataset.story_count; ++id) {
     views_and_ids.emplace_back(Dataset::ViewsOf(id), id);
   }
   std::ranges::sort(views_and_ids, ViewsDescendingThenId);
@@ -508,11 +510,11 @@ TEST(test_paged_engine_queries_with_minimum_pool_leave_no_pins) {
   const auto* counts = std::get_if<std::vector<paged::RowCount>>(&counted);
   CHECK(counts != nullptr);
   if (counts != nullptr && counts->size() == 3) {
-    CHECK_EQ((*counts)[0].name, std::string("users"));
+    CHECK_EQ((*counts)[0].name, std::string("visitors"));
     CHECK_EQ((*counts)[0].count, std::size_t{60});
-    CHECK_EQ((*counts)[1].name, std::string("posts"));
+    CHECK_EQ((*counts)[1].name, std::string("stories"));
     CHECK_EQ((*counts)[1].count, std::size_t{240});
-    CHECK_EQ((*counts)[2].name, std::string("engagements"));
+    CHECK_EQ((*counts)[2].name, std::string("reactions"));
     CHECK_EQ((*counts)[2].count, std::size_t{360});
   } else {
     CHECK_EQ(counts == nullptr ? std::size_t{0} : counts->size(),
@@ -522,41 +524,42 @@ TEST(test_paged_engine_queries_with_minimum_pool_leave_no_pins) {
 
   // A scan returns the rows in the order TableHeap::Scan walks the chain, and
   // the rows are the ones that were loaded.
-  const std::vector<Row> scanned = RowsOf(Run(engine, "SELECT * FROM posts"));
-  CHECK(scanned == HeapRows(engine, "posts"));
-  CHECK_EQ(SortedTextOf(scanned), SortedTextOf(dataset.Posts()));
+  const std::vector<Row> scanned = RowsOf(Run(engine, "SELECT * FROM stories"));
+  CHECK(scanned == HeapRows(engine, "stories"));
+  CHECK_EQ(SortedTextOf(scanned), SortedTextOf(dataset.Stories()));
   ExpectNoPins(engine);
 
   const std::string join_sql =
-      "SELECT u.username, p.id, e.id FROM users u JOIN posts p ON u.username "
-      "= p.username JOIN engagements e ON e.postId = p.id";
+      "SELECT v.username, s.id, r.id FROM visitors v JOIN stories s ON "
+      "v.username "
+      "= s.username JOIN reactions r ON r.storyId = s.id";
   CHECK_EQ(SortedQueryText(engine, join_sql),
            SortedTextOf(ExpectedJoinRows(dataset)));
   ExpectNoPins(engine);
 
   CHECK_EQ(SortedQueryText(
-               engine, "SELECT type, COUNT(*) FROM engagements GROUP BY type"),
+               engine, "SELECT type, COUNT(*) FROM reactions GROUP BY type"),
            SortedTextOf(ExpectedTypeCounts(dataset)));
   std::int64_t total_views = 0;
-  for (std::int64_t id = 1; id <= dataset.post_count; ++id) {
+  for (std::int64_t id = 1; id <= dataset.story_count; ++id) {
     total_views += Dataset::ViewsOf(id);
   }
-  CHECK_EQ(QueryText(engine, "SELECT COUNT(*), SUM(views) FROM posts"),
-           TextOf({Row{Value(dataset.post_count), Value(total_views)}}));
+  CHECK_EQ(QueryText(engine, "SELECT COUNT(*), SUM(views) FROM stories"),
+           TextOf({Row{Value(dataset.story_count), Value(total_views)}}));
   ExpectNoPins(engine);
 
-  CHECK_EQ(
-      QueryText(engine, "SELECT id, views FROM posts ORDER BY views DESC, id"),
-      ExpectedPostsByViews(dataset));
+  CHECK_EQ(QueryText(engine,
+                     "SELECT id, views FROM stories ORDER BY views DESC, id"),
+           ExpectedStoriesByViews(dataset));
   ExpectNoPins(engine);
 
   // LIMIT stops pulling: the five rows are the first five of the chain.
   std::vector<std::string> first_ids;
-  const std::vector<Row> chain = HeapRows(engine, "posts");
+  const std::vector<Row> chain = HeapRows(engine, "stories");
   for (std::size_t i = 0; i < 5; ++i) {
     first_ids.push_back(domain::FormatValue(chain[i][0]));
   }
-  CHECK_EQ(QueryText(engine, "SELECT id FROM posts LIMIT 5"), first_ids);
+  CHECK_EQ(QueryText(engine, "SELECT id FROM stories LIMIT 5"), first_ids);
   ExpectNoPins(engine);
 
   // A table the engine does not have, and an evaluation error in the middle
@@ -566,7 +569,7 @@ TEST(test_paged_engine_queries_with_minimum_pool_leave_no_pins) {
   ExpectErrorMessage(engine.Execute(ghost), ErrorKind::kBind,
                      "unknown table: ghost");
   ExpectNoPins(engine);
-  ExpectErrorMessage(Run(engine, "SELECT 1 / (views - views) FROM posts"),
+  ExpectErrorMessage(Run(engine, "SELECT 1 / (views - views) FROM stories"),
                      ErrorKind::kRuntime, "division by zero");
   ExpectNoPins(engine);
 }
@@ -706,58 +709,61 @@ TEST(test_paged_engine_update_relocates_rows_and_cascades) {
   }
   {
     // A cascade through two child tables, in pages that are nearly full: the
-    // renamed user name is longer than the old one.
+    // renamed visitor name is longer than the old one.
     const Dataset dataset{6, 90, 90, 60};
     StoreEngine fixture = NewEngine(kMinimumFrames);
     PagedEngine& engine = *fixture.engine;
     LoadDataset(engine, dataset);
-    const std::vector<std::string> before_ids_users = IdsOf(engine, "users");
-    const std::vector<std::string> before_ids_posts = IdsOf(engine, "posts");
-    const std::vector<std::string> before_ids_engagements =
-        IdsOf(engine, "engagements");
-    const std::int64_t posts_of_u1 =
-        CountWhere(engine, "SELECT COUNT(*) FROM posts WHERE username = 'u1'");
-    const std::int64_t engagements_of_u1 = CountWhere(
-        engine, "SELECT COUNT(*) FROM engagements WHERE username = 'u1'");
-    CHECK(posts_of_u1 > 0);
-    CHECK(engagements_of_u1 > 0);
+    const std::vector<std::string> before_ids_visitors =
+        IdsOf(engine, "visitors");
+    const std::vector<std::string> before_ids_stories =
+        IdsOf(engine, "stories");
+    const std::vector<std::string> before_ids_reactions =
+        IdsOf(engine, "reactions");
+    const std::int64_t stories_of_u1 = CountWhere(
+        engine, "SELECT COUNT(*) FROM stories WHERE username = 'u1'");
+    const std::int64_t reactions_of_u1 = CountWhere(
+        engine, "SELECT COUNT(*) FROM reactions WHERE username = 'u1'");
+    CHECK(stories_of_u1 > 0);
+    CHECK(reactions_of_u1 > 0);
 
     ExpectAffected(
         Run(engine,
-            "UPDATE users SET username = 'a_much_longer_name' WHERE id = 1"),
+            "UPDATE visitors SET username = 'a_much_longer_name' WHERE id = 1"),
         1);
 
     // Rows are neither lost nor duplicated, and every reference follows the
     // renamed key.
-    CHECK_EQ(IdsOf(engine, "users"), before_ids_users);
-    CHECK_EQ(IdsOf(engine, "posts"), before_ids_posts);
-    CHECK_EQ(IdsOf(engine, "engagements"), before_ids_engagements);
+    CHECK_EQ(IdsOf(engine, "visitors"), before_ids_visitors);
+    CHECK_EQ(IdsOf(engine, "stories"), before_ids_stories);
+    CHECK_EQ(IdsOf(engine, "reactions"), before_ids_reactions);
     const std::string renamed = "'a_much_longer_name'";
-    CHECK_EQ(CountWhere(engine, "SELECT COUNT(*) FROM posts WHERE username = " +
-                                    renamed),
-             posts_of_u1);
+    CHECK_EQ(
+        CountWhere(engine,
+                   "SELECT COUNT(*) FROM stories WHERE username = " + renamed),
+        stories_of_u1);
     CHECK_EQ(CountWhere(engine,
-                        "SELECT COUNT(*) FROM engagements WHERE "
+                        "SELECT COUNT(*) FROM reactions WHERE "
                         "username = " +
                             renamed),
-             engagements_of_u1);
-    CHECK_EQ(
-        CountWhere(engine, "SELECT COUNT(*) FROM posts WHERE username = 'u1'"),
-        std::int64_t{0});
+             reactions_of_u1);
     CHECK_EQ(CountWhere(engine,
-                        "SELECT COUNT(*) FROM engagements WHERE "
+                        "SELECT COUNT(*) FROM stories WHERE username = 'u1'"),
+             std::int64_t{0});
+    CHECK_EQ(CountWhere(engine,
+                        "SELECT COUNT(*) FROM reactions WHERE "
                         "username = 'u1'"),
              std::int64_t{0});
     CHECK_EQ(CountWhere(engine,
-                        "SELECT COUNT(*) FROM posts p JOIN users u ON "
-                        "p.username = u.username"),
-             dataset.post_count);
+                        "SELECT COUNT(*) FROM stories s JOIN visitors v ON "
+                        "s.username = v.username"),
+             dataset.story_count);
     CHECK_EQ(CountWhere(engine,
-                        "SELECT COUNT(*) FROM engagements e JOIN users u ON "
-                        "e.username = u.username"),
-             dataset.engagement_count);
-    CHECK_EQ(QueryText(engine, "SELECT content FROM posts WHERE id = 6"),
-             TextOf({Row{dataset.Post(6)[1]}}));
+                        "SELECT COUNT(*) FROM reactions r JOIN visitors v ON "
+                        "r.username = v.username"),
+             dataset.reaction_count);
+    CHECK_EQ(QueryText(engine, "SELECT content FROM stories WHERE id = 6"),
+             TextOf({Row{dataset.Story(6)[1]}}));
     ExpectNoPins(engine);
   }
 }
@@ -790,30 +796,31 @@ TEST(test_paged_engine_rejected_statement_changes_no_page) {
   StoreEngine fixture = NewEngine(8);
   LoadDataset(*fixture.engine, dataset);
 
-  ExpectRejectedWithoutPageChange(fixture,
-                                  "INSERT INTO users VALUES (1, 'other', 'x')",
-                                  ErrorKind::kConstraintViolation);
   ExpectRejectedWithoutPageChange(
-      fixture, "INSERT INTO posts VALUES (1000, 'c', 'nobody', 1)",
+      fixture, "INSERT INTO visitors VALUES (1, 'other', 'x')",
       ErrorKind::kConstraintViolation);
-  ExpectRejectedWithoutPageChange(fixture, "DELETE FROM users WHERE id = 1",
+  ExpectRejectedWithoutPageChange(
+      fixture, "INSERT INTO stories VALUES (1000, 'c', 'nobody', 1)",
+      ErrorKind::kConstraintViolation);
+  ExpectRejectedWithoutPageChange(fixture, "DELETE FROM visitors WHERE id = 1",
                                   ErrorKind::kConstraintViolation);
   ExpectRejectedWithoutPageChange(
-      fixture, "UPDATE posts SET views = 1 / (views - views)",
+      fixture, "UPDATE stories SET views = 1 / (views - views)",
       ErrorKind::kRuntime);
-  ExpectRejectedWithoutPageChange(fixture,
-                                  "INSERT INTO users VALUES (500, 'long', '" +
-                                      std::string(4100, 'x') + "')",
-                                  ErrorKind::kUnsupported);
+  ExpectRejectedWithoutPageChange(
+      fixture,
+      "INSERT INTO visitors VALUES (500, 'long', '" + std::string(4100, 'x') +
+          "')",
+      ErrorKind::kUnsupported);
 
   // The messages are those of design document 2.5.
   PagedEngine& engine = *fixture.engine;
-  ExpectErrorMessage(Run(engine, "INSERT INTO users VALUES (1, 'other', 'x')"),
+  ExpectErrorMessage(
+      Run(engine, "INSERT INTO visitors VALUES (1, 'other', 'x')"),
+      ErrorKind::kConstraintViolation, "duplicate key: visitors.id=1");
+  ExpectErrorMessage(Run(engine, "DELETE FROM visitors WHERE id = 1"),
                      ErrorKind::kConstraintViolation,
-                     "duplicate key: users.id=1");
-  ExpectErrorMessage(Run(engine, "DELETE FROM users WHERE id = 1"),
-                     ErrorKind::kConstraintViolation,
-                     "users.id=1 is referenced by posts.username");
+                     "visitors.id=1 is referenced by stories.username");
 }
 
 namespace {
@@ -879,22 +886,22 @@ StoreEngine LoadedTemplate(const Dataset& dataset) {
   return loaded;
 }
 
-std::string EngagementInsert(std::int64_t first_id, std::int64_t count,
-                             std::int64_t post_count, std::size_t padding) {
-  std::string sql = "INSERT INTO engagements VALUES ";
+std::string ReactionInsert(std::int64_t first_id, std::int64_t count,
+                           std::int64_t story_count, std::size_t padding) {
+  std::string sql = "INSERT INTO reactions VALUES ";
   for (std::int64_t i = 0; i < count; ++i) {
     if (i > 0) {
       sql += ", ";
     }
     sql += "(" + std::to_string(first_id + i) + ", " +
-           std::to_string(1 + i % post_count) + ", 'u3', 'like', '" +
+           std::to_string(1 + i % story_count) + ", 'u3', 'like', '" +
            std::string(padding, 'm') + "')";
   }
   return sql;
 }
 
 constexpr const char* kCascadeUpdate =
-    "UPDATE users SET username = 'renamed_user' WHERE id = 1";
+    "UPDATE visitors SET username = 'renamed_user' WHERE id = 1";
 constexpr int kMaxFaultPositions = 400;
 
 struct FailureCounts {
@@ -1158,14 +1165,14 @@ TEST(test_paged_engine_apply_failure_rolls_back_at_every_write_position) {
   FailureCounts insert_counts;
   CheckEveryWritePosition(
       *loaded.store,
-      EngagementInsert(1000, 300, dataset.post_count, dataset.padding),
+      ReactionInsert(1000, 300, dataset.story_count, dataset.padding),
       &insert_counts);
   CHECK(insert_counts.apply_failures > 0);
   CHECK(insert_counts.write_back_failures > 0);
 
   FailureCounts delete_counts;
   CheckEveryWritePosition(
-      *loaded.store, "DELETE FROM engagements WHERE id <= 150", &delete_counts);
+      *loaded.store, "DELETE FROM reactions WHERE id <= 150", &delete_counts);
   CHECK(delete_counts.apply_failures > 0);
   CHECK(delete_counts.write_back_failures > 0);
 

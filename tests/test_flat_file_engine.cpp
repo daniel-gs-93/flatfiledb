@@ -25,15 +25,15 @@ using domain::ErrorKind;
 using domain::ExecutionError;
 using domain::ExecutionResult;
 
-constexpr const char* kAllUsers =
-    "SELECT id, username, location FROM users ORDER BY id";
-constexpr const char* kAllPosts =
-    "SELECT id, content, username, views FROM posts ORDER BY id";
-constexpr const char* kAllEngagements =
-    "SELECT id, postId, username, type, comment, timestamp FROM engagements "
+constexpr const char* kAllVisitors =
+    "SELECT id, username, location FROM visitors ORDER BY id";
+constexpr const char* kAllStories =
+    "SELECT id, content, username, views FROM stories ORDER BY id";
+constexpr const char* kAllReactions =
+    "SELECT id, storyId, username, type, comment, timestamp FROM reactions "
     "ORDER BY id";
-constexpr const char* kInsertEngagement =
-    "INSERT INTO engagements (id, postId, username, type, comment, timestamp) "
+constexpr const char* kInsertReaction =
+    "INSERT INTO reactions (id, storyId, username, type, comment, timestamp) "
     "VALUES ";
 
 const char* KindName(ErrorKind kind) { return domain::ErrorKindName(kind); }
@@ -135,15 +135,16 @@ std::string Join(const std::vector<std::string>& lines) {
 // Every row of the three tables in id order, joined into one string.
 std::string SnapshotTables(QueryService& service) {
   std::string snapshot;
-  for (const char* sql : {kAllUsers, kAllPosts, kAllEngagements}) {
+  for (const char* sql : {kAllVisitors, kAllStories, kAllReactions}) {
     snapshot += Join(QueryLines(service, sql)) + "--\n";
   }
   return snapshot;
 }
 
 std::string ReadAllCsv(const std::filesystem::path& dir) {
-  return ReadFile(dir / "users.csv") + "=\n" + ReadFile(dir / "posts.csv") +
-         "=\n" + ReadFile(dir / "engagements.csv");
+  return ReadFile(dir / "visitors.csv") + "=\n" +
+         ReadFile(dir / "stories.csv") + "=\n" +
+         ReadFile(dir / "reactions.csv");
 }
 
 std::string CountRows(QueryService& service, const std::string& table) {
@@ -178,8 +179,8 @@ domain::PlanNode InsertPlan(const std::string& table, domain::Row row) {
   return plan;
 }
 
-domain::Row PostRow(int64_t id, const std::string& content,
-                    const std::string& username, int64_t views) {
+domain::Row StoryRow(int64_t id, const std::string& content,
+                     const std::string& username, int64_t views) {
   return domain::Row{domain::Value(id), domain::Value(content),
                      domain::Value(username), domain::Value(views)};
 }
@@ -190,11 +191,11 @@ void ExpectLoadCounts(const infrastructure::LoadResult& loaded) {
   if (loaded.tables.size() != 3) {
     return;
   }
-  CHECK_EQ(loaded.tables[0].name, std::string("users"));
+  CHECK_EQ(loaded.tables[0].name, std::string("visitors"));
   CHECK_EQ(loaded.tables[0].row_count, std::size_t{4});
-  CHECK_EQ(loaded.tables[1].name, std::string("posts"));
+  CHECK_EQ(loaded.tables[1].name, std::string("stories"));
   CHECK_EQ(loaded.tables[1].row_count, std::size_t{3});
-  CHECK_EQ(loaded.tables[2].name, std::string("engagements"));
+  CHECK_EQ(loaded.tables[2].name, std::string("reactions"));
   CHECK_EQ(loaded.tables[2].row_count, std::size_t{5});
 }
 
@@ -210,35 +211,34 @@ TEST(test_engine_catalog_registers_three_tables_with_keys) {
   infrastructure::LoadResult loaded = engine.Load(false);
   const domain::ICatalog& catalog = engine.Catalog();
   std::vector<std::string> names = catalog.TableNames();
-  std::optional<domain::TableSchema> users = catalog.FindTable("users");
-  std::optional<domain::TableSchema> posts = catalog.FindTable("posts");
-  std::optional<domain::TableSchema> engagements =
-      catalog.FindTable("engagements");
+  std::optional<domain::TableSchema> visitors = catalog.FindTable("visitors");
+  std::optional<domain::TableSchema> stories = catalog.FindTable("stories");
+  std::optional<domain::TableSchema> reactions = catalog.FindTable("reactions");
 
   // Assert
   CHECK(loaded.is_success);
-  CHECK_EQ(Join(names), std::string("users\nposts\nengagements\n"));
-  CHECK(users.has_value() && posts.has_value() && engagements.has_value());
-  if (!users || !posts || !engagements) {
+  CHECK_EQ(Join(names), std::string("visitors\nstories\nreactions\n"));
+  CHECK(visitors.has_value() && stories.has_value() && reactions.has_value());
+  if (!visitors || !stories || !reactions) {
     return;
   }
-  CHECK_EQ(users->primary_key_index, std::size_t{0});
-  CHECK_EQ(posts->primary_key_index, std::size_t{0});
-  CHECK_EQ(engagements->primary_key_index, std::size_t{0});
-  CHECK_EQ(users->foreign_keys.size(), std::size_t{0});
-  CHECK_EQ(users->unique_indexes, std::vector<std::size_t>({1}));
-  CHECK(!users->auto_increment_index.has_value());
-  CHECK(!posts->auto_increment_index.has_value());
-  CHECK_EQ(posts->foreign_keys.size(), std::size_t{1});
-  CHECK_EQ(engagements->foreign_keys.size(), std::size_t{2});
-  if (posts->foreign_keys.size() != 1 ||
-      engagements->foreign_keys.size() != 2) {
+  CHECK_EQ(visitors->primary_key_index, std::size_t{0});
+  CHECK_EQ(stories->primary_key_index, std::size_t{0});
+  CHECK_EQ(reactions->primary_key_index, std::size_t{0});
+  CHECK_EQ(visitors->foreign_keys.size(), std::size_t{0});
+  CHECK_EQ(visitors->unique_indexes, std::vector<std::size_t>({1}));
+  CHECK(!visitors->auto_increment_index.has_value());
+  CHECK(!stories->auto_increment_index.has_value());
+  CHECK_EQ(stories->foreign_keys.size(), std::size_t{1});
+  CHECK_EQ(reactions->foreign_keys.size(), std::size_t{2});
+  if (stories->foreign_keys.size() != 1 ||
+      reactions->foreign_keys.size() != 2) {
     return;
   }
-  ExpectForeignKey(posts->foreign_keys[0], 2, "users", 1);
-  ExpectForeignKey(engagements->foreign_keys[0], 1, "posts", 0);
-  ExpectForeignKey(engagements->foreign_keys[1], 2, "users", 1);
-  CHECK(catalog.FindTable("USERS").has_value());
+  ExpectForeignKey(stories->foreign_keys[0], 2, "visitors", 1);
+  ExpectForeignKey(reactions->foreign_keys[0], 1, "stories", 0);
+  ExpectForeignKey(reactions->foreign_keys[1], 2, "visitors", 1);
+  CHECK(catalog.FindTable("VISITORS").has_value());
 }
 
 TEST(test_engine_select_with_where_returns_row) {
@@ -251,8 +251,8 @@ TEST(test_engine_select_with_where_returns_row) {
   }
 
   // Act
-  ExecutionResult result =
-      ExecuteSql(*service, "SELECT username, location FROM users WHERE id = 1");
+  ExecutionResult result = ExecuteSql(
+      *service, "SELECT username, location FROM visitors WHERE id = 1");
 
   // Assert
   const domain::ResultSet* result_set = AsResultSet(result);
@@ -276,9 +276,9 @@ TEST(test_engine_two_table_join_with_order_by) {
   // Act
   ExecutionResult result =
       ExecuteSql(*service,
-                 "SELECT e.postId, e.comment FROM engagements e JOIN users u "
-                 "ON e.username = u.username "
-                 "WHERE u.location = 'Paris' ORDER BY e.postId, e.comment");
+                 "SELECT r.storyId, r.comment FROM reactions r JOIN visitors v "
+                 "ON r.username = v.username "
+                 "WHERE v.location = 'Paris' ORDER BY r.storyId, r.comment");
 
   // Assert
   const domain::ResultSet* result_set = AsResultSet(result);
@@ -286,7 +286,7 @@ TEST(test_engine_two_table_join_with_order_by) {
   if (result_set == nullptr) {
     return;
   }
-  CHECK_EQ(Join(ColumnNames(result)), std::string("postId\ncomment\n"));
+  CHECK_EQ(Join(ColumnNames(result)), std::string("storyId\ncomment\n"));
   CHECK_EQ(Join(RowsAsText(*result_set)),
            std::string("10\tnice\n12\tNone\n12\tNone\n"));
 }
@@ -303,9 +303,9 @@ TEST(test_engine_group_by_count_over_join) {
   // Act
   ExecutionResult result =
       ExecuteSql(*service,
-                 "SELECT e.type, COUNT(*) FROM engagements e JOIN users u ON "
-                 "e.username = u.username "
-                 "WHERE u.location = 'Paris' GROUP BY e.type ORDER BY e.type");
+                 "SELECT r.type, COUNT(*) FROM reactions r JOIN visitors v ON "
+                 "r.username = v.username "
+                 "WHERE v.location = 'Paris' GROUP BY r.type ORDER BY r.type");
 
   // Assert
   const domain::ResultSet* result_set = AsResultSet(result);
@@ -329,9 +329,9 @@ TEST(test_engine_three_table_join_returns_joined_rows) {
   // Act
   std::vector<std::string> rows = QueryLines(
       *service,
-      "SELECT u.username, p.id, e.type FROM users u JOIN posts p ON "
-      "p.username = u.username JOIN engagements e ON e.postId = p.id WHERE "
-      "u.id = 1 ORDER BY p.id, e.type DESC");
+      "SELECT v.username, s.id, r.type FROM visitors v JOIN stories s ON "
+      "s.username = v.username JOIN reactions r ON r.storyId = s.id WHERE "
+      "v.id = 1 ORDER BY s.id, r.type DESC");
 
   // Assert
   CHECK_EQ(
@@ -350,10 +350,10 @@ TEST(test_engine_join_condition_kinds_return_correct_rows) {
 
   // Act
   std::vector<std::string> inequality_rows = QueryLines(
-      *service, "SELECT u.id FROM users u JOIN posts p ON u.id < p.views");
+      *service, "SELECT v.id FROM visitors v JOIN stories s ON v.id < s.views");
   std::vector<std::string> equality_rows = QueryLines(
       *service,
-      "SELECT u.id FROM users u JOIN posts p ON u.username = p.username");
+      "SELECT v.id FROM visitors v JOIN stories s ON v.username = s.username");
 
   // Assert
   CHECK_EQ(inequality_rows.size(), std::size_t{8});
@@ -373,16 +373,16 @@ TEST(
   // Act
   std::vector<std::string> key_first =
       QueryLines(*service,
-                 "SELECT p.id, e.id FROM posts p JOIN engagements e "
-                 "ON e.postId = p.id AND e.type = 'like' ORDER BY p.id, e.id");
+                 "SELECT s.id, r.id FROM stories s JOIN reactions r "
+                 "ON r.storyId = s.id AND r.type = 'like' ORDER BY s.id, r.id");
   std::vector<std::string> key_second =
       QueryLines(*service,
-                 "SELECT p.id, e.id FROM posts p JOIN engagements e "
-                 "ON e.type = 'like' AND e.postId = p.id ORDER BY p.id, e.id");
+                 "SELECT s.id, r.id FROM stories s JOIN reactions r "
+                 "ON r.type = 'like' AND r.storyId = s.id ORDER BY s.id, r.id");
   std::vector<std::string> cross_table =
       QueryLines(*service,
-                 "SELECT p.id, u.username FROM posts p JOIN users u "
-                 "ON p.username = u.username AND u.id < p.views ORDER BY p.id");
+                 "SELECT s.id, v.username FROM stories s JOIN visitors v "
+                 "ON s.username = v.username AND v.id < s.views ORDER BY s.id");
 
   // Assert: left rows in order, matches in right-row order, residual applied.
   CHECK_EQ(Join(key_first), std::string("10\t100\n12\t103\n12\t104\n"));
@@ -402,13 +402,13 @@ TEST(test_engine_join_with_cross_table_or_filter_returns_correct_rows) {
   // Act
   std::vector<std::string> equality_join = QueryLines(
       *service,
-      "SELECT u.id, p.id FROM users u JOIN posts p "
-      "ON u.username = p.username "
-      "WHERE u.location = 'Rome' OR p.views = 0 ORDER BY u.id, p.id");
+      "SELECT v.id, s.id FROM visitors v JOIN stories s "
+      "ON v.username = s.username "
+      "WHERE v.location = 'Rome' OR s.views = 0 ORDER BY v.id, s.id");
   std::vector<std::string> inequality_join = QueryLines(
       *service,
-      "SELECT u.id, p.id FROM users u JOIN posts p ON u.id < p.views "
-      "WHERE u.location = 'Rome' OR p.id = 12 ORDER BY u.id, p.id");
+      "SELECT v.id, s.id FROM visitors v JOIN stories s ON v.id < s.views "
+      "WHERE v.location = 'Rome' OR s.id = 12 ORDER BY v.id, s.id");
 
   // Assert
   CHECK_EQ(Join(equality_join), std::string("1\t11\n3\t12\n"));
@@ -426,8 +426,8 @@ TEST(test_engine_order_by_is_stable_and_respects_direction) {
   }
 
   // Act
-  std::vector<std::string> rows = QueryLines(
-      *service, "SELECT id, type FROM engagements ORDER BY type DESC");
+  std::vector<std::string> rows =
+      QueryLines(*service, "SELECT id, type FROM reactions ORDER BY type DESC");
 
   // Assert
   CHECK_EQ(
@@ -437,16 +437,16 @@ TEST(test_engine_order_by_is_stable_and_respects_direction) {
 }
 
 TEST(test_engine_order_by_is_stable_for_many_rows) {
-  // Arrange: 60 engagements in id order whose type alternates between two
+  // Arrange: 60 reactions in id order whose type alternates between two
   // values, so each sort key is shared by 30 rows.
   TempDir dir;
   WriteFixtureA(dir.path());
-  std::string engagements = "id,postid,username,type,comment,timestamp\n";
+  std::string reactions = "id,storyid,username,type,comment,timestamp\n";
   for (int id = 200; id < kEndId; ++id) {
-    engagements += std::to_string(id) + ",10,alice," +
-                   (id % 2 == 0 ? "even" : "odd") + ",None,1\n";
+    reactions += std::to_string(id) + ",10,alice," +
+                 (id % 2 == 0 ? "even" : "odd") + ",None,1\n";
   }
-  WriteFile(dir.path() / "engagements.csv", engagements);
+  WriteFile(dir.path() / "reactions.csv", reactions);
   auto service = MakeLoadedService(dir.path());
   if (!service) {
     return;
@@ -454,9 +454,9 @@ TEST(test_engine_order_by_is_stable_for_many_rows) {
 
   // Act
   std::vector<std::string> ascending =
-      QueryLines(*service, "SELECT id, type FROM engagements ORDER BY type");
-  std::vector<std::string> descending = QueryLines(
-      *service, "SELECT id, type FROM engagements ORDER BY type DESC");
+      QueryLines(*service, "SELECT id, type FROM reactions ORDER BY type");
+  std::vector<std::string> descending =
+      QueryLines(*service, "SELECT id, type FROM reactions ORDER BY type DESC");
 
   // Assert: ids stay in table order inside each key group.
   CHECK_EQ(Join(ascending), IdsWithType(200, "even") + IdsWithType(201, "odd"));
@@ -475,10 +475,10 @@ TEST(test_engine_aggregate_over_empty_input) {
 
   // Act
   std::vector<std::string> ungrouped = QueryLines(
-      *service, "SELECT COUNT(*), SUM(views) FROM posts WHERE id = 0");
+      *service, "SELECT COUNT(*), SUM(views) FROM stories WHERE id = 0");
   std::vector<std::string> grouped = QueryLines(
       *service,
-      "SELECT type, COUNT(*) FROM engagements WHERE id = 0 GROUP BY type");
+      "SELECT type, COUNT(*) FROM reactions WHERE id = 0 GROUP BY type");
 
   // Assert
   CHECK_EQ(Join(ungrouped), std::string("0\t0\n"));
@@ -496,7 +496,7 @@ TEST(test_engine_integer_overflow_returns_runtime_error) {
 
   // Act
   ExecutionResult result = ExecuteSql(
-      *service, "SELECT id + 9223372036854775807 FROM users WHERE id = 1");
+      *service, "SELECT id + 9223372036854775807 FROM visitors WHERE id = 1");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kRuntime, "numeric overflow");
@@ -513,7 +513,7 @@ TEST(test_engine_identifiers_case_insensitive_end_to_end) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "SELECT postid FROM engagements WHERE POSTID = 10");
+      ExecuteSql(*service, "SELECT storyid FROM reactions WHERE STORYID = 10");
 
   // Assert
   const domain::ResultSet* result_set = AsResultSet(result);
@@ -521,7 +521,7 @@ TEST(test_engine_identifiers_case_insensitive_end_to_end) {
   if (result_set == nullptr) {
     return;
   }
-  CHECK_EQ(Join(ColumnNames(result)), std::string("postId\n"));
+  CHECK_EQ(Join(ColumnNames(result)), std::string("storyId\n"));
   CHECK_EQ(Join(RowsAsText(*result_set)), std::string("10\n10\n"));
 }
 
@@ -536,7 +536,7 @@ TEST(test_engine_insert_valid_row_is_persisted) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, std::string(kInsertEngagement) +
+      ExecuteSql(*service, std::string(kInsertReaction) +
                                "(105, 12, 'dave', '', 'None', 1005)");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
@@ -545,18 +545,18 @@ TEST(test_engine_insert_valid_row_is_persisted) {
 
   // Assert
   ExpectAffected(result, 1);
-  CHECK_EQ(CountRows(*reloaded, "engagements"), std::string("6"));
+  CHECK_EQ(CountRows(*reloaded, "reactions"), std::string("6"));
   CHECK_EQ(
       Join(QueryLines(*reloaded,
-                      "SELECT id, postId, username, type, comment, timestamp "
-                      "FROM engagements WHERE id = 105")),
+                      "SELECT id, storyId, username, type, comment, timestamp "
+                      "FROM reactions WHERE id = 105")),
       std::string("105\t12\tdave\t\tNone\t1005\n"));
   CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id FROM engagements WHERE type = ''")),
+      Join(QueryLines(*reloaded, "SELECT id FROM reactions WHERE type = ''")),
       std::string("105\n"));
 }
 
-TEST(test_engine_insert_unknown_post_violates_constraint) {
+TEST(test_engine_insert_unknown_story_violates_constraint) {
   // Arrange
   TempDir dir;
   WriteFixtureA(dir.path());
@@ -569,13 +569,13 @@ TEST(test_engine_insert_unknown_post_violates_constraint) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, std::string(kInsertEngagement) +
+      ExecuteSql(*service, std::string(kInsertReaction) +
                                "(105, 999, 'nobody', 'like', 'x', 1005)");
 
   // Assert
   ExpectErrorMessage(
       result, ErrorKind::kConstraintViolation,
-      "no matching row: engagements.postId=999 not found in posts.id");
+      "no matching row: reactions.storyId=999 not found in stories.id");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
   CHECK_EQ(SnapshotTables(*service), memory_before);
 }
@@ -591,14 +591,14 @@ TEST(test_engine_insert_duplicate_primary_key_violates_constraint) {
   std::string files_before = ReadAllCsv(dir.path());
 
   // Act
-  ExecutionResult result =
-      ExecuteSql(*service,
-                 "INSERT INTO posts (id, content, username, views) VALUES (10, "
-                 "'dup', 'alice', 1)");
+  ExecutionResult result = ExecuteSql(
+      *service,
+      "INSERT INTO stories (id, content, username, views) VALUES (10, "
+      "'dup', 'alice', 1)");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kConstraintViolation,
-                     "duplicate key: posts.id=10");
+                     "duplicate key: stories.id=10");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -613,13 +613,13 @@ TEST(test_engine_insert_duplicate_referenced_value_violates_constraint) {
   std::string files_before = ReadAllCsv(dir.path());
 
   // Act
-  ExecutionResult result = ExecuteSql(
-      *service,
-      "INSERT INTO users (id, username, location) VALUES (9, 'bob', 'Rome')");
+  ExecutionResult result = ExecuteSql(*service,
+                                      "INSERT INTO visitors (id, username, "
+                                      "location) VALUES (9, 'bob', 'Rome')");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kConstraintViolation,
-                     "duplicate key: users.username=bob");
+                     "duplicate key: visitors.username=bob");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -635,9 +635,9 @@ TEST(test_engine_insert_text_with_line_break_returns_unsupported) {
   }
   std::string files_before = ReadAllCsv(dir.path());
   domain::PlanNode carriage_return_plan =
-      InsertPlan("posts", PostRow(14, "a\rb", "alice", 1));
+      InsertPlan("stories", StoryRow(14, "a\rb", "alice", 1));
   domain::PlanNode line_feed_plan =
-      InsertPlan("posts", PostRow(15, "a\nb", "alice", 1));
+      InsertPlan("stories", StoryRow(15, "a\nb", "alice", 1));
 
   // Act
   ExecutionResult carriage_return_result = engine.Execute(carriage_return_plan);
@@ -646,10 +646,10 @@ TEST(test_engine_insert_text_with_line_break_returns_unsupported) {
   // Assert
   ExpectErrorMessage(
       carriage_return_result, ErrorKind::kUnsupported,
-      "flatfile engine cannot store a line break in posts.content");
+      "flatfile engine cannot store a line break in stories.content");
   ExpectErrorMessage(
       line_feed_result, ErrorKind::kUnsupported,
-      "flatfile engine cannot store a line break in posts.content");
+      "flatfile engine cannot store a line break in stories.content");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -695,14 +695,14 @@ TEST(test_engine_int_values_beyond_32_bits_are_persisted) {
   }
 
   // Act
-  ExecutionResult above_32_bits =
-      ExecuteSql(*service,
-                 "INSERT INTO posts (id, content, username, views) VALUES (20, "
-                 "'p', 'alice', 2147483648)");
-  ExecutionResult largest =
-      ExecuteSql(*service,
-                 "INSERT INTO posts (id, content, username, views) VALUES (21, "
-                 "'q', 'alice', 9223372036854775807)");
+  ExecutionResult above_32_bits = ExecuteSql(
+      *service,
+      "INSERT INTO stories (id, content, username, views) VALUES (20, "
+      "'p', 'alice', 2147483648)");
+  ExecutionResult largest = ExecuteSql(
+      *service,
+      "INSERT INTO stories (id, content, username, views) VALUES (21, "
+      "'q', 'alice', 9223372036854775807)");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -711,10 +711,10 @@ TEST(test_engine_int_values_beyond_32_bits_are_persisted) {
   // Assert
   ExpectAffected(above_32_bits, 1);
   ExpectAffected(largest, 1);
-  CHECK_EQ(
-      Join(QueryLines(
-          *reloaded, "SELECT id, views FROM posts WHERE id >= 20 ORDER BY id")),
-      std::string("20\t2147483648\n21\t9223372036854775807\n"));
+  CHECK_EQ(Join(QueryLines(
+               *reloaded,
+               "SELECT id, views FROM stories WHERE id >= 20 ORDER BY id")),
+           std::string("20\t2147483648\n21\t9223372036854775807\n"));
 }
 
 TEST(test_engine_insert_checks_run_in_documented_order) {
@@ -726,28 +726,28 @@ TEST(test_engine_insert_checks_run_in_documented_order) {
     ReportFailure(__FILE__, __LINE__, "engine failed to load Fixture A");
     return;
   }
-  domain::PlanNode line_break_and_missing_post =
-      InsertPlan("engagements", domain::Row{domain::Value(int64_t{105}),
-                                            domain::Value(int64_t{999}),
-                                            domain::Value(std::string("dave")),
-                                            domain::Value(std::string("like")),
-                                            domain::Value(std::string("a\nb")),
-                                            domain::Value(int64_t{1005})});
-  domain::PlanPtr duplicate_and_missing_post = MustBind(
-      std::string(kInsertEngagement) + "(100, 999, 'dave', 'like', 'x', 1005)",
+  domain::PlanNode line_break_and_missing_story =
+      InsertPlan("reactions", domain::Row{domain::Value(int64_t{105}),
+                                          domain::Value(int64_t{999}),
+                                          domain::Value(std::string("dave")),
+                                          domain::Value(std::string("like")),
+                                          domain::Value(std::string("a\nb")),
+                                          domain::Value(int64_t{1005})});
+  domain::PlanPtr duplicate_and_missing_story = MustBind(
+      std::string(kInsertReaction) + "(100, 999, 'dave', 'like', 'x', 1005)",
       engine.Catalog());
-  if (!duplicate_and_missing_post) {
+  if (!duplicate_and_missing_story) {
     return;
   }
 
   // Act
-  ExecutionResult first = engine.Execute(line_break_and_missing_post);
-  ExecutionResult second = engine.Execute(*duplicate_and_missing_post);
+  ExecutionResult first = engine.Execute(line_break_and_missing_story);
+  ExecutionResult second = engine.Execute(*duplicate_and_missing_story);
 
   // Assert
   ExpectError(first, ErrorKind::kUnsupported);
   ExpectErrorMessage(second, ErrorKind::kConstraintViolation,
-                     "duplicate key: engagements.id=100");
+                     "duplicate key: reactions.id=100");
 }
 
 TEST(test_engine_commit_failure_keeps_all_state) {
@@ -759,20 +759,20 @@ TEST(test_engine_commit_failure_keeps_all_state) {
   if (!service) {
     return;
   }
-  log->write_failure = "could not write users.csv (injected)";
+  log->write_failure = "could not write visitors.csv (injected)";
   std::string memory_before = SnapshotTables(*service);
 
   // Act
-  ExecutionResult update_result =
-      ExecuteSql(*service, "UPDATE users SET username = 'alicia' WHERE id = 1");
+  ExecutionResult update_result = ExecuteSql(
+      *service, "UPDATE visitors SET username = 'alicia' WHERE id = 1");
   ExecutionResult delete_result =
-      ExecuteSql(*service, "DELETE FROM users WHERE id = 4");
+      ExecuteSql(*service, "DELETE FROM visitors WHERE id = 4");
 
   // Assert
   ExpectErrorMessage(update_result, ErrorKind::kIo,
-                     "could not write users.csv (injected)");
+                     "could not write visitors.csv (injected)");
   ExpectErrorMessage(delete_result, ErrorKind::kIo,
-                     "could not write users.csv (injected)");
+                     "could not write visitors.csv (injected)");
   CHECK_EQ(log->write_calls, 2);
   CHECK_EQ(SnapshotTables(*service), memory_before);
 }
@@ -786,18 +786,18 @@ TEST(test_engine_insert_append_failure_keeps_memory) {
   if (!service) {
     return;
   }
-  log->append_failure = "could not append to engagements.csv (injected)";
+  log->append_failure = "could not append to reactions.csv (injected)";
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, std::string(kInsertEngagement) +
+      ExecuteSql(*service, std::string(kInsertReaction) +
                                "(105, 12, 'dave', 'like', 'None', 1005)");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kIo,
-                     "could not append to engagements.csv (injected)");
+                     "could not append to reactions.csv (injected)");
   CHECK_EQ(log->append_calls, 1);
-  CHECK_EQ(CountRows(*service, "engagements"), std::string("5"));
+  CHECK_EQ(CountRows(*service, "reactions"), std::string("5"));
 }
 
 TEST(test_engine_update_plain_column_is_persisted) {
@@ -811,8 +811,8 @@ TEST(test_engine_update_plain_column_is_persisted) {
   }
 
   // Act
-  ExecutionResult result =
-      ExecuteSql(*service, "UPDATE posts SET views = views + 1 WHERE id = 10");
+  ExecutionResult result = ExecuteSql(
+      *service, "UPDATE stories SET views = views + 1 WHERE id = 10");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -820,13 +820,14 @@ TEST(test_engine_update_plain_column_is_persisted) {
 
   // Assert
   ExpectAffected(result, 1);
-  CHECK_EQ(Join(QueryLines(*reloaded, "SELECT views FROM posts WHERE id = 10")),
-           std::string("6\n"));
+  CHECK_EQ(
+      Join(QueryLines(*reloaded, "SELECT views FROM stories WHERE id = 10")),
+      std::string("6\n"));
   CHECK_EQ(log->write_calls, 1);
   if (log->written_table_names.size() != 1) {
     return;
   }
-  CHECK_EQ(Join(log->written_table_names[0]), std::string("posts\n"));
+  CHECK_EQ(Join(log->written_table_names[0]), std::string("stories\n"));
 }
 
 TEST(test_engine_update_equal_value_keeps_stored_cell) {
@@ -866,8 +867,8 @@ TEST(test_engine_update_referenced_column_cascades) {
   }
 
   // Act
-  ExecutionResult result =
-      ExecuteSql(*service, "UPDATE users SET username = 'alicia' WHERE id = 1");
+  ExecutionResult result = ExecuteSql(
+      *service, "UPDATE visitors SET username = 'alicia' WHERE id = 1");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -876,21 +877,21 @@ TEST(test_engine_update_referenced_column_cascades) {
   // Assert
   ExpectAffected(result, 1);
   CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT username FROM users WHERE id = 1")),
+      Join(QueryLines(*reloaded, "SELECT username FROM visitors WHERE id = 1")),
       std::string("alicia\n"));
-  CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id, username FROM posts ORDER BY id")),
-      std::string("10\talicia\n11\talicia\n12\tbob\n"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username FROM stories ORDER BY id")),
+           std::string("10\talicia\n11\talicia\n12\tbob\n"));
   CHECK_EQ(
       Join(QueryLines(*reloaded,
-                      "SELECT id, username FROM engagements ORDER BY id")),
+                      "SELECT id, username FROM reactions ORDER BY id")),
       std::string("100\tbob\n101\tcarol\n102\tbob\n103\talicia\n104\tcarol\n"));
   CHECK_EQ(log->write_calls, 1);
   if (log->written_table_names.size() != 1) {
     return;
   }
   CHECK_EQ(Join(log->written_table_names[0]),
-           std::string("users\nposts\nengagements\n"));
+           std::string("visitors\nstories\nreactions\n"));
 }
 
 TEST(test_engine_update_cascade_applies_old_to_new_map_once) {
@@ -904,7 +905,7 @@ TEST(test_engine_update_cascade_applies_old_to_new_map_once) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "UPDATE users SET username = location");
+      ExecuteSql(*service, "UPDATE visitors SET username = location");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -912,12 +913,12 @@ TEST(test_engine_update_cascade_applies_old_to_new_map_once) {
 
   // Assert
   ExpectAffected(result, 2);
-  CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id, username FROM users ORDER BY id")),
-      std::string("1\tb\n2\tc\n"));
-  CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id, username FROM posts ORDER BY id")),
-      std::string("10\tb\n11\tc\n"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username FROM visitors ORDER BY id")),
+           std::string("1\tb\n2\tc\n"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username FROM stories ORDER BY id")),
+           std::string("10\tb\n11\tc\n"));
 }
 
 TEST(test_engine_update_uniqueness_is_checked_on_final_state) {
@@ -938,9 +939,9 @@ TEST(test_engine_update_uniqueness_is_checked_on_final_state) {
 
   // Act
   ExecutionResult swap_result =
-      ExecuteSql(*swap_service, "UPDATE users SET username = location");
+      ExecuteSql(*swap_service, "UPDATE visitors SET username = location");
   ExecutionResult collision_result = ExecuteSql(
-      *collision_service, "UPDATE users SET username = 'bob' WHERE id = 1");
+      *collision_service, "UPDATE visitors SET username = 'bob' WHERE id = 1");
   auto reloaded = MakeLoadedService(swap_dir.path());
   if (!reloaded) {
     return;
@@ -948,14 +949,14 @@ TEST(test_engine_update_uniqueness_is_checked_on_final_state) {
 
   // Assert
   ExpectAffected(swap_result, 2);
-  CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id, username FROM users ORDER BY id")),
-      std::string("1\tb\n2\ta\n"));
-  CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT id, username FROM posts ORDER BY id")),
-      std::string("10\tb\n11\ta\n"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username FROM visitors ORDER BY id")),
+           std::string("1\tb\n2\ta\n"));
+  CHECK_EQ(Join(QueryLines(*reloaded,
+                           "SELECT id, username FROM stories ORDER BY id")),
+           std::string("10\tb\n11\ta\n"));
   ExpectErrorMessage(collision_result, ErrorKind::kConstraintViolation,
-                     "duplicate key: users.username=bob");
+                     "duplicate key: visitors.username=bob");
   CHECK_EQ(ReadAllCsv(collision_dir.path()), files_before);
 }
 
@@ -971,12 +972,12 @@ TEST(test_engine_update_foreign_key_to_missing_value_violates_constraint) {
 
   // Act
   ExecutionResult result = ExecuteSql(
-      *service, "UPDATE posts SET username = 'nobody' WHERE id = 10");
+      *service, "UPDATE stories SET username = 'nobody' WHERE id = 10");
 
   // Assert
-  ExpectErrorMessage(
-      result, ErrorKind::kConstraintViolation,
-      "no matching row: posts.username=nobody not found in users.username");
+  ExpectErrorMessage(result, ErrorKind::kConstraintViolation,
+                     "no matching row: stories.username=nobody not found in "
+                     "visitors.username");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -997,17 +998,18 @@ TEST(test_engine_update_assignments_use_old_row_and_skip_unchanged) {
   }
 
   // Act
-  ExecutionResult swap_result = ExecuteSql(
-      *swap_service,
-      "UPDATE users SET username = location, location = username WHERE id = 4");
+  ExecutionResult swap_result =
+      ExecuteSql(*swap_service,
+                 "UPDATE visitors SET username = location, location = username "
+                 "WHERE id = 4");
   ExecutionResult same_result = ExecuteSql(
-      *same_service, "UPDATE users SET username = 'alice' WHERE id = 1");
+      *same_service, "UPDATE visitors SET username = 'alice' WHERE id = 1");
 
   // Assert
   ExpectAffected(swap_result, 1);
   CHECK_EQ(
       Join(QueryLines(*swap_service,
-                      "SELECT username, location FROM users WHERE id = 4")),
+                      "SELECT username, location FROM visitors WHERE id = 4")),
       std::string("Oslo\tdave\n"));
   ExpectAffected(same_result, 1);
   CHECK_EQ(same_log->write_calls, 0);
@@ -1023,12 +1025,12 @@ TEST(test_engine_update_row_selection_and_affected_rows) {
   }
 
   // Act
-  ExecutionResult partial =
-      ExecuteSql(*service, "UPDATE posts SET views = views + 1 WHERE id >= 11");
+  ExecutionResult partial = ExecuteSql(
+      *service, "UPDATE stories SET views = views + 1 WHERE id >= 11");
   ExecutionResult whole =
-      ExecuteSql(*service, "UPDATE posts SET views = views + 1");
+      ExecuteSql(*service, "UPDATE stories SET views = views + 1");
   std::vector<std::string> rows =
-      QueryLines(*service, "SELECT id, views FROM posts ORDER BY id");
+      QueryLines(*service, "SELECT id, views FROM stories ORDER BY id");
 
   // Assert
   ExpectAffected(partial, 2);
@@ -1048,9 +1050,9 @@ TEST(test_engine_statements_matching_no_rows_affect_nothing) {
 
   // Act
   ExecutionResult update_result =
-      ExecuteSql(*service, "UPDATE posts SET views = 0 WHERE id = 999");
+      ExecuteSql(*service, "UPDATE stories SET views = 0 WHERE id = 999");
   ExecutionResult delete_result =
-      ExecuteSql(*service, "DELETE FROM posts WHERE id = 999");
+      ExecuteSql(*service, "DELETE FROM stories WHERE id = 999");
 
   // Assert
   ExpectAffected(update_result, 0);
@@ -1069,7 +1071,7 @@ TEST(test_engine_delete_unreferenced_row_is_persisted) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "DELETE FROM users WHERE id = 4");
+      ExecuteSql(*service, "DELETE FROM visitors WHERE id = 4");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -1077,7 +1079,7 @@ TEST(test_engine_delete_unreferenced_row_is_persisted) {
 
   // Assert
   ExpectAffected(result, 1);
-  CHECK_EQ(CountRows(*reloaded, "users"), std::string("3"));
+  CHECK_EQ(CountRows(*reloaded, "visitors"), std::string("3"));
 }
 
 TEST(test_engine_delete_referenced_row_violates_constraint) {
@@ -1093,20 +1095,20 @@ TEST(test_engine_delete_referenced_row_violates_constraint) {
   std::string memory_before = SnapshotTables(*service);
 
   // Act
-  ExecutionResult referenced_by_posts =
-      ExecuteSql(*service, "DELETE FROM users WHERE id = 3");
-  ExecutionResult referenced_by_engagements =
-      ExecuteSql(*service, "DELETE FROM users WHERE id = 2");
-  ExecutionResult referenced_post =
-      ExecuteSql(*service, "DELETE FROM posts WHERE id = 10");
+  ExecutionResult referenced_by_stories =
+      ExecuteSql(*service, "DELETE FROM visitors WHERE id = 3");
+  ExecutionResult referenced_by_reactions =
+      ExecuteSql(*service, "DELETE FROM visitors WHERE id = 2");
+  ExecutionResult referenced_story =
+      ExecuteSql(*service, "DELETE FROM stories WHERE id = 10");
 
   // Assert
-  ExpectErrorMessage(referenced_by_posts, ErrorKind::kConstraintViolation,
-                     "users.id=3 is referenced by posts.username");
-  ExpectErrorMessage(referenced_by_engagements, ErrorKind::kConstraintViolation,
-                     "users.id=2 is referenced by engagements.username");
-  ExpectErrorMessage(referenced_post, ErrorKind::kConstraintViolation,
-                     "posts.id=10 is referenced by engagements.postId");
+  ExpectErrorMessage(referenced_by_stories, ErrorKind::kConstraintViolation,
+                     "visitors.id=3 is referenced by stories.username");
+  ExpectErrorMessage(referenced_by_reactions, ErrorKind::kConstraintViolation,
+                     "visitors.id=2 is referenced by reactions.username");
+  ExpectErrorMessage(referenced_story, ErrorKind::kConstraintViolation,
+                     "stories.id=10 is referenced by reactions.storyId");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
   CHECK_EQ(SnapshotTables(*service), memory_before);
   CHECK_EQ(log->write_calls, 0);
@@ -1124,15 +1126,15 @@ TEST(test_engine_delete_checks_rows_in_table_order_and_is_all_or_nothing) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "DELETE FROM users WHERE id >= 2");
+      ExecuteSql(*service, "DELETE FROM visitors WHERE id >= 2");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kConstraintViolation,
-                     "users.id=2 is referenced by engagements.username");
+                     "visitors.id=2 is referenced by reactions.username");
   CHECK_EQ(
-      Join(QueryLines(*service, "SELECT username FROM users WHERE id = 4")),
+      Join(QueryLines(*service, "SELECT username FROM visitors WHERE id = 4")),
       std::string("dave\n"));
-  CHECK_EQ(CountRows(*service, "users"), std::string("4"));
+  CHECK_EQ(CountRows(*service, "visitors"), std::string("4"));
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -1146,7 +1148,7 @@ TEST(test_engine_delete_without_where_removes_all_rows) {
   }
 
   // Act
-  ExecutionResult result = ExecuteSql(*service, "DELETE FROM engagements");
+  ExecutionResult result = ExecuteSql(*service, "DELETE FROM reactions");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -1154,8 +1156,8 @@ TEST(test_engine_delete_without_where_removes_all_rows) {
 
   // Assert
   ExpectAffected(result, 5);
-  CHECK_EQ(CountRows(*service, "engagements"), std::string("0"));
-  CHECK_EQ(CountRows(*reloaded, "engagements"), std::string("0"));
+  CHECK_EQ(CountRows(*service, "reactions"), std::string("0"));
+  CHECK_EQ(CountRows(*reloaded, "reactions"), std::string("0"));
 }
 
 TEST(test_engine_load_reports_counts) {
@@ -1185,7 +1187,7 @@ TEST(test_engine_update_result_beyond_int32_is_persisted) {
 
   // Act
   ExecutionResult result = ExecuteSql(
-      *service, "UPDATE posts SET views = views + 2147483647 WHERE id = 12");
+      *service, "UPDATE stories SET views = views + 2147483647 WHERE id = 12");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -1193,12 +1195,14 @@ TEST(test_engine_update_result_beyond_int32_is_persisted) {
 
   // Assert
   ExpectAffected(result, 1);
-  CHECK_EQ(Join(QueryLines(*reloaded, "SELECT views FROM posts WHERE id = 12")),
-           std::string("2147483654\n"));
+  CHECK_EQ(
+      Join(QueryLines(*reloaded, "SELECT views FROM stories WHERE id = 12")),
+      std::string("2147483654\n"));
 }
 
 TEST(test_engine_update_does_not_revalidate_loaded_foreign_keys) {
-  // Arrange: post 10 names alice, who is not in users after the load filter.
+  // Arrange: story 10 names alice, who is not in visitors after the load
+  // filter.
   TempDir dir;
   WriteFixtureB(dir.path());
   auto service = MakeLoadedService(dir.path());
@@ -1208,25 +1212,26 @@ TEST(test_engine_update_does_not_revalidate_loaded_foreign_keys) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "UPDATE posts SET views = 6 WHERE id = 10");
+      ExecuteSql(*service, "UPDATE stories SET views = 6 WHERE id = 10");
 
   // Assert
   ExpectAffected(result, 1);
-  CHECK_EQ(Join(QueryLines(*service, "SELECT views FROM posts WHERE id = 10")),
-           std::string("6\n"));
+  CHECK_EQ(
+      Join(QueryLines(*service, "SELECT views FROM stories WHERE id = 10")),
+      std::string("6\n"));
 }
 
 TEST(test_engine_update_unchanged_assignment_skips_uniqueness_check) {
-  // Arrange: two users share a username, which the loader does not reject.
+  // Arrange: two visitors share a username, which the loader does not reject.
   TempDir dir;
   WriteCatalogFixture(dir.path());
-  WriteFile(dir.path() / "users.csv",
+  WriteFile(dir.path() / "visitors.csv",
             "id,username,location\n"
             "1,alice,Paris\n"
             "2,alice,Rome\n");
-  WriteFile(dir.path() / "posts.csv", "id,content,username,views\n");
-  WriteFile(dir.path() / "engagements.csv",
-            "id,postid,username,type,comment,timestamp\n");
+  WriteFile(dir.path() / "stories.csv", "id,content,username,views\n");
+  WriteFile(dir.path() / "reactions.csv",
+            "id,storyid,username,type,comment,timestamp\n");
   auto log = std::make_shared<RepositoryLog>();
   auto service = MakeLoadedService(dir.path(), log);
   if (!service) {
@@ -1234,8 +1239,8 @@ TEST(test_engine_update_unchanged_assignment_skips_uniqueness_check) {
   }
 
   // Act
-  ExecutionResult result =
-      ExecuteSql(*service, "UPDATE users SET username = username WHERE id = 1");
+  ExecutionResult result = ExecuteSql(
+      *service, "UPDATE visitors SET username = username WHERE id = 1");
 
   // Assert
   ExpectAffected(result, 1);
@@ -1243,7 +1248,8 @@ TEST(test_engine_update_unchanged_assignment_skips_uniqueness_check) {
 }
 
 TEST(test_engine_update_unchanged_foreign_key_is_not_revalidated) {
-  // Arrange: post 10 names alice, who is not in users after the load filter.
+  // Arrange: story 10 names alice, who is not in visitors after the load
+  // filter.
   TempDir dir;
   WriteFixtureB(dir.path());
   auto log = std::make_shared<RepositoryLog>();
@@ -1254,7 +1260,7 @@ TEST(test_engine_update_unchanged_foreign_key_is_not_revalidated) {
 
   // Act
   ExecutionResult result = ExecuteSql(
-      *service, "UPDATE posts SET username = username WHERE id = 10");
+      *service, "UPDATE stories SET username = username WHERE id = 10");
 
   // Assert
   ExpectAffected(result, 1);
@@ -1273,11 +1279,11 @@ TEST(test_engine_write_statements_report_numeric_overflow) {
   // Act
   ExecutionResult update_result = ExecuteSql(
       *service,
-      "UPDATE posts SET views = views + 9223372036854775807 WHERE id = 12");
+      "UPDATE stories SET views = views + 9223372036854775807 WHERE id = 12");
   ExecutionResult delete_result = ExecuteSql(
-      *service, "DELETE FROM posts WHERE id + 9223372036854775807 > 0");
+      *service, "DELETE FROM stories WHERE id + 9223372036854775807 > 0");
   std::vector<std::string> remaining =
-      QueryLines(*service, "SELECT id, views FROM posts ORDER BY id");
+      QueryLines(*service, "SELECT id, views FROM stories ORDER BY id");
 
   // Assert
   ExpectErrorMessage(update_result, ErrorKind::kRuntime, "numeric overflow");
@@ -1289,15 +1295,16 @@ TEST(test_engine_write_statements_report_numeric_overflow) {
 
 namespace {
 
-constexpr const char* kCreateUsers =
-    "CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location "
+constexpr const char* kCreateVisitors =
+    "CREATE TABLE visitors (id INT PRIMARY KEY, username TEXT UNIQUE, location "
     "TEXT)";
-constexpr const char* kCreatePosts =
-    "CREATE TABLE posts (id INT PRIMARY KEY, content TEXT, username TEXT "
-    "REFERENCES users(username), views INT)";
-constexpr const char* kCreateEngagements =
-    "CREATE TABLE engagements (id INT PRIMARY KEY, postId INT REFERENCES "
-    "posts(id), username TEXT REFERENCES users(username), type TEXT, comment "
+constexpr const char* kCreateStories =
+    "CREATE TABLE stories (id INT PRIMARY KEY, content TEXT, username TEXT "
+    "REFERENCES visitors(username), views INT)";
+constexpr const char* kCreateReactions =
+    "CREATE TABLE reactions (id INT PRIMARY KEY, storyId INT REFERENCES "
+    "stories(id), username TEXT REFERENCES visitors(username), type TEXT, "
+    "comment "
     "TEXT, timestamp INT)";
 constexpr const char* kCreateJobs =
     "CREATE TABLE jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)";
@@ -1330,37 +1337,37 @@ TEST(test_engine_create_table_persists_catalog_and_empty_csv) {
   }
 
   // Act
-  ExecutionResult users = ExecuteSql(*service, kCreateUsers);
-  ExecutionResult posts = ExecuteSql(
+  ExecutionResult visitors = ExecuteSql(*service, kCreateVisitors);
+  ExecutionResult stories = ExecuteSql(
       *service,
-      "CREATE TABLE posts (id INT PRIMARY KEY, content TEXT, username TEXT "
-      "REFERENCES users(username), views INT DEFAULT 0)");
+      "CREATE TABLE stories (id INT PRIMARY KEY, content TEXT, username TEXT "
+      "REFERENCES visitors(username), views INT DEFAULT 0)");
   auto engine = LoadedEngine(dir.path());
   if (!engine) {
     return;
   }
-  std::optional<domain::TableSchema> reloaded_users =
-      engine->Catalog().FindTable("users");
-  std::optional<domain::TableSchema> reloaded_posts =
-      engine->Catalog().FindTable("posts");
+  std::optional<domain::TableSchema> reloaded_visitors =
+      engine->Catalog().FindTable("visitors");
+  std::optional<domain::TableSchema> reloaded_stories =
+      engine->Catalog().FindTable("stories");
 
   // Assert
-  ExpectComplete(users, "CREATE TABLE users");
-  ExpectComplete(posts, "CREATE TABLE posts");
-  CHECK_EQ(TableNameList(*engine), std::string("users\nposts\n"));
-  CHECK(reloaded_users.has_value() && reloaded_posts.has_value());
-  if (!reloaded_users || !reloaded_posts) {
+  ExpectComplete(visitors, "CREATE TABLE visitors");
+  ExpectComplete(stories, "CREATE TABLE stories");
+  CHECK_EQ(TableNameList(*engine), std::string("visitors\nstories\n"));
+  CHECK(reloaded_visitors.has_value() && reloaded_stories.has_value());
+  if (!reloaded_visitors || !reloaded_stories) {
     return;
   }
-  CHECK_EQ(reloaded_users->unique_indexes, std::vector<std::size_t>({1}));
-  CHECK_EQ(reloaded_posts->foreign_keys.size(), std::size_t{1});
-  if (reloaded_posts->foreign_keys.size() == 1) {
-    ExpectForeignKey(reloaded_posts->foreign_keys[0], 2, "users", 1);
+  CHECK_EQ(reloaded_visitors->unique_indexes, std::vector<std::size_t>({1}));
+  CHECK_EQ(reloaded_stories->foreign_keys.size(), std::size_t{1});
+  if (reloaded_stories->foreign_keys.size() == 1) {
+    ExpectForeignKey(reloaded_stories->foreign_keys[0], 2, "visitors", 1);
   }
-  CHECK(reloaded_posts->columns[3].default_value.has_value());
-  CHECK_EQ(ReadFile(dir.path() / "users.csv"),
+  CHECK(reloaded_stories->columns[3].default_value.has_value());
+  CHECK_EQ(ReadFile(dir.path() / "visitors.csv"),
            std::string("id,username,location\n"));
-  CHECK_EQ(ReadFile(dir.path() / "posts.csv"),
+  CHECK_EQ(ReadFile(dir.path() / "stories.csv"),
            std::string("id,content,username,views\n"));
 }
 
@@ -1376,28 +1383,28 @@ TEST(test_engine_create_table_adopts_existing_csv) {
   }
 
   // Act
-  ExecutionResult users = ExecuteSql(*service, kCreateUsers);
-  ExecutionResult posts = ExecuteSql(*service, kCreatePosts);
-  ExecutionResult engagements = ExecuteSql(*service, kCreateEngagements);
+  ExecutionResult visitors = ExecuteSql(*service, kCreateVisitors);
+  ExecutionResult stories = ExecuteSql(*service, kCreateStories);
+  ExecutionResult reactions = ExecuteSql(*service, kCreateReactions);
 
   // Assert
-  ExpectComplete(users, "CREATE TABLE users (adopted 4 rows)");
-  ExpectComplete(posts, "CREATE TABLE posts (adopted 3 rows)");
-  ExpectComplete(engagements, "CREATE TABLE engagements (adopted 5 rows)");
+  ExpectComplete(visitors, "CREATE TABLE visitors (adopted 4 rows)");
+  ExpectComplete(stories, "CREATE TABLE stories (adopted 3 rows)");
+  ExpectComplete(reactions, "CREATE TABLE reactions (adopted 5 rows)");
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
-  CHECK_EQ(CountRows(*service, "users"), std::string("4"));
+  CHECK_EQ(CountRows(*service, "visitors"), std::string("4"));
 }
 
 TEST(test_engine_create_table_adoption_rejects_violating_rows) {
   // Arrange
   TempDir duplicate_key_dir;
-  WriteFile(duplicate_key_dir.path() / "users.csv",
+  WriteFile(duplicate_key_dir.path() / "visitors.csv",
             "id,username,location\n1,a,x\n1,b,y\n");
   TempDir duplicate_unique_dir;
-  WriteFile(duplicate_unique_dir.path() / "users.csv",
+  WriteFile(duplicate_unique_dir.path() / "visitors.csv",
             "id,username,location\n1,a,x\n2,a,y\n");
   TempDir orphan_dir;
-  WriteFile(orphan_dir.path() / "posts.csv",
+  WriteFile(orphan_dir.path() / "stories.csv",
             "id,content,username,views\n10,x,nobody,0\n");
   auto duplicate_key = MakeLoadedService(duplicate_key_dir.path());
   auto duplicate_unique = MakeLoadedService(duplicate_unique_dir.path());
@@ -1405,43 +1412,46 @@ TEST(test_engine_create_table_adoption_rejects_violating_rows) {
   if (!duplicate_key || !duplicate_unique || !orphan) {
     return;
   }
-  ExecuteSql(*orphan, kCreateUsers);
+  ExecuteSql(*orphan, kCreateVisitors);
 
   // Act
-  ExecutionResult key_result = ExecuteSql(*duplicate_key, kCreateUsers);
-  ExecutionResult unique_result = ExecuteSql(*duplicate_unique, kCreateUsers);
-  ExecutionResult orphan_result = ExecuteSql(*orphan, kCreatePosts);
+  ExecutionResult key_result = ExecuteSql(*duplicate_key, kCreateVisitors);
+  ExecutionResult unique_result =
+      ExecuteSql(*duplicate_unique, kCreateVisitors);
+  ExecutionResult orphan_result = ExecuteSql(*orphan, kCreateStories);
 
   // Assert
   ExpectErrorMessage(key_result, ErrorKind::kConstraintViolation,
-                     "cannot adopt users.csv: duplicate key: users.id=1");
-  ExpectErrorMessage(unique_result, ErrorKind::kConstraintViolation,
-                     "cannot adopt users.csv: duplicate key: users.username=a");
+                     "cannot adopt visitors.csv: duplicate key: visitors.id=1");
+  ExpectErrorMessage(
+      unique_result, ErrorKind::kConstraintViolation,
+      "cannot adopt visitors.csv: duplicate key: visitors.username=a");
   ExpectErrorMessage(orphan_result, ErrorKind::kConstraintViolation,
-                     "cannot adopt posts.csv: no matching row: "
-                     "posts.username=nobody not found in users.username");
+                     "cannot adopt stories.csv: no matching row: "
+                     "stories.username=nobody not found in visitors.username");
   CHECK(!std::filesystem::exists(duplicate_key_dir.path() / "catalog.csv"));
   CHECK(!std::filesystem::exists(duplicate_unique_dir.path() / "catalog.csv"));
-  CHECK_EQ(Join(QueryLines(*orphan, "SELECT COUNT(*) FROM users")),
+  CHECK_EQ(Join(QueryLines(*orphan, "SELECT COUNT(*) FROM visitors")),
            std::string("0\n"));
-  CHECK(AsError(ExecuteSql(*orphan, "SELECT id FROM posts")) != nullptr);
+  CHECK(AsError(ExecuteSql(*orphan, "SELECT id FROM stories")) != nullptr);
 }
 
 TEST(test_engine_create_table_adoption_rejects_header_mismatch) {
   // Arrange
   TempDir dir;
-  WriteFile(dir.path() / "users.csv", "id,name\n1,a\n");
+  WriteFile(dir.path() / "visitors.csv", "id,name\n1,a\n");
   auto service = MakeLoadedService(dir.path());
   if (!service) {
     return;
   }
 
   // Act
-  ExecutionResult result = ExecuteSql(*service, kCreateUsers);
+  ExecutionResult result = ExecuteSql(*service, kCreateVisitors);
 
   // Assert
-  ExpectErrorMessage(result, ErrorKind::kIo,
-                     "header of users.csv does not match the declared columns");
+  ExpectErrorMessage(
+      result, ErrorKind::kIo,
+      "header of visitors.csv does not match the declared columns");
   CHECK(!std::filesystem::exists(dir.path() / "catalog.csv"));
 }
 
@@ -1456,23 +1466,23 @@ TEST(test_engine_add_column_fills_default_and_persists) {
 
   // Act
   ExecutionResult result =
-      ExecuteSql(*service, "ALTER TABLE users ADD COLUMN age INT DEFAULT 7");
+      ExecuteSql(*service, "ALTER TABLE visitors ADD COLUMN age INT DEFAULT 7");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
   }
 
   // Assert
-  ExpectComplete(result, "ALTER TABLE users");
-  CHECK_EQ(Join(QueryLines(*reloaded, "SELECT id, age FROM users ORDER BY id")),
-           std::string("1\t7\n2\t7\n3\t7\n4\t7\n"));
-  CHECK_EQ(ReadFile(dir.path() / "users.csv"),
+  ExpectComplete(result, "ALTER TABLE visitors");
+  CHECK_EQ(
+      Join(QueryLines(*reloaded, "SELECT id, age FROM visitors ORDER BY id")),
+      std::string("1\t7\n2\t7\n3\t7\n4\t7\n"));
+  CHECK_EQ(ReadFile(dir.path() / "visitors.csv"),
            std::string("id,username,location,age\n"
                        "1,alice,Paris,7\n2,carol,Paris,7\n"
                        "3,bob,Rome,7\n4,dave,Oslo,7\n"));
-  CHECK(
-      ReadFile(dir.path() / "catalog.csv").find("users,3,age,INT,0,0,0,1,7") !=
-      std::string::npos);
+  CHECK(ReadFile(dir.path() / "catalog.csv")
+            .find("visitors,3,age,INT,0,0,0,1,7") != std::string::npos);
 }
 
 TEST(test_engine_rejects_text_default_with_line_break) {
@@ -1496,7 +1506,7 @@ TEST(test_engine_rejects_text_default_with_line_break) {
                  "CREATE TABLE notes (id INT PRIMARY KEY, body TEXT DEFAULT "
                  "'a\rb')");
   ExecutionResult added = ExecuteSql(
-      *service, "ALTER TABLE users ADD COLUMN bio TEXT DEFAULT 'a\nb'");
+      *service, "ALTER TABLE visitors ADD COLUMN bio TEXT DEFAULT 'a\nb'");
   auto engine = LoadedEngine(dir.path());
   if (!engine) {
     return;
@@ -1507,12 +1517,14 @@ TEST(test_engine_rejects_text_default_with_line_break) {
                      "flatfile engine cannot store a line break in notes.body");
   ExpectErrorMessage(carriage_return, ErrorKind::kUnsupported,
                      "flatfile engine cannot store a line break in notes.body");
-  ExpectErrorMessage(added, ErrorKind::kUnsupported,
-                     "flatfile engine cannot store a line break in users.bio");
+  ExpectErrorMessage(
+      added, ErrorKind::kUnsupported,
+      "flatfile engine cannot store a line break in visitors.bio");
   CHECK_EQ(ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv"),
            files_before);
   CHECK(!std::filesystem::exists(dir.path() / "notes.csv"));
-  CHECK_EQ(TableNameList(*engine), std::string("users\nposts\nengagements\n"));
+  CHECK_EQ(TableNameList(*engine),
+           std::string("visitors\nstories\nreactions\n"));
 }
 
 TEST(test_engine_drop_table_removes_file_and_catalog_entry) {
@@ -1551,11 +1563,11 @@ TEST(test_engine_drop_referenced_table_is_rejected) {
       ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv");
 
   // Act
-  ExecutionResult result = ExecuteSql(*service, "DROP TABLE users");
+  ExecutionResult result = ExecuteSql(*service, "DROP TABLE visitors");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kBind,
-                     "table users is referenced by posts.username");
+                     "table visitors is referenced by stories.username");
   CHECK_EQ(ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv"),
            files_before);
 }
@@ -1577,8 +1589,8 @@ TEST(test_engine_ddl_commit_failure_keeps_catalog_and_tables) {
   // Act
   ExecutionResult create_result = ExecuteSql(*service, kCreateJobs);
   ExecutionResult alter_result =
-      ExecuteSql(*service, "ALTER TABLE users ADD COLUMN age INT DEFAULT 0");
-  ExecutionResult drop_result = ExecuteSql(*service, "DROP TABLE engagements");
+      ExecuteSql(*service, "ALTER TABLE visitors ADD COLUMN age INT DEFAULT 0");
+  ExecutionResult drop_result = ExecuteSql(*service, "DROP TABLE reactions");
 
   // Assert
   for (const ExecutionResult* result :
@@ -1588,7 +1600,7 @@ TEST(test_engine_ddl_commit_failure_keeps_catalog_and_tables) {
   }
   CHECK_EQ(SnapshotTables(*service), memory_before);
   CHECK(AsError(ExecuteSql(*service, "SELECT id FROM jobs")) != nullptr);
-  CHECK(AsError(ExecuteSql(*service, "SELECT age FROM users")) != nullptr);
+  CHECK(AsError(ExecuteSql(*service, "SELECT age FROM visitors")) != nullptr);
   CHECK_EQ(ReadAllCsv(dir.path()) + ReadFile(dir.path() / "catalog.csv"),
            files_before);
 }
@@ -1756,7 +1768,7 @@ TEST(test_engine_insert_text_with_comma_and_quote_is_persisted) {
   // Act
   ExecutionResult result = ExecuteSql(
       *service,
-      "INSERT INTO posts (id, content, username, views) VALUES (13, 'Hello, "
+      "INSERT INTO stories (id, content, username, views) VALUES (13, 'Hello, "
       "\"world\"', 'alice', 1)");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
@@ -1766,9 +1778,9 @@ TEST(test_engine_insert_text_with_comma_and_quote_is_persisted) {
   // Assert
   ExpectAffected(result, 1);
   CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT content FROM posts WHERE id = 13")),
+      Join(QueryLines(*reloaded, "SELECT content FROM stories WHERE id = 13")),
       std::string("Hello, \"world\"\n"));
-  CHECK(ReadFile(dir.path() / "posts.csv")
+  CHECK(ReadFile(dir.path() / "stories.csv")
             .find("13,\"Hello, \"\"world\"\"\",alice,1\n") !=
         std::string::npos);
 }
@@ -1783,7 +1795,7 @@ TEST(test_engine_limit_and_offset_select_ordered_window) {
   if (!service) {
     return;
   }
-  const std::string base = "SELECT id FROM users ORDER BY id";
+  const std::string base = "SELECT id FROM visitors ORDER BY id";
 
   // Act and Assert
   CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 2")),
@@ -1796,10 +1808,10 @@ TEST(test_engine_limit_and_offset_select_ordered_window) {
   CHECK_EQ(Join(QueryLines(*service, base + " LIMIT 100")),
            std::string("1\n2\n3\n4\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT id FROM users ORDER BY id DESC LIMIT 1")),
+                           "SELECT id FROM visitors ORDER BY id DESC LIMIT 1")),
            std::string("4\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT username, COUNT(*) FROM posts GROUP BY "
+                           "SELECT username, COUNT(*) FROM stories GROUP BY "
                            "username ORDER BY username LIMIT 1")),
            std::string("alice\t2\n"));
   ExecutionResult empty = ExecuteSql(*service, base + " LIMIT 0");
@@ -1822,15 +1834,15 @@ TEST(test_engine_avg_min_max_over_rows_and_groups) {
 
   // Act and Assert
   CHECK_EQ(
-      Join(QueryLines(*service,
-                      "SELECT AVG(views), MIN(views), MAX(views) FROM posts")),
+      Join(QueryLines(
+          *service, "SELECT AVG(views), MIN(views), MAX(views) FROM stories")),
       std::string("4.0\t0\t7\n"));
-  CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT MIN(username), MAX(username) FROM users")),
+  CHECK_EQ(Join(QueryLines(
+               *service, "SELECT MIN(username), MAX(username) FROM visitors")),
            std::string("alice\tdave\n"));
   CHECK_EQ(Join(QueryLines(*service,
                            "SELECT username, AVG(views), MIN(views), "
-                           "MAX(views) FROM posts GROUP BY username ORDER BY "
+                           "MAX(views) FROM stories GROUP BY username ORDER BY "
                            "username")),
            std::string("alice\t2.5\t0\t5\nbob\t7.0\t7\t7\n"));
 }
@@ -1846,24 +1858,26 @@ TEST(test_engine_avg_min_max_on_empty_input_report_runtime_error) {
 
   // Act
   ExecutionResult average =
-      ExecuteSql(*service, "SELECT AVG(views) FROM posts WHERE id = 999");
+      ExecuteSql(*service, "SELECT AVG(views) FROM stories WHERE id = 999");
   ExecutionResult minimum =
-      ExecuteSql(*service, "SELECT MIN(views) FROM posts WHERE id = 999");
+      ExecuteSql(*service, "SELECT MIN(views) FROM stories WHERE id = 999");
   ExecutionResult maximum =
-      ExecuteSql(*service, "SELECT MAX(username) FROM users WHERE id = 999");
+      ExecuteSql(*service, "SELECT MAX(username) FROM visitors WHERE id = 999");
 
   // Assert
   ExpectErrorMessage(average, ErrorKind::kRuntime, "AVG over no rows");
   ExpectErrorMessage(minimum, ErrorKind::kRuntime, "MIN over no rows");
   ExpectErrorMessage(maximum, ErrorKind::kRuntime, "MAX over no rows");
-  CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT COUNT(*), SUM(views) FROM posts WHERE id = "
-                           "999")),
-           std::string("0\t0\n"));
-  CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT username, AVG(views) FROM posts WHERE id = "
-                           "999 GROUP BY username")),
-           std::string());
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT COUNT(*), SUM(views) FROM stories WHERE id = "
+                      "999")),
+      std::string("0\t0\n"));
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT username, AVG(views) FROM stories WHERE id = "
+                      "999 GROUP BY username")),
+      std::string());
 }
 
 TEST(test_engine_like_filters_rows) {
@@ -1877,31 +1891,33 @@ TEST(test_engine_like_filters_rows) {
 
   // Act and Assert
   CHECK_EQ(
-      Join(QueryLines(*service,
-                      "SELECT username FROM users WHERE username LIKE 'a%'")),
+      Join(QueryLines(
+          *service, "SELECT username FROM visitors WHERE username LIKE 'a%'")),
       std::string("alice\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT username FROM users WHERE username LIKE "
+                           "SELECT username FROM visitors WHERE username LIKE "
                            "'%o%' ORDER BY username")),
            std::string("bob\ncarol\n"));
   CHECK_EQ(
-      Join(QueryLines(*service,
-                      "SELECT username FROM users WHERE username LIKE '_ob'")),
+      Join(QueryLines(
+          *service, "SELECT username FROM visitors WHERE username LIKE '_ob'")),
       std::string("bob\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT username FROM users WHERE username LIKE "
+                           "SELECT username FROM visitors WHERE username LIKE "
                            "'ALICE'")),
            std::string("alice\n"));
-  CHECK_EQ(Join(QueryLines(
-               *service, "SELECT COUNT(*) FROM users WHERE username LIKE '%'")),
-           std::string("4\n"));
-  CHECK_EQ(Join(QueryLines(
-               *service, "SELECT username FROM users WHERE username LIKE ''")),
-           std::string());
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT COUNT(*) FROM visitors WHERE username LIKE '%'")),
+      std::string("4\n"));
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT username FROM visitors WHERE username LIKE ''")),
+      std::string());
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT p.id FROM posts p JOIN users u ON "
-                           "p.username = u.username WHERE u.username LIKE "
-                           "'%ice' AND p.content LIKE '%post%'")),
+                           "SELECT s.id FROM stories s JOIN visitors v ON "
+                           "s.username = v.username WHERE v.username LIKE "
+                           "'%ice' AND s.content LIKE '%story%'")),
            std::string("11\n"));
 }
 
@@ -1917,35 +1933,36 @@ TEST(test_engine_functions_apply_in_every_clause) {
   // Act and Assert
   CHECK_EQ(Join(QueryLines(*service,
                            "SELECT UPPER(username), LENGTH(location) FROM "
-                           "users WHERE id = 1")),
+                           "visitors WHERE id = 1")),
            std::string("ALICE\t5\n"));
-  CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT id FROM users WHERE LENGTH(username) = 3")),
+  CHECK_EQ(Join(QueryLines(
+               *service, "SELECT id FROM visitors WHERE LENGTH(username) = 3")),
            std::string("3\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT id, LOWER(username) FROM users ORDER BY "
+                           "SELECT id, LOWER(username) FROM visitors ORDER BY "
                            "LOWER(username) DESC LIMIT 1")),
            std::string("4\tdave\n"));
+  CHECK_EQ(
+      Join(QueryLines(*service,
+                      "SELECT UPPER(location), COUNT(*) FROM visitors GROUP "
+                      "BY UPPER(location) ORDER BY 1")),
+      std::string("OSLO\t1\nPARIS\t2\nROME\t1\n"));
   CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT UPPER(location), COUNT(*) FROM users GROUP "
-                           "BY UPPER(location) ORDER BY 1")),
-           std::string("OSLO\t1\nPARIS\t2\nROME\t1\n"));
-  CHECK_EQ(Join(QueryLines(*service,
-                           "SELECT username || '@' || location FROM users "
+                           "SELECT username || '@' || location FROM visitors "
                            "WHERE id = 3")),
            std::string("bob@Rome\n"));
 
   ExecutionResult update = ExecuteSql(
-      *service, "UPDATE users SET location = UPPER(location) WHERE id = 1");
+      *service, "UPDATE visitors SET location = UPPER(location) WHERE id = 1");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
   }
   ExpectAffected(update, 1);
   CHECK_EQ(
-      Join(QueryLines(*reloaded, "SELECT location FROM users WHERE id = 1")),
+      Join(QueryLines(*reloaded, "SELECT location FROM visitors WHERE id = 1")),
       std::string("PARIS\n"));
-  CHECK(ReadFile(dir.path() / "users.csv").find("\n1,alice,PARIS\n") !=
+  CHECK(ReadFile(dir.path() / "visitors.csv").find("\n1,alice,PARIS\n") !=
         std::string::npos);
 }
 
@@ -1962,7 +1979,7 @@ TEST(test_engine_arithmetic_and_cast_in_queries) {
   std::vector<std::string> rows = QueryLines(
       *service,
       "SELECT views * 2, views / 2, views / 2.0, -views * 3, CAST(views AS "
-      "TEXT) || '!', CAST('12' AS INT) + 1, ROUND(views / 3.0, 2) FROM posts "
+      "TEXT) || '!', CAST('12' AS INT) + 1, ROUND(views / 3.0, 2) FROM stories "
       "WHERE id = 10");
 
   // Assert
@@ -1982,30 +1999,35 @@ TEST(test_engine_runtime_errors_surface_as_kruntime) {
 
   // Act and Assert: queries
   ExpectErrorMessage(
-      ExecuteSql(*service, "SELECT 1 / (views - views) FROM posts"),
+      ExecuteSql(*service, "SELECT 1 / (views - views) FROM stories"),
       ErrorKind::kRuntime, "division by zero");
   ExpectErrorMessage(
-      ExecuteSql(*service, "SELECT CAST(username AS INT) FROM users"),
+      ExecuteSql(*service, "SELECT CAST(username AS INT) FROM visitors"),
       ErrorKind::kRuntime, "cannot cast 'alice' to INT");
   ExpectErrorMessage(
-      ExecuteSql(*service, "SELECT SUBSTR(username, 1, -1) FROM users"),
+      ExecuteSql(*service, "SELECT SUBSTR(username, 1, -1) FROM visitors"),
       ErrorKind::kRuntime, "negative substring length");
-  ExpectErrorMessage(ExecuteSql(*service, "SELECT ROUND(views, 16) FROM posts"),
-                     ErrorKind::kRuntime, "ROUND digits out of range");
   ExpectErrorMessage(
-      ExecuteSql(*service,
-                 "SELECT views * 9223372036854775807 FROM posts WHERE id = 10"),
+      ExecuteSql(*service, "SELECT ROUND(views, 16) FROM stories"),
+      ErrorKind::kRuntime, "ROUND digits out of range");
+  ExpectErrorMessage(
+      ExecuteSql(
+          *service,
+          "SELECT views * 9223372036854775807 FROM stories WHERE id = 10"),
       ErrorKind::kRuntime, "numeric overflow");
 
   // Act and Assert: writes leave memory and files unchanged
-  ExpectErrorMessage(ExecuteSql(*service, "UPDATE posts SET views = views / 0"),
-                     ErrorKind::kRuntime, "division by zero");
-  ExpectErrorMessage(ExecuteSql(*service, "DELETE FROM users WHERE 1 / 0 = 1"),
-                     ErrorKind::kRuntime, "division by zero");
   ExpectErrorMessage(
-      ExecuteSql(*service,
-                 "INSERT INTO posts (id, content, username, views) VALUES (13, "
-                 "'x', 'alice', 1 / 0)"),
+      ExecuteSql(*service, "UPDATE stories SET views = views / 0"),
+      ErrorKind::kRuntime, "division by zero");
+  ExpectErrorMessage(
+      ExecuteSql(*service, "DELETE FROM visitors WHERE 1 / 0 = 1"),
+      ErrorKind::kRuntime, "division by zero");
+  ExpectErrorMessage(
+      ExecuteSql(
+          *service,
+          "INSERT INTO stories (id, content, username, views) VALUES (13, "
+          "'x', 'alice', 1 / 0)"),
       ErrorKind::kRuntime, "division by zero");
   CHECK_EQ(SnapshotTables(*service), tables_before);
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
@@ -2023,9 +2045,10 @@ TEST(test_engine_three_table_join_aggregates_over_chain) {
   // Act
   std::vector<std::string> rows = QueryLines(
       *service,
-      "SELECT u.username, COUNT(*) FROM users u JOIN posts p ON p.username = "
-      "u.username JOIN engagements e ON e.postId = p.id GROUP BY u.username "
-      "ORDER BY u.username");
+      "SELECT v.username, COUNT(*) FROM visitors v JOIN stories s ON "
+      "s.username = "
+      "v.username JOIN reactions r ON r.storyId = s.id GROUP BY v.username "
+      "ORDER BY v.username");
 
   // Assert
   CHECK_EQ(Join(rows), std::string("alice\t3\nbob\t2\n"));
@@ -2043,13 +2066,15 @@ TEST(test_engine_four_table_join_and_non_equi_steps_return_rows) {
   // Act
   std::vector<std::string> four_tables = QueryLines(
       *service,
-      "SELECT u1.id, u2.id, e.id FROM users u1 JOIN posts p ON p.username = "
-      "u1.username JOIN engagements e ON e.postId = p.id JOIN users u2 ON "
-      "e.username = u2.username ORDER BY u1.id, u2.id, e.id");
+      "SELECT v1.id, v2.id, r.id FROM visitors v1 JOIN stories s ON s.username "
+      "= "
+      "v1.username JOIN reactions r ON r.storyId = s.id JOIN visitors v2 ON "
+      "r.username = v2.username ORDER BY v1.id, v2.id, r.id");
   std::vector<std::string> non_equi = QueryLines(
       *service,
-      "SELECT a.id, b.id, c.id FROM users a JOIN users b ON b.id > a.id JOIN "
-      "users c ON c.id > b.id WHERE a.id = 1 ORDER BY b.id, c.id");
+      "SELECT a.id, b.id, c.id FROM visitors a JOIN visitors b ON b.id > a.id "
+      "JOIN "
+      "visitors c ON c.id > b.id WHERE a.id = 1 ORDER BY b.id, c.id");
 
   // Assert
   CHECK_EQ(
@@ -2070,8 +2095,9 @@ TEST(test_engine_join_key_may_come_from_any_left_table) {
   // Act
   std::vector<std::string> rows = QueryLines(
       *service,
-      "SELECT p.id, e.id FROM users u JOIN posts p ON p.username = u.username "
-      "JOIN engagements e ON e.username = u.username ORDER BY p.id, e.id");
+      "SELECT s.id, r.id FROM visitors v JOIN stories s ON s.username = "
+      "v.username "
+      "JOIN reactions r ON r.username = v.username ORDER BY s.id, r.id");
 
   // Assert
   CHECK_EQ(Join(rows), std::string("10\t103\n11\t103\n12\t100\n12\t102\n"));
@@ -2088,10 +2114,11 @@ TEST(test_engine_multi_row_insert_appends_all_rows_once) {
   }
 
   // Act
-  ExecutionResult result = ExecuteSql(
-      *service,
-      "INSERT INTO users (id, username, location) VALUES (5, 'eve', 'X'), (6, "
-      "'frank', 'Y, Z'), (7, 'gina', 'say \"hi\"')");
+  ExecutionResult result =
+      ExecuteSql(*service,
+                 "INSERT INTO visitors (id, username, location) VALUES (5, "
+                 "'eve', 'X'), (6, "
+                 "'frank', 'Y, Z'), (7, 'gina', 'say \"hi\"')");
   auto reloaded = MakeLoadedService(dir.path());
   if (!reloaded) {
     return;
@@ -2101,12 +2128,13 @@ TEST(test_engine_multi_row_insert_appends_all_rows_once) {
   ExpectAffected(result, 3);
   CHECK_EQ(log->append_calls, 1);
   CHECK_EQ(log->write_calls, 0);
-  CHECK_EQ(CountRows(*reloaded, "users"), std::string("7"));
-  CHECK_EQ(Join(QueryLines(*reloaded,
-                           "SELECT id, username, location FROM users WHERE id "
-                           ">= 5 ORDER BY id")),
-           std::string("5\teve\tX\n6\tfrank\tY, Z\n7\tgina\tsay \"hi\"\n"));
-  const std::string file = ReadFile(dir.path() / "users.csv");
+  CHECK_EQ(CountRows(*reloaded, "visitors"), std::string("7"));
+  CHECK_EQ(
+      Join(QueryLines(*reloaded,
+                      "SELECT id, username, location FROM visitors WHERE id "
+                      ">= 5 ORDER BY id")),
+      std::string("5\teve\tX\n6\tfrank\tY, Z\n7\tgina\tsay \"hi\"\n"));
+  const std::string file = ReadFile(dir.path() / "visitors.csv");
   CHECK(file.size() >= 1 &&
         file.find("5,eve,X\n6,frank,\"Y, Z\"\n7,gina,\"say \"\"hi\"\"\"\n") !=
             std::string::npos);
@@ -2123,30 +2151,32 @@ TEST(test_engine_multi_row_insert_fails_as_a_whole) {
   }
   const std::string tables_before = SnapshotTables(*service);
   const std::string files_before = ReadAllCsv(dir.path());
-  const std::string users =
-      "INSERT INTO users (id, username, location) VALUES ";
+  const std::string visitors =
+      "INSERT INTO visitors (id, username, location) VALUES ";
 
   // Act and Assert
   ExpectErrorMessage(
-      ExecuteSql(*service, users + "(5, 'eve', 'X'), (1, 'dup', 'Y')"),
-      ErrorKind::kConstraintViolation, "duplicate key: users.id=1");
+      ExecuteSql(*service, visitors + "(5, 'eve', 'X'), (1, 'dup', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: visitors.id=1");
   ExpectErrorMessage(
-      ExecuteSql(*service, users + "(5, 'eve', 'X'), (5, 'frank', 'Y')"),
-      ErrorKind::kConstraintViolation, "duplicate key: users.id=5");
+      ExecuteSql(*service, visitors + "(5, 'eve', 'X'), (5, 'frank', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: visitors.id=5");
   ExpectErrorMessage(
-      ExecuteSql(*service, users + "(5, 'eve', 'X'), (6, 'eve', 'Y')"),
-      ErrorKind::kConstraintViolation, "duplicate key: users.username=eve");
+      ExecuteSql(*service, visitors + "(5, 'eve', 'X'), (6, 'eve', 'Y')"),
+      ErrorKind::kConstraintViolation, "duplicate key: visitors.username=eve");
   ExpectErrorMessage(
-      ExecuteSql(*service,
-                 "INSERT INTO posts (id, content, username, views) VALUES (20, "
-                 "'a', 'alice', 1), (21, 'b', 'bob', 1), (22, 'c', 'nobody', "
-                 "1)"),
+      ExecuteSql(
+          *service,
+          "INSERT INTO stories (id, content, username, views) VALUES (20, "
+          "'a', 'alice', 1), (21, 'b', 'bob', 1), (22, 'c', 'nobody', "
+          "1)"),
       ErrorKind::kConstraintViolation,
-      "no matching row: posts.username=nobody not found in users.username");
+      "no matching row: stories.username=nobody not found in "
+      "visitors.username");
   ExpectErrorMessage(
-      ExecuteSql(*service, users + "(5, 'eve', 'X'), (6, 'a\nb', 'Y')"),
+      ExecuteSql(*service, visitors + "(5, 'eve', 'X'), (6, 'a\nb', 'Y')"),
       ErrorKind::kUnsupported,
-      "flatfile engine cannot store a line break in users.username");
+      "flatfile engine cannot store a line break in visitors.username");
 
   CHECK_EQ(SnapshotTables(*service), tables_before);
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
@@ -2194,19 +2224,19 @@ TEST(test_engine_multi_row_insert_write_failure_keeps_memory) {
     return;
   }
   const std::string files_before = ReadAllCsv(dir.path());
-  log->append_failure = "could not append to users.csv (injected)";
+  log->append_failure = "could not append to visitors.csv (injected)";
 
   // Act
   ExecutionResult result = ExecuteSql(
       *service,
-      "INSERT INTO users (id, username, location) VALUES (5, 'a', 'x'), (6, "
+      "INSERT INTO visitors (id, username, location) VALUES (5, 'a', 'x'), (6, "
       "'b', 'y'), (7, 'c', 'z')");
 
   // Assert
   ExpectErrorMessage(result, ErrorKind::kIo,
-                     "could not append to users.csv (injected)");
+                     "could not append to visitors.csv (injected)");
   CHECK_EQ(log->append_calls, 1);
-  CHECK_EQ(CountRows(*service, "users"), std::string("4"));
+  CHECK_EQ(CountRows(*service, "visitors"), std::string("4"));
   CHECK_EQ(ReadAllCsv(dir.path()), files_before);
 }
 
@@ -2249,29 +2279,29 @@ TEST(test_engine_write_refuses_when_a_file_changed_on_disk) {
     return;
   }
   const std::string tables_before = SnapshotTables(*service);
-  const std::filesystem::path users_path = dir.path() / "users.csv";
-  const std::string edited = ReadFile(users_path) + "9,external,Nowhere\n";
-  WriteFile(users_path, edited);
+  const std::filesystem::path visitors_path = dir.path() / "visitors.csv";
+  const std::string edited = ReadFile(visitors_path) + "9,external,Nowhere\n";
+  WriteFile(visitors_path, edited);
   std::filesystem::last_write_time(
-      users_path,
-      std::filesystem::last_write_time(users_path) + std::chrono::seconds(2));
+      visitors_path, std::filesystem::last_write_time(visitors_path) +
+                         std::chrono::seconds(2));
   const std::string changed_message =
-      "users.csv changed on disk since it was loaded; run .open again";
+      "visitors.csv changed on disk since it was loaded; run .open again";
 
   // Act
   ExecutionResult update =
-      ExecuteSql(*service, "UPDATE users SET location = 'X' WHERE id = 1");
-  ExecutionResult insert = ExecuteSql(
-      *service,
-      "INSERT INTO users (id, username, location) VALUES (50, 'zed', 'Rome')");
+      ExecuteSql(*service, "UPDATE visitors SET location = 'X' WHERE id = 1");
+  ExecutionResult insert = ExecuteSql(*service,
+                                      "INSERT INTO visitors (id, username, "
+                                      "location) VALUES (50, 'zed', 'Rome')");
   ExecutionResult unrelated =
       ExecuteSql(*service, "CREATE TABLE extra (id INT PRIMARY KEY)");
-  ExecutionResult read = ExecuteSql(*service, "SELECT COUNT(*) FROM users");
+  ExecutionResult read = ExecuteSql(*service, "SELECT COUNT(*) FROM visitors");
 
-  // Assert: the writes that touch users.csv are refused, nothing is written
+  // Assert: the writes that touch visitors.csv are refused, nothing is written
   ExpectErrorMessage(update, ErrorKind::kIo, changed_message);
   ExpectErrorMessage(insert, ErrorKind::kIo, changed_message);
-  CHECK_EQ(ReadFile(users_path), edited);
+  CHECK_EQ(ReadFile(visitors_path), edited);
   CHECK_EQ(SnapshotTables(*service), tables_before);
   CHECK(AsResultSet(read) != nullptr);
   // A statement that writes only other files is not affected.
@@ -2282,9 +2312,10 @@ TEST(test_engine_write_refuses_when_a_file_changed_on_disk) {
   if (!reloaded) {
     return;
   }
-  CHECK_EQ(CountRows(*reloaded, "users"), std::string("5"));
+  CHECK_EQ(CountRows(*reloaded, "visitors"), std::string("5"));
   ExpectAffected(
-      ExecuteSql(*reloaded, "UPDATE users SET location = 'X' WHERE id = 1"), 1);
+      ExecuteSql(*reloaded, "UPDATE visitors SET location = 'X' WHERE id = 1"),
+      1);
 }
 
 TEST(test_engine_write_refuses_when_only_size_or_only_mtime_changed) {
@@ -2295,27 +2326,27 @@ TEST(test_engine_write_refuses_when_only_size_or_only_mtime_changed) {
   if (!service) {
     return;
   }
-  const std::filesystem::path users_path = dir.path() / "users.csv";
-  const std::string loaded_text = ReadFile(users_path);
-  const auto loaded_time = std::filesystem::last_write_time(users_path);
+  const std::filesystem::path visitors_path = dir.path() / "visitors.csv";
+  const std::string loaded_text = ReadFile(visitors_path);
+  const auto loaded_time = std::filesystem::last_write_time(visitors_path);
   const std::string changed_message =
-      "users.csv changed on disk since it was loaded; run .open again";
-  const char* const update = "UPDATE users SET location = 'X' WHERE id = 1";
+      "visitors.csv changed on disk since it was loaded; run .open again";
+  const char* const update = "UPDATE visitors SET location = 'X' WHERE id = 1";
 
   // Act: the same bytes with a later modification time
-  std::filesystem::last_write_time(users_path,
+  std::filesystem::last_write_time(visitors_path,
                                    loaded_time + std::chrono::seconds(2));
   ExecutionResult only_time = ExecuteSql(*service, update);
   // Act: other bytes of another size with the recorded modification time
   const std::string longer_text = loaded_text + "\n";
-  WriteFile(users_path, longer_text);
-  std::filesystem::last_write_time(users_path, loaded_time);
+  WriteFile(visitors_path, longer_text);
+  std::filesystem::last_write_time(visitors_path, loaded_time);
   ExecutionResult only_size = ExecuteSql(*service, update);
 
   // Assert
   ExpectErrorMessage(only_time, ErrorKind::kIo, changed_message);
   ExpectErrorMessage(only_size, ErrorKind::kIo, changed_message);
-  CHECK_EQ(ReadFile(users_path), longer_text);
+  CHECK_EQ(ReadFile(visitors_path), longer_text);
 }
 
 TEST(test_engine_consecutive_writes_do_not_trip_the_change_check) {
@@ -2329,26 +2360,28 @@ TEST(test_engine_consecutive_writes_do_not_trip_the_change_check) {
 
   // Act and Assert: every kind of write, one after the other
   ExpectAffected(
-      ExecuteSql(*service,
-                 "INSERT INTO users (id, username, location) VALUES (5, 'eve', "
-                 "'X')"),
+      ExecuteSql(
+          *service,
+          "INSERT INTO visitors (id, username, location) VALUES (5, 'eve', "
+          "'X')"),
       1);
   ExpectAffected(
-      ExecuteSql(*service, "UPDATE users SET location = 'Y' WHERE id = 5"), 1);
-  ExpectAffected(ExecuteSql(*service, "DELETE FROM users WHERE id = 5"), 1);
+      ExecuteSql(*service, "UPDATE visitors SET location = 'Y' WHERE id = 5"),
+      1);
+  ExpectAffected(ExecuteSql(*service, "DELETE FROM visitors WHERE id = 5"), 1);
   ExpectComplete(
-      ExecuteSql(*service, "ALTER TABLE users ADD COLUMN age INT DEFAULT 0"),
-      "ALTER TABLE users");
+      ExecuteSql(*service, "ALTER TABLE visitors ADD COLUMN age INT DEFAULT 0"),
+      "ALTER TABLE visitors");
   ExpectAffected(
       ExecuteSql(*service,
-                 "INSERT INTO users (id, username, location) VALUES (6, "
+                 "INSERT INTO visitors (id, username, location) VALUES (6, "
                  "'frank', 'Z')"),
       1);
-  ExpectComplete(ExecuteSql(*service, "DROP TABLE engagements"),
-                 "DROP TABLE engagements");
+  ExpectComplete(ExecuteSql(*service, "DROP TABLE reactions"),
+                 "DROP TABLE reactions");
   ExpectAffected(
       ExecuteSql(*service,
-                 "INSERT INTO users (id, username, location) VALUES (7, "
+                 "INSERT INTO visitors (id, username, location) VALUES (7, "
                  "'gina', 'W')"),
       1);
 }
@@ -2391,19 +2424,19 @@ TEST(test_engine_detects_external_change_to_adopted_csv) {
   if (!engine) {
     return;
   }
-  const std::filesystem::path users_path = fixture.path() / "users.csv";
-  WriteFile(users_path, ReadFile(users_path) + "9,external,Nowhere\n");
-  domain::PlanNode create_users{domain::CreateTableNode{UsersSchema()}};
-  ExecutionResult again = engine->Execute(create_users);
+  const std::filesystem::path visitors_path = fixture.path() / "visitors.csv";
+  WriteFile(visitors_path, ReadFile(visitors_path) + "9,external,Nowhere\n");
+  domain::PlanNode create_visitors{domain::CreateTableNode{VisitorsSchema()}};
+  ExecutionResult again = engine->Execute(create_visitors);
   domain::PlanPtr update_plan = MustBind(
-      "UPDATE users SET location = 'X' WHERE id = 1", engine->Catalog());
+      "UPDATE visitors SET location = 'X' WHERE id = 1", engine->Catalog());
   if (!update_plan) {
     return;
   }
-  ExpectErrorMessage(again, ErrorKind::kBind, "table users already exists");
+  ExpectErrorMessage(again, ErrorKind::kBind, "table visitors already exists");
   ExpectErrorMessage(
       engine->Execute(*update_plan), ErrorKind::kIo,
-      "users.csv changed on disk since it was loaded; run .open again");
+      "visitors.csv changed on disk since it was loaded; run .open again");
 }
 
 }  // namespace strata::testing
