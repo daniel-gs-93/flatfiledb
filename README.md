@@ -1,6 +1,6 @@
 # Strata
 
-Strata is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that the second engine, paged, is compared with.
+Strata is a small database that can be run from a terminal. It reads Structured Query Language (SQL) statements through a Command-Line Interface (CLI), parses them and turns each one into a plan, and hands the plan to a storage engine. The parser and the binder, which resolves names and builds the plan, are shared by every engine, so an engine only has to execute plans and decide how data is stored. The first engine, flatfile, is deliberately plain: it is the baseline that the second engine, paged, is compared with. The paged engine keeps a database in one file of fixed-size pages and reads them through a buffer pool.
 
 In the flatfile engine a directory is a database. `catalog.csv` records the table definitions, and each table is a Comma-Separated Values (CSV) file. Writes go back to the CSV immediately, and a write that spans several files either completes or changes nothing.
 
@@ -18,7 +18,7 @@ In the flatfile engine a directory is a database. `catalog.csv` records the tabl
 strata/
 ├── include/strata/
 │   ├── domain/            # values, syntax tree, plan, Binder, expression evaluation, scalar functions, import inference, engine port
-│   ├── paged/             # the paged engine: page format, buffer pool, table heap, catalog, operators, writes
+│   ├── paged/             # the paged engine: page format, buffer pool, page allocator, table heap, catalog, operators, writes
 │   ├── application.h      # QueryService: run one statement, import a CSV
 │   ├── bootstrap.h        # acquire the directory lock, assemble the engine and QueryService, shared by every entry point
 │   ├── sql_parser.h       # SQL parser
@@ -28,11 +28,10 @@ strata/
 │       csv_codec.h, csv_file_source.h, directory_lock.h
 │                          # flatfile engine: CSV repository, executor, codec, external CSV reading, directory lock
 ├── src/                   # the matching implementations; cli.cpp contains only main
-├── tests/                 # test harness and the tests of each module
+├── tests/                 # test harness, the tests of each module and the generator of the volume-test data
 │   └── differential/      # Python harness that compares Strata with SQLite
 ├── docs/                  # design document, decision record and test matrix
-├── sample_my_db/          # sample database: course enrollment system (4 tables, including catalog.csv)
-└── data/                  # sample data (not in the repository)
+└── sample_my_db/          # sample database: course enrollment system (4 tables plus catalog.csv)
 ```
 
 ## Build
@@ -66,7 +65,7 @@ On a terminal the prompt is `strata> `, which changes to `   ...> ` inside an un
 | `.help` | Prints the command list |
 | `.quit`, `.exit` | Exits with status 0 |
 
-A command takes the whole line and only counts as one when no statement is unfinished. Without the leading `.`, as in `open mydb`, the CLI prints `error: commands start with '.'; did you mean .open` and discards the line. A line that contains a full-width `；` (U+FF1B) outside a string or comment is discarded too, while the earlier lines of an unfinished statement are kept, with an error that asks for an American Standard Code for Information Interchange (ASCII) semicolon: `error: full-width ';' (U+FF1B) found; use ASCII ';'`.
+A command takes the whole line and only counts as one when no statement is unfinished. A command splits its line at whitespace, so the directory of `.open` and the paths of `.import` cannot contain a space; `.open /tmp/My Docs/db` prints the usage. A line that starts with `.` but names no command, such as `.tbles`, prints `error: unknown command .tbles; .help lists the commands` and is discarded. Without the leading `.`, as in `open mydb`, the CLI prints `error: commands start with '.'; did you mean .open` and discards the line. A line that contains a full-width `；` (U+FF1B) outside a string or comment is discarded too, while the earlier lines of an unfinished statement are kept, with an error that asks for an American Standard Code for Information Interchange (ASCII) semicolon: `error: full-width ';' (U+FF1B) found; use ASCII ';'`.
 
 ### Sample Database `sample_my_db`
 
@@ -188,7 +187,7 @@ id	body	owner	pinned
 
 `/tmp/mydb` now holds `catalog.csv` and `notes.csv`, and `.open /tmp/mydb` loads the table again. `--parallel` loads the tables with several threads and gives the same result.
 
-`.open` fails with `error: could not open <directory>: <reason>`, where `<reason>` is `no such directory` when the parent does not exist, `not a directory` when the path is a file, and `cannot create directory` when creation fails. The open database stays as it was.
+`.open` fails with `error: could not open <directory>: <reason>`, where `<reason>` includes `no such directory` when the parent does not exist, `not a directory` when the path is a file, and `cannot create directory` when creation fails. The open database stays as it was. With the paged engine, a `paged.db` whose first creation was interrupted fails with a reason that begins `corrupt: paged.db:`, for example `size of 2 pages is below the minimum of 3`. That file holds no data, so delete it and `.open` the directory again.
 
 A statement that spans lines, a `--` comment and `.schema`:
 
@@ -304,99 +303,100 @@ order_no	customer	amount
 1005	Eve	3.25
 ```
 
-The import writes `<table>.csv` and `catalog.csv` in one staged commit, so a failure changes neither. On the flatfile engine it does not replace an existing file: when `<table>.csv` is already in the database directory, it stops with `error: io: <table>.csv already exists; use CREATE TABLE to adopt it`. Table and column names cannot be reserved words such as `order` or `select`. At most 10 skipped rows are listed, then `... and <k> more skipped`.
+On the flatfile engine the import writes `<table>.csv` and `catalog.csv` in one staged commit, so a failure changes neither; on the paged engine a failure can leave an empty table (see Limitations). On the flatfile engine it does not replace an existing file: when `<table>.csv` is already in the database directory, it stops with `error: io: <table>.csv already exists; use CREATE TABLE to adopt it`. Table and column names cannot be reserved words such as `order` or `select`. At most 10 skipped rows are listed, then `... and <k> more skipped`.
 
 ### Attaching an Existing CSV
 
 When a table's CSV already exists, `CREATE TABLE` adopts the file and its data. The header must match the declared columns (ignoring case), and the data must satisfy the declared primary key, `UNIQUE` and foreign keys.
 
-The statements below attach `users.csv`, `posts.csv` and `engagements.csv` from `data/` (see Data). They work on a copy, because writes rewrite the CSV:
+The statements below attach the CSV files of `sample_my_db/` in a new directory that has no `catalog.csv`. They work on a copy, because writes rewrite the CSV:
 
 ```bash
 (
   CLI="$PWD/build/strata_cli"
   rm -rf /tmp/strata_demo
   mkdir /tmp/strata_demo
-  cp -R data /tmp/strata_demo/
+  cp -R sample_my_db /tmp/strata_demo/school
+  rm /tmp/strata_demo/school/catalog.csv
   cd /tmp/strata_demo
   "$CLI" <<'EOF'
-.open data
-CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location TEXT);
-CREATE TABLE posts (
+.open school
+CREATE TABLE instructors (id INT PRIMARY KEY AUTOINCREMENT, name TEXT, dept TEXT);
+CREATE TABLE students (
   id INT PRIMARY KEY,
-  content TEXT,
-  username TEXT REFERENCES users(username),
-  views INT
+  name TEXT,
+  major TEXT,
+  year INT,
+  email TEXT UNIQUE
 );
-CREATE TABLE engagements (
-  id INT PRIMARY KEY,
-  postId INT REFERENCES posts(id),
-  username TEXT REFERENCES users(username),
-  type TEXT,
-  comment TEXT,
-  timestamp INT
+CREATE TABLE courses (
+  id INT PRIMARY KEY AUTOINCREMENT,
+  code TEXT UNIQUE,
+  title TEXT,
+  credits INT,
+  dept TEXT,
+  capacity INT,
+  instructor_id INT REFERENCES instructors(id)
 );
-SELECT username, location FROM users WHERE id = 1;
+CREATE TABLE enrollments (
+  id INT PRIMARY KEY AUTOINCREMENT,
+  student_id INT REFERENCES students(id),
+  course_id INT REFERENCES courses(id),
+  semester TEXT,
+  status TEXT DEFAULT 'enrolled',
+  score INT DEFAULT 0
+);
+SELECT name, major FROM students WHERE id = 1001;
 EOF
 )
 ```
 
 ```text
 loaded no tables
-OK CREATE TABLE users (adopted 10000 rows)
-OK CREATE TABLE posts (adopted 10000 rows)
-OK CREATE TABLE engagements (adopted 10000 rows)
-username	location
-knorman	Grahamside
+OK CREATE TABLE instructors (adopted 6 rows)
+OK CREATE TABLE students (adopted 30 rows)
+OK CREATE TABLE courses (adopted 12 rows)
+OK CREATE TABLE enrollments (adopted 144 rows)
+name	major
+Alice Johnson	ART
 ```
 
-From then on `.open /tmp/strata_demo/data` is enough.
+From then on `.open /tmp/strata_demo/school` is enough.
 
-Line 12 of `users.csv` has `1s0` where an integer belongs, and lines 17 and 18 have the wrong column count. The loader rejects all three, so `users=10000` is followed by `(rejected 3)` and a line naming them. A file lists at most 10 line numbers, then `, ...`.
-
-Queries can follow:
+A line with the wrong column count, or a value that does not match its type, is rejected when the file is loaded. The loader leaves the line out, so `students=30` is followed by `(rejected 1)` and a line naming it. A file lists at most 10 line numbers, then `, ...`. In the example below, the appended line has 4 fields where `students` has 5:
 
 ```bash
 CLI="$PWD/build/strata_cli"
+echo '1031,Zed Young,ART,2' >> /tmp/strata_demo/school/students.csv
 "$CLI" <<'EOF'
-.open /tmp/strata_demo/data
-SELECT id, UPPER(username), LENGTH(username)
-FROM users WHERE username LIKE 'kn%' ORDER BY id LIMIT 2;
-SELECT COUNT(*), MIN(timestamp), MAX(timestamp), AVG(timestamp) FROM engagements;
+.open /tmp/strata_demo/school
+SELECT id, UPPER(name), LENGTH(name)
+FROM students WHERE name LIKE 's%' ORDER BY id LIMIT 2;
+SELECT COUNT(*), MIN(capacity), MAX(capacity), AVG(capacity) FROM courses;
 EOF
 ```
 
 ```text
-loaded users=10000 (rejected 3) posts=10000 engagements=10000
-users.csv: rejected lines 12, 17, 18
-id	UPPER(username)	LENGTH(username)
-1	KNORMAN	7
-66	KNIGHTLAURA	11
-COUNT(*)	MIN(timestamp)	MAX(timestamp)	AVG(timestamp)
-10000	1690823929	1722355167	1706505303.6826
+loaded instructors=6 students=30 (rejected 1) courses=12 enrollments=144
+students.csv: rejected lines 32
+id	UPPER(name)	LENGTH(name)
+1019	SAMUEL INGRAM	13
+1028	SOPHIE RIVERA	13
+COUNT(*)	MIN(capacity)	MAX(capacity)	AVG(capacity)
+12	4	10	6.916666666666667
 ```
-
-## Data
-
-`data/` is not in the repository. The examples read three files from it, with these headers:
-
-| File | Header |
-|---|---|
-| `data/users.csv` | `id,username,location` |
-| `data/posts.csv` | `id,content,username,views` |
-| `data/engagements.csv` | `id,postid,username,type,comment,timestamp` |
 
 ## Supported SQL
 
 | Statement | Example |
 |---|---|
-| `CREATE TABLE`, with column constraints `PRIMARY KEY [AUTOINCREMENT]`, `UNIQUE`, `NOT NULL`, `DEFAULT <constant>`, `REFERENCES t(c)`; types `INT`, `DOUBLE`, `TEXT` and the aliases `INTEGER`, `BIGINT`, `REAL`, `FLOAT`, `VARCHAR(n)`, `CHAR(n)` | `CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE, location TEXT);` |
-| `ALTER TABLE ... ADD COLUMN` (a `DEFAULT` is required) | `ALTER TABLE users ADD COLUMN age INT DEFAULT 0;` |
+| `CREATE TABLE`, with column constraints `PRIMARY KEY [AUTOINCREMENT]`, `UNIQUE`, `NOT NULL`, `DEFAULT <constant>`, `REFERENCES t(c)`; types `INT`, `DOUBLE`, `TEXT` and the aliases `INTEGER`, `BIGINT`, `REAL`, `FLOAT`, `VARCHAR(n)`, `CHAR(n)` | `CREATE TABLE students (id INT PRIMARY KEY, name TEXT UNIQUE, major TEXT);` |
+| `ALTER TABLE ... ADD COLUMN` (a `DEFAULT` is required) | `ALTER TABLE students ADD COLUMN age INT DEFAULT 0;` |
 | `DROP TABLE` (rejected while another table references it) | `DROP TABLE notes;` |
-| `SELECT`, with `WHERE`, `JOIN ... ON` (any number of tables), `GROUP BY`, `ORDER BY`, `LIMIT ... OFFSET ...`; aggregates `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` | `SELECT e.type, COUNT(*) FROM engagements e JOIN users u ON e.username = u.username WHERE u.location = 'Patriciashire' GROUP BY e.type;` |
-| `INSERT`; the column list can leave out a column that has a `DEFAULT` or is auto-increment; `VALUES` can have several rows, and the whole statement is all-or-nothing | `INSERT INTO engagements (id, postId, username, type, comment, timestamp) VALUES (99999999, 1, 'ptaylor', 'like', 'None', 123456);` |
-| `UPDATE` | `UPDATE posts SET views = views + 1 WHERE id = 1;` |
-| `DELETE` | `DELETE FROM engagements WHERE id = 99999999;` |
+| `SELECT`, with `WHERE`, `JOIN ... ON` (up to 64 joins), `GROUP BY`, `ORDER BY`, `LIMIT ... OFFSET ...`; aggregates `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` | `SELECT e.status, COUNT(*) FROM enrollments e JOIN students s ON e.student_id = s.id WHERE s.major = 'ART' GROUP BY e.status;` |
+| `INSERT`; the column list can leave out a column that has a `DEFAULT` or is auto-increment; `VALUES` can have several rows, and the whole statement is all-or-nothing | `INSERT INTO enrollments (student_id, course_id, semester) VALUES (1002, 1, '2026-Spring');` |
+| `UPDATE` | `UPDATE courses SET capacity = capacity + 1 WHERE id = 1;` |
+| `DELETE` | `DELETE FROM enrollments WHERE id = 145;` |
 
 Expressions:
 
@@ -412,15 +412,15 @@ When a table or column does not exist, the message suggests an existing name wit
 A Data Definition Language (DDL) statement prints `OK <tag>` and a write statement prints `OK affected=<n>`. Errors print `error: <kind>: <message>`. A syntax error prints `syntax error at column <n>: <description>`, or `syntax error at line <l>, column <c>: <description>` when it falls on the second line or later of a multi-line statement. A row that another table's foreign key references cannot be deleted:
 
 ```text
-DELETE FROM users WHERE id = 5805;
-error: constraint violation: users.id=5805 is referenced by posts.username
+DELETE FROM students WHERE id = 1001;
+error: constraint violation: students.id=1001 is referenced by enrollments.student_id
 ```
 
 Design Document 2.3 to 2.6, 3.6 and 3.7 cover syntax, semantics, constraints, DDL and the output and error format.
 
 ## Engines
 
-Strata has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. Sections 2.10 to 2.13 of [`docs/DesignDocument.md`](docs/DesignDocument.md) describe how `paged` stores tables and runs statements.
+Strata has two engines. `flatfile` is the default, and most of this README describes it. `paged` stores a database in one file of fixed-size pages and reads them through a buffer pool. Sections 2.10 to 2.13 of [`docs/DesignDocument.md`](docs/DesignDocument.md) describe how `paged` stores tables and runs statements, and Section 2.15 describes what it keeps and what it can lose when a write fails.
 
 `.engine` shows the engine of the session, and `.engine paged` or `.engine flatfile` selects one. The choice lasts for one session and is not saved, so every start begins with `flatfile`. `.open` uses the selected engine. When a database is already open, naming the other engine reopens the same directory with it; if that fails, the database and the engine stay as they were.
 
@@ -434,17 +434,17 @@ A session with `paged`, in a temporary directory:
 CLI="$PWD/build/strata_cli"
 cd "$(mktemp -d)"
 printf '%s\n' '.engine paged' '.open demo' \
-  'CREATE TABLE users (id INT PRIMARY KEY, username TEXT UNIQUE);' \
-  "INSERT INTO users VALUES (1, 'ann'), (2, 'bob');" \
-  'SELECT id, username FROM users ORDER BY id;' | "$CLI"
+  'CREATE TABLE students (id INT PRIMARY KEY, name TEXT UNIQUE);' \
+  "INSERT INTO students VALUES (1, 'ann'), (2, 'bob');" \
+  'SELECT id, name FROM students ORDER BY id;' | "$CLI"
 ```
 
 ```text
 engine paged
 created new database demo
-OK CREATE TABLE users
+OK CREATE TABLE students
 OK affected=2
-id	username
+id	name
 1	ann
 2	bob
 ```
@@ -452,12 +452,12 @@ id	username
 Each write statement is written to `demo/paged.db` as soon as it succeeds, so the data is there when the database is opened again in the same shell:
 
 ```bash
-printf '%s\n' '.engine paged' '.open demo' 'SELECT COUNT(*) FROM users;' | "$CLI"
+printf '%s\n' '.engine paged' '.open demo' 'SELECT COUNT(*) FROM students;' | "$CLI"
 ```
 
 ```text
 engine paged
-loaded users=2
+loaded students=2
 COUNT(*)
 2
 ```
@@ -466,31 +466,50 @@ COUNT(*)
 
 ```bash
 printf '%s\n' '.engine paged' '.open demo' \
-  'ALTER TABLE users ADD COLUMN age INT DEFAULT 0;' \
-  'SELECT id, username, age FROM users ORDER BY id;' \
-  'DROP TABLE users;' | "$CLI"
+  'ALTER TABLE students ADD COLUMN age INT DEFAULT 0;' \
+  'SELECT id, name, age FROM students ORDER BY id;' \
+  'DROP TABLE students;' | "$CLI"
 ```
 
 ```text
 engine paged
-loaded users=2
-OK ALTER TABLE users
-id	username	age
+loaded students=2
+OK ALTER TABLE students
+id	name	age
 1	ann	0
 2	bob	0
-OK DROP TABLE users
+OK DROP TABLE students
 ```
 
-## Limitations of the flatfile Engine
+## Limitations
+
+Both engines:
 
 - There is no NULL. `NOT NULL` is accepted but has no effect, and the length in `VARCHAR(n)` is not checked.
 - Constraints are column-level: a primary key or foreign key covers one column, and there are no table-level constraints and no `DROP COLUMN`.
+- There are no indexes, so a point lookup and a constraint check scan the table. There is no query optimizer, and joins run in `FROM` order.
+- Auto-increment takes the current maximum plus 1, so deleting the row with the maximum frees that value for reuse.
+- Only one process can open a database directory at a time (`.strata.lock`, `flock`).
+- `fsync` is not called after a statement, so a write reported as done can still be lost in a power failure, and a crash in the middle of a write is not recovered.
+
+Only `flatfile`:
+
+- Every row of every table is held in memory.
 - A TEXT value or a TEXT `DEFAULT` cannot contain a newline. Commas and double quotes are stored with CSV quoting.
 - A row that cannot be parsed at load (wrong column count, malformed number, unpaired quotes) is not loaded, and the next `UPDATE`, `DELETE` or `ALTER TABLE` rewrite of the table drops it from the file. `INSERT` only appends a row and leaves those lines in place.
 - Load does not check `UNIQUE` and foreign keys, which apply to later statements only.
-- Only one process can open a database directory at a time (`.strata.lock`, `flock`), but the lock does not stop a text editor. If a file's size or modification time changes outside the CLI after loading, a write statement prints `error: io: <file name> changed on disk since it was loaded; run .open again` and writes no file. An edit that leaves both unchanged goes unnoticed.
-- Auto-increment takes the current maximum plus 1, so deleting the row with the maximum frees that value for reuse.
-- `fsync` is not called, so a write reported as done can still be lost in a power failure.
+- The lock does not stop a text editor. If a file's size or modification time changes outside the CLI after loading, a write statement prints `error: io: <file name> changed on disk since it was loaded; run .open again` and writes no file. An edit that leaves both unchanged goes unnoticed.
+
+Only `paged`:
+
+- A row that takes more than 4060 bytes in a page is refused with `error: unsupported: paged engine cannot store a row longer than 4060 bytes in <table>`, because there are no overflow pages.
+- A table name that starts with `sys_` is refused with `error: unsupported: table name '<name>' starts with the reserved prefix sys_`.
+- The file does not shrink. The pages of a dropped table go on a free list and later tables reuse them.
+- A crash in the middle of a statement that writes several pages can leave some of them written. The page checksums and the checks at open detect the damage and report `corrupt`, and nothing repairs it.
+- An `.import` that stops midway on an I/O error leaves an empty table behind, and the message ends with `; table <name> was created`. A bad row is rejected before the table is created, and `flatfile` changes nothing in either case.
+- A sort, a hash join or an aggregation is not bounded by the buffer pool, so nothing is promised for data larger than memory.
+
+Indexes, a Write-Ahead Log (WAL) and crash recovery are planned for `paged`.
 
 ## Tests
 
@@ -501,7 +520,7 @@ Run all tests, or only those whose name contains a string:
 ./build/strata_tests test_binder  # tests whose name contains test_binder
 ```
 
-The tests use a small harness in the repository, so no framework is needed. Without `data/`, the `Environment` tests that read it are skipped, and the tests that use `sample_my_db/` do not depend on it.
+The tests use a small harness in the repository, so no framework is needed. No test reads a file outside the repository: the volume tests generate their data from a fixed seed (three tables of 10000 rows each, in `tests/test_scale_data_support.cpp`), and most end-to-end tests of the CLI run on a copy of `sample_my_db/`.
 
 A second check compares Strata with SQLite. A Python script runs the statements of `tests/differential/corpus.sql` on the `sqlite3` module and on both engines of `strata_cli`, one process per statement, so each statement reads the database that the one before it wrote. Python 3.10 or later is enough, with no extra package. A statement that is known to differ from SQLite is marked in the corpus, and the script fails when a marked statement stops differing as well as when an unmarked one starts.
 
